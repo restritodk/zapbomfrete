@@ -6,7 +6,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
-import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
     Select,
@@ -21,7 +20,6 @@ import {
     CheckCircle2,
     XCircle,
     Radio,
-    Clock,
     AlertTriangle,
     History,
     Eye,
@@ -39,6 +37,10 @@ import { useSession } from "@/components/dashboard/session-provider";
 import { SessionGuard } from "@/components/dashboard/session-guard";
 import { useSocket } from "@/components/chat/socket-context";
 import {
+    BroadcastProgressModal,
+    type BroadcastRecipientRow,
+} from "@/components/dashboard/broadcast-progress-modal";
+import {
     BROADCAST_IMPORT_KEY,
     extractPhonesFromParticipants,
     parsePhoneList,
@@ -52,8 +54,10 @@ interface BroadcastProgress {
     sent: number;
     failed: number;
     current?: string | null;
+    phase?: "queued" | "sending" | "processed" | "done";
     progress?: number;
     errors?: { jid: string; error: string }[];
+    skipped?: { jid: string; error: string }[];
     startedAt?: string;
     completedAt?: string;
 }
@@ -113,7 +117,15 @@ export default function BroadcastPage() {
     const [delay, setDelay] = useState([2000]);
     const [loading, setLoading] = useState(false);
     const [broadcastProgress, setBroadcastProgress] = useState<BroadcastProgress | null>(null);
+    const [progressModalOpen, setProgressModalOpen] = useState(false);
+    const [recipientRows, setRecipientRows] = useState<BroadcastRecipientRow[]>([]);
+    const [activeBroadcastId, setActiveBroadcastId] = useState<string | null>(null);
+    const [broadcastStartedAt, setBroadcastStartedAt] = useState<string | null>(null);
+    const [broadcastCompletedAt, setBroadcastCompletedAt] = useState<string | null>(null);
+    const [broadcastDelayMs, setBroadcastDelayMs] = useState(2000);
+    const [systemTimezone, setSystemTimezone] = useState("America/Sao_Paulo");
     const [activeTab, setActiveTab] = useState<"new" | "history">("new");
+    const lastProcessedJidRef = useRef<string | null>(null);
 
     const [history, setHistory] = useState<BroadcastLog[]>([]);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -173,32 +185,40 @@ export default function BroadcastPage() {
     }, [applyPhones]);
 
     useEffect(() => {
-        const socket = getSocket();
-        if (!socket || !sessionId) return;
+        fetch("/api/settings/system")
+            .then((r) => (r.ok ? r.json() : null))
+            .then((body) => {
+                const tz = body?.data?.timezone;
+                if (typeof tz === "string" && tz.trim()) setSystemTimezone(tz);
+            })
+            .catch(() => {});
+    }, []);
 
-        const onConnect = () => joinSession(sessionId);
-        if (socket.connected) joinSession(sessionId);
-        socket.on("connect", onConnect);
+    const displayJid = useCallback((jid: string) => {
+        if (!jid) return "-";
+        return jid.replace("@s.whatsapp.net", "").replace("@g.us", " (Grupo)");
+    }, []);
 
-        const handler = (data: BroadcastProgress) => {
-            setBroadcastProgress(data);
-            if (data.status === "completed") {
-                setLoading(false);
-                fetchHistory();
-                if (data.failed === 0) {
-                    toast.success(`Disparo concluído! ${data.sent} enviado(s).`);
-                } else {
-                    toast.warning(`Disparo concluído. ${data.sent} enviado(s), ${data.failed} falha(s).`);
-                }
-            }
-        };
+    const countersRef = useRef({ sent: 0, failed: 0 });
 
-        socket.on("broadcast.progress", handler);
-        return () => {
-            socket.off("connect", onConnect);
-            socket.off("broadcast.progress", handler);
-        };
-    }, [sessionId, getSocket, joinSession]);
+    const applySkippedFailures = useCallback(
+        (skipped: { jid: string; error: string }[] | undefined, atIso: string) => {
+            if (!skipped?.length) return;
+            setRecipientRows((prev) =>
+                prev.map((row) => {
+                    const hit = skipped.find((s) => s.jid === row.jid);
+                    if (!hit) return row;
+                    return {
+                        ...row,
+                        status: "failed" as const,
+                        at: atIso,
+                        detail: hit.error || "Número não disponível no WhatsApp",
+                    };
+                })
+            );
+        },
+        []
+    );
 
     const fetchHistory = useCallback(async () => {
         if (!sessionId) return;
@@ -215,6 +235,122 @@ export default function BroadcastPage() {
             setHistoryLoading(false);
         }
     }, [sessionId]);
+
+    useEffect(() => {
+        const socket = getSocket();
+        if (!socket || !sessionId) return;
+
+        const onConnect = () => joinSession(sessionId);
+        if (socket.connected) joinSession(sessionId);
+        socket.on("connect", onConnect);
+
+        const handler = (data: BroadcastProgress) => {
+            if (activeBroadcastId && data.broadcastId && data.broadcastId !== activeBroadcastId) {
+                return;
+            }
+
+            setBroadcastProgress(data);
+            if (data.broadcastId) setActiveBroadcastId(data.broadcastId);
+            if (data.startedAt) setBroadcastStartedAt(data.startedAt);
+            if (data.completedAt) setBroadcastCompletedAt(data.completedAt);
+
+            if (data.phase === "queued" || (data.skipped && data.skipped.length > 0)) {
+                applySkippedFailures(data.skipped, data.startedAt || new Date().toISOString());
+                countersRef.current = { sent: data.sent, failed: data.failed };
+            }
+
+            if (data.phase === "sending" && data.current) {
+                setRecipientRows((prev) =>
+                    prev.map((row) => {
+                        if (row.jid === data.current && row.status !== "failed" && row.status !== "sent") {
+                            return {
+                                ...row,
+                                status: "sending",
+                                at: new Date().toISOString(),
+                                detail: "Enviando mensagem...",
+                            };
+                        }
+                        return row;
+                    })
+                );
+            }
+
+            if (data.phase === "processed" && data.current) {
+                const jid = data.current;
+                const prevCounters = countersRef.current;
+                const failedIncreased = data.failed > prevCounters.failed;
+                countersRef.current = { sent: data.sent, failed: data.failed };
+                lastProcessedJidRef.current = jid;
+                const nowIso = new Date().toISOString();
+
+                setRecipientRows((prev) =>
+                    prev.map((row) => {
+                        if (row.jid !== jid) return row;
+                        if (row.status === "failed" && !failedIncreased) return row;
+                        if (failedIncreased) {
+                            return {
+                                ...row,
+                                status: "failed",
+                                at: nowIso,
+                                detail: "Falha no envio",
+                            };
+                        }
+                        return {
+                            ...row,
+                            status: "sent",
+                            at: nowIso,
+                            detail: "Mensagem enviada com sucesso",
+                        };
+                    })
+                );
+            }
+
+            if (data.status === "completed") {
+                setLoading(false);
+                setBroadcastCompletedAt(data.completedAt || new Date().toISOString());
+                setProgressModalOpen(true);
+                countersRef.current = { sent: data.sent, failed: data.failed };
+
+                setRecipientRows((prev) => {
+                    const errorMap = new Map((data.errors || []).map((e) => [e.jid, e.error]));
+                    return prev.map((row) => {
+                        const err = errorMap.get(row.jid);
+                        if (err) {
+                            return {
+                                ...row,
+                                status: "failed",
+                                at: row.at || data.completedAt || new Date().toISOString(),
+                                detail: err,
+                            };
+                        }
+                        if (row.status === "failed") return row;
+                        if (row.status === "sent") return row;
+                        return {
+                            ...row,
+                            status: "sent",
+                            at: row.at || data.completedAt || new Date().toISOString(),
+                            detail: "Mensagem enviada com sucesso",
+                        };
+                    });
+                });
+
+                void fetchHistory();
+                if (data.failed === 0) {
+                    toast.success(`Disparo concluído! ${data.sent} enviado(s).`);
+                } else {
+                    toast.warning(
+                        `Disparo concluído. ${data.sent} enviado(s), ${data.failed} falha(s).`
+                    );
+                }
+            }
+        };
+
+        socket.on("broadcast.progress", handler);
+        return () => {
+            socket.off("connect", onConnect);
+            socket.off("broadcast.progress", handler);
+        };
+    }, [sessionId, getSocket, joinSession, activeBroadcastId, applySkippedFailures, fetchHistory]);
 
     useEffect(() => {
         if (activeTab === "history" && sessionId) {
@@ -386,25 +522,46 @@ export default function BroadcastPage() {
 
     const handleSend = async () => {
         if (!sessionId) return toast.error("Nenhuma sessão ativa");
+        if (loading || (progressModalOpen && broadcastProgress?.status === "running")) {
+            return toast.message("Já existe um disparo em andamento");
+        }
         if (!message.trim() && attachments.length === 0) {
             return toast.error("Digite uma mensagem ou anexe imagens/PDF");
         }
+
+        const { phones } = parsePhoneList(contacts);
+        const recipients = phones.map((p) => toWhatsAppJid(p)).filter(Boolean) as string[];
+
+        if (recipients.length === 0) {
+            toast.error("Nenhum destinatário válido");
+            return;
+        }
+
+        // Reflect normalized list in UI
+        setContacts(phones.join("\n"));
+
+        // Prepare modal rows immediately (real submitted list)
+        const initialRows: BroadcastRecipientRow[] = recipients.map((jid, index) => ({
+            id: `${jid}-${index}`,
+            jid,
+            display: displayJid(jid),
+            status: "waiting",
+            at: null,
+            detail: "Aguardando na fila...",
+        }));
+
         setLoading(true);
         setBroadcastProgress(null);
+        setActiveBroadcastId(null);
+        setRecipientRows(initialRows);
+        setBroadcastStartedAt(new Date().toISOString());
+        setBroadcastCompletedAt(null);
+        setBroadcastDelayMs(delay[0]);
+        countersRef.current = { sent: 0, failed: 0 };
+        lastProcessedJidRef.current = null;
+        setProgressModalOpen(true);
 
         try {
-            const { phones } = parsePhoneList(contacts);
-            const recipients = phones.map((p) => toWhatsAppJid(p)).filter(Boolean);
-
-            if (recipients.length === 0) {
-                toast.error("Nenhum destinatário válido");
-                setLoading(false);
-                return;
-            }
-
-            // Reflect normalized list in UI
-            setContacts(phones.join("\n"));
-
             const formData = new FormData();
             formData.append("message", message);
             formData.append("delay", String(delay[0]));
@@ -421,18 +578,72 @@ export default function BroadcastPage() {
             const data = await res.json();
 
             if (res.ok) {
-                const attInfo = attachments.length
-                    ? ` com ${attachments.length} anexo(s)`
-                    : "";
-                toast.info(`Disparo iniciado para ${recipients.length} destinatário(s)${attInfo}...`);
+                const payload = data?.data || {};
+                if (payload.broadcastId) setActiveBroadcastId(payload.broadcastId);
+                if (payload.startedAt) setBroadcastStartedAt(payload.startedAt);
+                if (typeof payload.delay === "number") setBroadcastDelayMs(payload.delay);
+
+                if (Array.isArray(payload.skipped) && payload.skipped.length > 0) {
+                    applySkippedFailures(
+                        payload.skipped,
+                        payload.startedAt || new Date().toISOString()
+                    );
+                    countersRef.current = {
+                        sent: 0,
+                        failed: payload.skipped.length,
+                    };
+                }
+
+                const processable =
+                    typeof payload.processable === "number"
+                        ? payload.processable
+                        : recipients.length;
+                const skippedCount = Array.isArray(payload.skipped) ? payload.skipped.length : 0;
+                toast.info(
+                    `Disparo iniciado: ${processable} na fila` +
+                        (skippedCount ? `, ${skippedCount} indisponível(is) no WhatsApp` : "") +
+                        (attachments.length ? ` · ${attachments.length} anexo(s)` : "")
+                );
             } else {
                 toast.error(data.message || "Falha ao iniciar o disparo");
                 setLoading(false);
+                setProgressModalOpen(false);
+                setRecipientRows([]);
             }
         } catch (e) {
             console.error(e);
             toast.error("Erro ao enviar disparo");
             setLoading(false);
+            setProgressModalOpen(false);
+            setRecipientRows([]);
+        }
+    };
+
+    const handleViewBroadcastHistory = async () => {
+        setProgressModalOpen(false);
+        setActiveTab("history");
+        await fetchHistory();
+        if (activeBroadcastId) {
+            const match = history.find((h) => h.id === activeBroadcastId);
+            if (match) {
+                void openDetail(match);
+            } else {
+                // history may have just refreshed — fetch detail directly
+                try {
+                    const res = await fetch(
+                        `/api/messages/${sessionId}/broadcast/history/${activeBroadcastId}`
+                    );
+                    if (res.ok) {
+                        const body = await res.json();
+                        if (body?.data) {
+                            setSelectedLog(body.data);
+                            setDetailOpen(true);
+                        }
+                    }
+                } catch {
+                    // ignore — user still sees history tab
+                }
+            }
         }
     };
 
@@ -729,103 +940,21 @@ export default function BroadcastPage() {
                             </Card>
                         </div>
 
-                        {broadcastProgress && (
-                            <Card
-                                className={`border-2 transition-colors ${
-                                    broadcastProgress.status === "completed"
-                                        ? broadcastProgress.failed === 0
-                                            ? "border-green-500/30 bg-green-50/30 dark:bg-green-950/10"
-                                            : "border-yellow-500/30 bg-yellow-50/30 dark:bg-yellow-950/10"
-                                        : "border-blue-500/30 bg-blue-50/30 dark:bg-blue-950/10"
-                                }`}
-                            >
-                                <CardHeader className="pb-3">
-                                    <CardTitle className="flex items-center gap-2 text-lg">
-                                        {broadcastProgress.status === "running" ? (
-                                            <>
-                                                <Radio className="h-5 w-5 text-blue-500 animate-pulse" />
-                                                <span>Disparo em andamento</span>
-                                            </>
-                                        ) : broadcastProgress.failed === 0 ? (
-                                            <>
-                                                <CheckCircle2 className="h-5 w-5 text-green-500" />
-                                                <span>Disparo concluído</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                                                <span>Disparo concluído com erros</span>
-                                            </>
-                                        )}
-                                    </CardTitle>
-                                    <CardDescription>ID: {broadcastProgress.broadcastId}</CardDescription>
-                                </CardHeader>
-                                <CardContent className="space-y-4">
-                                    <div className="space-y-2">
-                                        <div className="flex justify-between text-sm">
-                                            <span className="text-muted-foreground">Progresso</span>
-                                            <span className="font-mono font-medium">
-                                                {broadcastProgress.sent + broadcastProgress.failed} / {broadcastProgress.total} (
-                                                {broadcastProgress.progress || 0}%)
-                                            </span>
-                                        </div>
-                                        <Progress value={broadcastProgress.progress || 0} className="h-3" />
-                                    </div>
-
-                                    <div className="grid grid-cols-3 gap-3">
-                                        <div className="bg-background rounded-lg p-3 text-center border">
-                                            <div className="text-2xl font-bold text-green-600">{broadcastProgress.sent}</div>
-                                            <div className="text-xs text-muted-foreground flex items-center justify-center gap-1 mt-1">
-                                                <CheckCircle2 className="h-3 w-3" /> Enviados
-                                            </div>
-                                        </div>
-                                        <div className="bg-background rounded-lg p-3 text-center border">
-                                            <div className="text-2xl font-bold text-red-500">{broadcastProgress.failed}</div>
-                                            <div className="text-xs text-muted-foreground flex items-center justify-center gap-1 mt-1">
-                                                <XCircle className="h-3 w-3" /> Falhas
-                                            </div>
-                                        </div>
-                                        <div className="bg-background rounded-lg p-3 text-center border">
-                                            <div className="text-2xl font-bold text-muted-foreground">
-                                                {broadcastProgress.total - broadcastProgress.sent - broadcastProgress.failed}
-                                            </div>
-                                            <div className="text-xs text-muted-foreground flex items-center justify-center gap-1 mt-1">
-                                                <Clock className="h-3 w-3" /> Pendentes
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {broadcastProgress.status === "running" && broadcastProgress.current && (
-                                        <div className="flex items-center gap-2 text-sm px-3 py-2 bg-muted/50 rounded-lg">
-                                            <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-500" />
-                                            <span className="text-muted-foreground">Enviando para:</span>
-                                            <span className="font-mono font-medium">{formatJid(broadcastProgress.current)}</span>
-                                        </div>
-                                    )}
-
-                                    {broadcastProgress.status === "completed" &&
-                                        broadcastProgress.errors &&
-                                        broadcastProgress.errors.length > 0 && (
-                                            <div className="space-y-2">
-                                                <h4 className="text-sm font-semibold text-red-600 flex items-center gap-1.5">
-                                                    <XCircle className="h-4 w-4" /> Falhas ({broadcastProgress.errors.length})
-                                                </h4>
-                                                <div className="max-h-40 overflow-y-auto bg-red-50 dark:bg-red-950/30 rounded-lg p-2 space-y-1">
-                                                    {broadcastProgress.errors.map((err, i) => (
-                                                        <div
-                                                            key={i}
-                                                            className="flex justify-between items-center text-xs py-1 px-2 bg-background/60 rounded"
-                                                        >
-                                                            <span className="font-mono">{formatJid(err.jid)}</span>
-                                                            <span className="text-red-500 truncate ml-2 max-w-[200px]">{err.error}</span>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                </CardContent>
-                            </Card>
-                        )}
+                        <BroadcastProgressModal
+                            open={progressModalOpen}
+                            onOpenChange={setProgressModalOpen}
+                            phase={
+                                broadcastProgress?.status === "completed" ? "completed" : "running"
+                            }
+                            recipients={recipientRows}
+                            startedAt={broadcastStartedAt}
+                            completedAt={broadcastCompletedAt}
+                            delayMs={broadcastDelayMs}
+                            timezone={systemTimezone}
+                            onViewHistory={() => {
+                                void handleViewBroadcastHistory();
+                            }}
+                        />
                     </>
                 )}
 

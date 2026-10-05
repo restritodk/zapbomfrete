@@ -222,19 +222,31 @@ export async function POST(
         }
 
         const recipients = Array.from(new Set(resolved));
+        const NOT_ON_WHATSAPP = "Número não disponível no WhatsApp";
+
+        // Numbers rejected by onWhatsApp — keep visible in report (do not silently drop)
+        const skipped = Array.from(
+            new Map(
+                unresolved.map((raw) => {
+                    const jid = toWhatsAppJid(raw) || String(raw);
+                    return [jid, { jid, error: NOT_ON_WHATSAPP }] as const;
+                })
+            ).values()
+        );
 
         if (recipients.length === 0) {
             return NextResponse.json(
                 {
                     status: false,
-                    message: "No valid WhatsApp recipients",
+                    message: "Nenhum destinatário disponível no WhatsApp",
                     error: "No valid WhatsApp recipients",
-                    data: { unresolved },
+                    data: { unresolved: skipped },
                 },
                 { status: 400 }
             );
         }
 
+        const totalAll = recipients.length + skipped.length;
         const logMessage =
             text ||
             (attachments.length
@@ -245,14 +257,24 @@ export async function POST(
             data: {
                 sessionId,
                 message: logMessage,
-                total: recipients.length,
+                total: totalAll,
+                sent: 0,
+                failed: skipped.length,
                 delay: delay || 2000,
                 status: "running",
                 recipients: {
-                    create: recipients.map((jid) => ({
-                        jid,
-                        status: "pending",
-                    })),
+                    create: [
+                        ...recipients.map((jid) => ({
+                            jid,
+                            status: "pending",
+                        })),
+                        ...skipped.map((s) => ({
+                            jid: s.jid,
+                            status: "failed",
+                            error: s.error,
+                            sentAt: new Date(),
+                        })),
+                    ],
                 },
             },
             include: { recipients: true },
@@ -260,28 +282,50 @@ export async function POST(
 
         const io = (global as any).io;
         const broadcastId = log.id;
+        const startedAtIso = log.startedAt.toISOString();
 
         if (io) {
             io.to(sessionId).emit("broadcast.progress", {
                 broadcastId,
                 status: "running",
-                total: recipients.length,
+                total: totalAll,
                 sent: 0,
-                failed: 0,
+                failed: skipped.length,
                 current: null,
-                progress: 0,
-                startedAt: log.startedAt.toISOString(),
+                phase: "queued",
+                progress: Math.round((skipped.length / totalAll) * 100),
+                startedAt: startedAtIso,
+                skipped,
             });
         }
 
         // Process in background — keep attachment buffers in closure
+        // Send loop unchanged for resolved recipients only
         (async () => {
             let sent = 0;
-            let failed = 0;
-            const errors: { jid: string; error: string }[] = [];
+            let failed = skipped.length;
+            const errors: { jid: string; error: string }[] = skipped.map((s) => ({
+                jid: s.jid,
+                error: s.error,
+            }));
 
             for (let i = 0; i < recipients.length; i++) {
                 const jid = recipients[i];
+
+                if (io) {
+                    io.to(sessionId).emit("broadcast.progress", {
+                        broadcastId,
+                        status: "running",
+                        total: totalAll,
+                        sent,
+                        failed,
+                        current: jid,
+                        phase: "sending",
+                        progress: Math.round(((sent + failed) / totalAll) * 100),
+                        startedAt: startedAtIso,
+                    });
+                }
+
                 try {
                     if (attachments.length > 0) {
                         // First attachment carries the text as caption; rest follow
@@ -315,7 +359,7 @@ export async function POST(
                     });
                 }
 
-                const progress = Math.round(((sent + failed) / recipients.length) * 100);
+                const progress = Math.round(((sent + failed) / totalAll) * 100);
 
                 await prisma.broadcastLog.update({
                     where: { id: broadcastId },
@@ -326,11 +370,13 @@ export async function POST(
                     io.to(sessionId).emit("broadcast.progress", {
                         broadcastId,
                         status: "running",
-                        total: recipients.length,
+                        total: totalAll,
                         sent,
                         failed,
                         current: jid,
+                        phase: "processed",
                         progress,
+                        startedAt: startedAtIso,
                     });
                 }
 
@@ -341,25 +387,28 @@ export async function POST(
                 }
             }
 
+            const completedAt = new Date();
             await prisma.broadcastLog.update({
                 where: { id: broadcastId },
-                data: { status: "completed", sent, failed, completedAt: new Date() },
+                data: { status: "completed", sent, failed, completedAt },
             });
 
             if (io) {
                 io.to(sessionId).emit("broadcast.progress", {
                     broadcastId,
                     status: "completed",
-                    total: recipients.length,
+                    total: totalAll,
                     sent,
                     failed,
                     errors,
                     progress: 100,
-                    completedAt: new Date().toISOString(),
+                    phase: "done",
+                    startedAt: startedAtIso,
+                    completedAt: completedAt.toISOString(),
                 });
             }
             console.log(
-                `Broadcast ${broadcastId} completed: ${sent} sent, ${failed} failed out of ${recipients.length}`
+                `Broadcast ${broadcastId} completed: ${sent} sent, ${failed} failed out of ${totalAll}`
             );
         })();
 
@@ -368,8 +417,12 @@ export async function POST(
             message: "Broadcast started",
             data: {
                 broadcastId: log.id,
-                total: recipients.length,
+                total: totalAll,
+                processable: recipients.length,
+                skipped,
                 attachments: attachments.length,
+                startedAt: startedAtIso,
+                delay: delay || 2000,
             },
         });
     } catch (e) {
