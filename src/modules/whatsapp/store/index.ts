@@ -4,6 +4,7 @@ import { normalizeMessageContent } from "@whiskeysockets/baileys";
 import { onMessageReceived, onMessageSent, dispatchWebhook, downloadAndSaveMedia } from "@/lib/webhook";
 import { handleBotCommand, setSessionStartTime } from "../bot/command-handler";
 import { resolveToPhoneJid, isLidJid, normalizeJid } from "@/lib/jid-utils";
+import { touchChatFromMessage } from "./chats";
 
 import { Server } from "socket.io";
 import { logger } from "@/lib/logger";
@@ -115,8 +116,15 @@ export const bindSessionStore = (sock: WASocket, sessionId: string, io: Server |
         }
 
 
-        // Note: Contacts and Chats are synced by src/modules/whatsapp/store/contacts.ts
-        // We only handle messages here to avoid P2002 Unique Constraint Race Conditions.
+        // Contacts: contacts.ts — Chats: chats.ts
+        // Notify UI so Chat list refreshes after history chunks land.
+        if ((messages?.length || 0) > 0 || isLatest) {
+            io?.to(sessionId).emit("chats.synced", {
+                count: messages?.length || 0,
+                source: "messaging-history.messages",
+                isLatest: !!isLatest,
+            });
+        }
         logger.debug("Store", `Finished syncing messages`);
     });
 
@@ -493,10 +501,11 @@ async function processAndSaveMessage(
     }
 
     try {
+        const finalRemoteJid = normalizeJid(normalizedRemoteJid);
         const newMessage = await prisma.message.create({
             data: {
                 sessionId: dbSessionId,
-                remoteJid: normalizeJid(normalizedRemoteJid),
+                remoteJid: finalRemoteJid,
                 senderJid,
                 fromMe: fromMe || false,
                 keyId,
@@ -509,37 +518,39 @@ async function processAndSaveMessage(
                 quoteId
             }
         });
+
+        // Keep inbox Chat row fresh for the UI list
+        await touchChatFromMessage(
+            dbSessionId,
+            finalRemoteJid,
+            text || null,
+            messageType,
+            timestamp,
+            !fromMe ? pushName : null
+        );
         
         // Ensure contact exists (Upsert Contact)
-        const finalRemoteJid = normalizeJid(normalizedRemoteJid);
         if (remoteJid && !remoteJid.includes('@g.us') && !remoteJid.includes('status@broadcast')) {
             const contactJid = finalRemoteJid; // Use fully normalized JID
-            const contactData: any = {
-                sessionId: dbSessionId,
-                jid: contactJid
-            };
+            const lidValue = isLidJid(remoteJid) ? remoteJid : (isLidJid(remoteJidAlt || "") ? remoteJidAlt : undefined);
+            const altPhone = remoteJidAlt && !isLidJid(remoteJidAlt) ? normalizeJid(remoteJidAlt) : undefined;
 
-            // Only update name/notify if message is FROM the contact (not from me)
-            if (!fromMe) {
-                if (pushName) contactData.notify = pushName;
-                if (pushName) contactData.name = pushName;
-            }
-
-            const contact = await prisma.contact.upsert({
+            await prisma.contact.upsert({
                 where: { sessionId_jid: { sessionId: dbSessionId, jid: contactJid } },
                 create: {
                     sessionId: dbSessionId,
                     jid: contactJid,
+                    lid: lidValue || undefined,
                     notify: !fromMe ? pushName : undefined,
                     name: !fromMe ? pushName : undefined,
-                    // @ts-ignore
-                    remoteJidAlt: remoteJidAlt || undefined
+                    remoteJidAlt: altPhone || undefined
                 },
-                update: !fromMe ? {
-                    notify: pushName,
-                    // @ts-ignore
-                    remoteJidAlt: remoteJidAlt || undefined
-                } : {}
+                update: {
+                    ...(lidValue ? { lid: lidValue } : {}),
+                    ...(altPhone ? { remoteJidAlt: altPhone } : {}),
+                    // Keep notify (push name) fresh; never overwrite address-book `name` here
+                    ...(!fromMe && pushName ? { notify: pushName } : {}),
+                }
             });
 
             // Welcome Message Logic

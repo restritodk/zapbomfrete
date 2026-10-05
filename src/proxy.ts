@@ -11,10 +11,11 @@ export async function proxy(request: NextRequest) {
     // Check if it's a public route
     const isPublicRoute = publicRoutes.some(route => pathname.startsWith(route));
 
-    // Allow Next.js internals and favicon only
+    // Allow Next.js internals, favicon and uploaded branding assets
     if (
         pathname.startsWith("/_next") ||
-        pathname === "/favicon.ico"
+        pathname === "/favicon.ico" ||
+        pathname.startsWith("/branding/")
     ) {
         return NextResponse.next();
     }

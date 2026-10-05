@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -65,6 +65,7 @@ model Session {
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   contacts    Contact[]
   messages    Message[]
+  chats       Chat[]
   groups      Group[]
   autoReplies AutoReply[]
   stories     Story[]
@@ -72,6 +73,30 @@ model Session {
   webhooks    Webhook[]
   botConfig   BotConfig?
   sessionAccesses SessionAccess[]
+}
+
+/// Inbox conversation mirrored from WhatsApp (Baileys chats.* / history)
+model Chat {
+  id              String   @id @default(cuid())
+  sessionId       String
+  jid             String
+  name            String?
+  unreadCount     Int      @default(0)
+  archived        Boolean  @default(false)
+  pinned          Boolean  @default(false)
+  muted           Boolean  @default(false)
+  conversationTs  DateTime?
+  lastMessageAt   DateTime?
+  lastPreview     String?  @db.Text
+  lastMsgType     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  session         Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, jid])
+  @@index([sessionId, lastMessageAt])
+  @@index([sessionId, conversationTs])
 }
 
 model Contact {

@@ -45,5 +45,10 @@ next-env.d.ts
 /data/media/*
 !/data/media/.gitkeep
 /public/media/*
+!/public/media/logo.png
+!/public/media/logo-white.png
+!/public/media/logo-transparent.png
+!/public/media/logo-principal.png
+!/public/media/imagem-login.jpg
 server.log
 /logs/

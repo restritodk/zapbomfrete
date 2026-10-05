@@ -42,13 +42,13 @@ export default function ErrorPage({
         {/* Text Content */}
         <div className="relative text-center mb-10 w-full" suppressHydrationWarning>
           <h1 className="text-6xl font-black tracking-tight text-destructive font-mono mb-3 drop-shadow-sm" suppressHydrationWarning>
-            Error 500
+            Erro 500
           </h1>
           <h2 className="text-xl font-bold text-foreground mb-4" suppressHydrationWarning>
-            Sistem Mengalami Kendala
+            Micro Hard Center
           </h2>
           <p className="text-sm text-muted-foreground leading-relaxed max-w-sm mx-auto" suppressHydrationWarning>
-            Maaf, terjadi kesalahan tak terduga pada aplikasi. Tim kami telah diberitahu mengenai masalah ini.
+            Ocorreu uma falha inesperada no sistema. Nossa equipe técnica já foi acionada e está trabalhando para restabelecer o serviço com a máxima prioridade e segurança.
           </p>
         </div>
 
@@ -60,7 +60,7 @@ export default function ErrorPage({
             className="w-full flex-1 flex items-center justify-center gap-2 h-12 border-destructive/20 hover:bg-destructive/10 text-destructive hover:text-destructive rounded-xl transition-all shadow-sm"
           >
             <RotateCcw className="size-4" />
-            <span>Coba Lagi</span>
+            <span>Tentar novamente</span>
           </Button>
           <Button
             asChild
@@ -69,7 +69,7 @@ export default function ErrorPage({
           >
             <Link href="/dashboard">
               <Home className="size-4" />
-              <span>Dashboard</span>
+              <span>Painel</span>
             </Link>
           </Button>
         </div>
@@ -81,17 +81,17 @@ export default function ErrorPage({
             className="flex items-center justify-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors mx-auto w-full py-2"
           >
             {showDetails ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-            <span>{showDetails ? 'Sembunyikan detail teknis' : 'Lihat detail teknis'}</span>
+            <span>{showDetails ? 'Ocultar detalhes técnicos' : 'Ver detalhes técnicos'}</span>
           </button>
 
           {showDetails && (
             <div className="mt-4 p-5 bg-black/5 dark:bg-white/5 rounded-xl border border-border/30 text-left space-y-3 max-h-56 overflow-y-auto font-mono text-[11px] leading-relaxed break-all text-muted-foreground custom-scrollbar" suppressHydrationWarning>
               <div suppressHydrationWarning>
-                <span className="font-semibold text-foreground">Message:</span> {error.message || 'Unknown runtime error'}
+                <span className="font-semibold text-foreground">Mensagem:</span> {error.message || 'Erro de execução desconhecido'}
               </div>
               {error.digest && (
                 <div suppressHydrationWarning>
-                  <span className="font-semibold text-foreground">Digest ID:</span> {error.digest}
+                  <span className="font-semibold text-foreground">ID do diagnóstico:</span> {error.digest}
                 </div>
               )}
               {error.stack && (

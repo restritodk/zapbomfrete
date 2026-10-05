@@ -2,23 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import { io, Socket } from 'socket.io-client';
-import QRCode from 'qrcode';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from "@/components/ui/card";
 import { useRouter } from 'next/navigation';
 import { toast } from "sonner";
 import { Label } from '@/components/ui/label';
-import { Smartphone, Plus, Trash2, Settings, RefreshCw, Power, UserPlus } from 'lucide-react';
+import { Smartphone, Plus, Settings, UserPlus, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table";
 
 type Session = {
     id: string;
@@ -32,6 +22,29 @@ type Session = {
     } | null;
 };
 
+function statusMeta(status: string) {
+    const key = (status || "").toUpperCase();
+    if (key === "CONNECTED") {
+        return {
+            label: "Conectado",
+            className: "bg-emerald-500/10 text-emerald-700 border-emerald-500/25",
+            dot: "bg-emerald-500 animate-pulse",
+        };
+    }
+    if (key === "QR" || key === "CONNECTING" || key === "OPENING") {
+        return {
+            label: key === "QR" ? "Aguardando QR" : "Conectando",
+            className: "bg-amber-500/10 text-amber-700 border-amber-500/25",
+            dot: "bg-amber-500 animate-pulse",
+        };
+    }
+    return {
+        label: status || "Desconectado",
+        className: "bg-muted text-muted-foreground border-border",
+        dot: "bg-slate-400",
+    };
+}
+
 export function SessionManager({ user }: { user: any }) {
     const [sessions, setSessions] = useState<Session[]>([]);
     const [newSessionName, setNewSessionName] = useState("");
@@ -43,7 +56,6 @@ export function SessionManager({ user }: { user: any }) {
     useEffect(() => {
         fetchSessions();
 
-        // Init Socket
         const socketInstance = io({
             path: "/api/socket/io",
             addTrailingSlash: false,
@@ -54,7 +66,6 @@ export function SessionManager({ user }: { user: any }) {
         });
 
         socketInstance.on('connection.update', (data: { sessionId: string, status: string, qr: string }) => {
-            // Update specific session status if match
             setSessions(prev => prev.map(s => {
                 if (s.sessionId === data.sessionId) {
                     return { ...s, status: data.status, qr: data.qr };
@@ -63,7 +74,7 @@ export function SessionManager({ user }: { user: any }) {
             }));
 
             if (data.status === 'CONNECTED') {
-                fetchSessions(); // Refresh purely to get updated state from DB if needed
+                fetchSessions();
             }
         });
 
@@ -83,13 +94,12 @@ export function SessionManager({ user }: { user: any }) {
 
     const createSession = async () => {
         if (!newSessionName) {
-            toast.error("Session name is required");
+            toast.error("O nome da sessão é obrigatório");
             return;
         }
 
-        // If ID matches existing
         if (newSessionId && sessions.some(s => s.sessionId === newSessionId)) {
-            toast.error("Session ID already exists");
+            toast.error("O ID da sessão já existe");
             return;
         }
 
@@ -101,24 +111,21 @@ export function SessionManager({ user }: { user: any }) {
                 body: JSON.stringify({
                     userId: user.id,
                     name: newSessionName,
-                    sessionId: newSessionId || undefined // Optional, backend will generate if empty
+                    sessionId: newSessionId || undefined
                 })
             });
             const responseData = await res.json();
             const session = responseData?.data;
 
-            if (!res.ok || !session) throw new Error(responseData.error || responseData.message || "Failed to create");
+            if (!res.ok || !session) throw new Error(responseData.error || responseData.message || "Falha ao criar");
 
             setSessions([...sessions, session]);
             setNewSessionName("");
             setNewSessionId("");
-            toast.success("Session created successfully");
-
-            // Optionally redirect immediately or let user choose
-            // router.push(`/dashboard/sessions/${session.sessionId}`);
+            toast.success("Sessão criada com sucesso");
         } catch (e: any) {
             console.error(e);
-            toast.error(e.message || "Failed to create session");
+            toast.error(e.message || "Falha ao criar sessão");
         } finally {
             setLoading(false);
         }
@@ -128,130 +135,195 @@ export function SessionManager({ user }: { user: any }) {
         router.push(`/dashboard/sessions/${sessionId}`);
     }
 
+    const connectedCount = sessions.filter(s => (s.status || "").toUpperCase() === "CONNECTED").length;
+
     return (
-        <div className="space-y-8">
-            {/* Create New Session Card */}
-            <Card className="bg-slate-50 border-dashed border-2">
-                <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                        <Plus className="h-5 w-5" /> Create New Session
-                    </CardTitle>
-                    <CardDescription>
-                        Add a new WhatsApp account to manage.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                        <div className="space-y-2">
-                            <Label htmlFor="session-name">Session Name</Label>
-                            <Input
-                                id="session-name"
-                                value={newSessionName}
-                                onChange={e => setNewSessionName(e.target.value)}
-                                placeholder="My Business WA"
-                            />
+        <div className="w-full space-y-6">
+            {/* Hero */}
+            <div className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-primary/[0.07] via-background to-emerald-500/[0.05] px-5 py-6 sm:px-8 sm:py-8">
+                <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-primary/10 blur-3xl" />
+                <div className="pointer-events-none absolute -bottom-20 -left-10 h-40 w-40 rounded-full bg-emerald-400/10 blur-3xl" />
+                <div className="relative flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
+                    <div className="space-y-1.5">
+                        <div className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-primary/80">
+                            <Smartphone className="h-3.5 w-3.5" />
+                            Conexões WhatsApp
                         </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="session-id">Custom Session ID (Optional)</Label>
-                            <Input
-                                id="session-id"
-                                value={newSessionId}
-                                onChange={e => setNewSessionId(e.target.value.replace(/[^a-zA-Z0-9-_]/g, ''))}
-                                placeholder="unique-id-123"
-                            />
-                            <p className="text-[10px] text-muted-foreground">Only letters, numbers, hyphens.</p>
+                        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Gerenciar sessões</h1>
+                        <p className="text-sm text-muted-foreground max-w-xl">
+                            Conecte e administre contas WhatsApp. Cada sessão pode ser compartilhada e gerenciada separadamente.
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-3 text-sm">
+                        <div className="rounded-xl border bg-background/80 px-3.5 py-2 backdrop-blur-sm">
+                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total</p>
+                            <p className="text-lg font-semibold tabular-nums leading-none mt-0.5">{sessions.length}</p>
                         </div>
-                        <Button onClick={createSession} disabled={loading}>
-                            {loading ? 'Creating...' : 'Create Session'}
+                        <div className="rounded-xl border bg-background/80 px-3.5 py-2 backdrop-blur-sm">
+                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Online</p>
+                            <p className="text-lg font-semibold tabular-nums leading-none mt-0.5 text-emerald-600">{connectedCount}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Create session */}
+            <div className="rounded-2xl border bg-card p-5 sm:p-6 shadow-sm">
+                <div className="flex items-start gap-3 mb-5">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                        <Plus className="h-5 w-5" />
+                    </div>
+                    <div>
+                        <h2 className="text-base font-semibold tracking-tight">Criar nova sessão</h2>
+                        <p className="text-sm text-muted-foreground mt-0.5">
+                            Adicione uma nova conta WhatsApp para gerenciar.
+                        </p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_auto] gap-x-4 gap-y-2 items-start">
+                    <div className="space-y-2">
+                        <Label htmlFor="session-name">Nome da sessão</Label>
+                        <Input
+                            id="session-name"
+                            value={newSessionName}
+                            onChange={e => setNewSessionName(e.target.value)}
+                            placeholder="Ex.: Casa, Comercial, Suporte"
+                            className="h-11"
+                            onKeyDown={(e) => e.key === "Enter" && createSession()}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="session-id">
+                            ID personalizado{" "}
+                            <span className="text-muted-foreground font-normal">(opcional)</span>
+                        </Label>
+                        <Input
+                            id="session-id"
+                            value={newSessionId}
+                            onChange={e => setNewSessionId(e.target.value.replace(/[^a-zA-Z0-9-_]/g, ''))}
+                            placeholder="id-unico-123"
+                            className="h-11"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <Label className="invisible select-none pointer-events-none hidden lg:block">Ação</Label>
+                        <Button
+                            onClick={createSession}
+                            disabled={loading || !newSessionName.trim()}
+                            size="lg"
+                            className="h-11 w-full lg:w-auto px-6 active:scale-[0.98] transition-transform"
+                        >
+                            {loading ? (
+                                <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Criando...
+                                </>
+                            ) : (
+                                <>
+                                    <Plus className="h-4 w-4 mr-2" />
+                                    Criar sessão
+                                </>
+                            )}
                         </Button>
                     </div>
-                </CardContent>
-            </Card>
+                    <p className="text-[11px] text-muted-foreground lg:col-start-2">
+                        ID: apenas letras, números e hífens.
+                    </p>
+                </div>
+            </div>
 
-            {/* Sessions Table Card */}
-            <div>
+            {/* Sessions list */}
+            <div className="space-y-3">
+                <div className="flex items-end justify-between gap-3 px-0.5">
+                    <div>
+                        <h2 className="text-base font-semibold tracking-tight">
+                            Suas sessões
+                        </h2>
+                        <p className="text-sm text-muted-foreground">
+                            Status em tempo real e ações rápidas.
+                        </p>
+                    </div>
+                </div>
+
                 {sessions.length === 0 ? (
-                    <div className="text-center py-10 text-muted-foreground bg-slate-50 dark:bg-slate-900 rounded-lg border border-border/50">
-                        No sessions found. Create one above to get started.
+                    <div className="w-full rounded-2xl border border-dashed bg-muted/20 px-6 py-16 text-center">
+                        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 mb-5">
+                            <Smartphone className="w-8 h-8 text-primary/70" />
+                        </div>
+                        <h3 className="text-lg font-semibold">Nenhuma sessão ainda</h3>
+                        <p className="text-muted-foreground mt-1 mb-1 max-w-md mx-auto text-sm">
+                            Crie sua primeira sessão acima para conectar uma conta WhatsApp e começar a usar o painel.
+                        </p>
                     </div>
                 ) : (
-                    <Card className="glass-panel border-border/50 shadow-sm overflow-hidden">
-                        <CardHeader className="pb-3 pt-5 px-5">
-                            <CardTitle className="text-base font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                                Active Sessions ({sessions.length})
-                            </CardTitle>
-                            <CardDescription>
-                                List of active WhatsApp sessions and their current connection status.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="p-0 overflow-x-auto">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow className="hover:bg-transparent">
-                                        <TableHead className="px-5 text-xs uppercase tracking-wider font-semibold">Session / Device</TableHead>
-                                        <TableHead className="text-xs uppercase tracking-wider font-semibold">Status</TableHead>
-                                        <TableHead className="text-xs uppercase tracking-wider font-semibold">Owner</TableHead>
-                                        <TableHead className="text-right px-5 text-xs uppercase tracking-wider font-semibold">Actions</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {sessions.map(session => (
-                                        <TableRow key={session.id} className="hover:bg-muted/20 dark:hover:bg-muted/5 transition-colors">
-                                            <TableCell className="px-5 py-3 font-medium">
-                                                <div className="font-semibold text-slate-800 dark:text-slate-200 text-sm">{session.name}</div>
-                                                <div className="text-[11px] text-muted-foreground font-mono mt-0.5">{session.sessionId}</div>
-                                            </TableCell>
-                                            <TableCell className="py-3">
-                                                <Badge 
-                                                    variant={session.status === 'CONNECTED' ? 'default' : 'secondary'}
-                                                    className={`text-[10px] font-semibold transition-all px-2 py-0.5 shrink-0 inline-flex items-center ${
-                                                        session.status === 'CONNECTED' 
-                                                            ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 hover:bg-emerald-500/20' 
-                                                            : 'bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700 hover:bg-slate-100'
-                                                    }`}
-                                                >
-                                                    <span className={`h-1.5 w-1.5 rounded-full mr-1.5 ${
-                                                        session.status === 'CONNECTED' ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
-                                                    }`} />
-                                                    {session.status}
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell className="py-3">
-                                                {session.user ? (
-                                                    <div className="leading-tight">
-                                                        <div className="font-semibold text-slate-700 dark:text-slate-300 text-xs">{session.user.name || "No Name"}</div>
-                                                        <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">{session.user.email}</div>
-                                                    </div>
-                                                ) : (
-                                                    <span className="text-xs text-muted-foreground/50">-</span>
-                                                )}
-                                            </TableCell>
-                                            <TableCell className="py-3 text-right px-5">
-                                                <div className="flex items-center justify-end gap-2">
-                                                    <Button 
-                                                        variant="outline" 
-                                                        size="sm" 
-                                                        className="h-8 px-2.5 text-xs rounded-lg hover:bg-primary/5 transition-colors border-border/50"
-                                                        onClick={() => router.push(`/dashboard/sessions/access?session=${session.sessionId}`)}
-                                                    >
-                                                        <UserPlus className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" /> Share
-                                                    </Button>
-                                                    <Button 
-                                                        variant="outline" 
-                                                        size="sm" 
-                                                        className="h-8 px-2.5 text-xs rounded-lg hover:bg-primary/5 transition-colors border-border/50"
-                                                        onClick={() => handleManageSession(session.sessionId)}
-                                                    >
-                                                        <Settings className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" /> Manage
-                                                    </Button>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        {sessions.map((session) => {
+                            const meta = statusMeta(session.status);
+                            return (
+                                <div
+                                    key={session.id}
+                                    className="group relative flex flex-col overflow-hidden rounded-2xl border bg-card transition-shadow duration-200 ease-out hover:shadow-md"
+                                >
+                                    <div className={`h-1 w-full ${session.status?.toUpperCase() === "CONNECTED" ? "bg-emerald-500" : "bg-border"}`} />
+                                    <div className="p-5 flex flex-col gap-4 flex-1">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="flex items-start gap-3 min-w-0">
+                                                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                                                    <Smartphone className="h-5 w-5" />
                                                 </div>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
+                                                <div className="min-w-0">
+                                                    <h3 className="font-semibold text-base truncate">{session.name}</h3>
+                                                    <p className="text-[11px] text-muted-foreground font-mono mt-0.5 truncate">
+                                                        {session.sessionId}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <Badge
+                                                variant="outline"
+                                                className={`text-[10px] font-semibold px-2 py-0.5 shrink-0 inline-flex items-center gap-1.5 border ${meta.className}`}
+                                            >
+                                                <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+                                                {meta.label}
+                                            </Badge>
+                                        </div>
+
+                                        <div className="rounded-xl bg-muted/40 px-3 py-2.5">
+                                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Proprietário</p>
+                                            {session.user ? (
+                                                <div>
+                                                    <p className="text-sm font-medium truncate">{session.user.name || "Sem nome"}</p>
+                                                    <p className="text-[11px] text-muted-foreground truncate">{session.user.email}</p>
+                                                </div>
+                                            ) : (
+                                                <p className="text-sm text-muted-foreground">—</p>
+                                            )}
+                                        </div>
+
+                                        <div className="flex items-center gap-2 pt-1 mt-auto">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="h-9 flex-1 rounded-xl active:scale-[0.98] transition-transform"
+                                                onClick={() => router.push(`/dashboard/sessions/access?session=${session.sessionId}`)}
+                                            >
+                                                <UserPlus className="h-3.5 w-3.5 mr-1.5" />
+                                                Compartilhar
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                className="h-9 flex-1 rounded-xl active:scale-[0.98] transition-transform"
+                                                onClick={() => handleManageSession(session.sessionId)}
+                                            >
+                                                <Settings className="h-3.5 w-3.5 mr-1.5" />
+                                                Gerenciar
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
                 )}
             </div>
         </div>

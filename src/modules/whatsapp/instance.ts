@@ -12,6 +12,7 @@ import pino from "pino";
 import { bindSessionStore } from "./store";
 import { syncGroups } from "./store/groups";
 import { bindContactSync } from "./store/contacts";
+import { bindChatSync } from "./store/chats";
 import { bindAutoReply } from "./store/autoreply";
 import { bindPpGuard } from "./store/ppguard";
 import { antispam } from "./antispam";
@@ -83,6 +84,9 @@ export class WhatsAppInstance {
 
         // Bind Contact Sync
         bindContactSync(this.socket, this.sessionId);
+
+        // Bind Chat inbox sync (chats.* + history)
+        bindChatSync(this.socket, this.sessionId, this.io);
 
         this.socket.ev.on("creds.update", saveCreds);
 

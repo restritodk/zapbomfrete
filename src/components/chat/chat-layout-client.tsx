@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { ChatList } from "./chat-list";
 import { ChatWindow } from "./chat-window";
 import { MessageCircle } from "lucide-react";
+import { toWhatsAppJid } from "@/lib/phone-br";
 
 interface ChatLayoutClientProps {
     sessionId: string;
@@ -25,8 +26,9 @@ export function ChatLayoutClient({ sessionId, initialJid }: ChatLayoutClientProp
         if (typeof window === "undefined") return;
         const base = "/dashboard/chat";
         if (selectedChat) {
-            const number = selectedChat.jid.split("@")[0];
-            const newPath = `${base}/${number}`;
+            // Encode full JID so groups (@g.us) and LIDs (@lid) survive the URL
+            const slug = encodeURIComponent(selectedChat.jid);
+            const newPath = `${base}/${slug}`;
             if (window.location.pathname !== newPath) {
                 window.history.replaceState(null, "", newPath);
             }
@@ -42,10 +44,11 @@ export function ChatLayoutClient({ sessionId, initialJid }: ChatLayoutClientProp
         const handlePopState = () => {
             const path = window.location.pathname;
             if (path.startsWith("/dashboard/chat/")) {
-                const rawJid = path.replace("/dashboard/chat/", "");
-                let clean = rawJid.replace(/\D/g, "");
-                if (clean.startsWith("0")) clean = "62" + clean.substring(1);
-                setSelectedChat({ jid: `${clean}@s.whatsapp.net` });
+                const rawJid = decodeURIComponent(path.replace("/dashboard/chat/", ""));
+                const jid = rawJid.includes("@")
+                    ? (toWhatsAppJid(rawJid) || rawJid)
+                    : toWhatsAppJid(rawJid);
+                if (jid) setSelectedChat({ jid });
             } else {
                 setSelectedChat(null);
             }
@@ -98,7 +101,7 @@ export function ChatLayoutClient({ sessionId, initialJid }: ChatLayoutClientProp
                                 <MessageCircle className="h-8 w-8 text-muted-foreground/40" />
                             </div>
                             <p className="text-sm text-muted-foreground">
-                                Select a chat to start messaging
+                                Selecione um chat para começar a conversar
                             </p>
                         </div>
                     </div>

@@ -10,7 +10,6 @@ import {
     MessageSquare,
     Users,
     Settings,
-    LogOut,
     QrCode,
     ImageIcon,
     Webhook,
@@ -29,8 +28,9 @@ import {
     UserPlus,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { useSession, signOut } from "next-auth/react";
+import { useSession } from "next-auth/react";
 import pkg from "../../../package.json";
+import { LogoutButton } from "./logout-confirm";
 
 interface NavGroup {
     label: string;
@@ -40,59 +40,59 @@ interface NavGroup {
 // Keep in sync with sidebar-nav.tsx
 const navGroups: NavGroup[] = [
     {
-        label: "Main",
+        label: "Principal",
         items: [
-            { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-            { href: "/dashboard/sessions", label: "Sessions / QR", icon: QrCode },
+            { href: "/dashboard", label: "Painel", icon: LayoutDashboard },
+            { href: "/dashboard/sessions", label: "Sessões / QR", icon: QrCode },
         ],
     },
     {
-        label: "Messaging",
+        label: "Mensagens",
         items: [
             { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
-            { href: "/dashboard/broadcast", label: "Broadcast", icon: Megaphone },
-            { href: "/dashboard/sticker", label: "Sticker Maker", icon: ImageIcon },
+            { href: "/dashboard/broadcast", label: "Disparo em massa", icon: Megaphone },
+            { href: "/dashboard/sticker", label: "Criador de figurinhas", icon: ImageIcon },
         ],
     },
     {
-        label: "Contacts",
+        label: "Contatos",
         items: [
-            { href: "/dashboard/contacts", label: "Contacts", icon: UserCheck },
-            { href: "/dashboard/groups", label: "Groups", icon: Users },
-            { href: "/dashboard/labels", label: "Labels", icon: Tag },
+            { href: "/dashboard/contacts", label: "Contatos", icon: UserCheck },
+            { href: "/dashboard/groups", label: "Grupos", icon: Users },
+            { href: "/dashboard/labels", label: "Etiquetas", icon: Tag },
         ],
     },
     {
-        label: "Automation",
+        label: "Automação",
         items: [
-            { href: "/dashboard/bot-settings", label: "Bot Settings", icon: Bot },
-            { href: "/dashboard/autoreply", label: "Auto Reply", icon: MessageCircleReply },
-            { href: "/dashboard/profile", label: "Bot Profile", icon: UserCircle },
-            { href: "/dashboard/scheduler", label: "Scheduler", icon: CalendarClock },
-            { href: "/dashboard/webhooks", label: "Webhooks & API", icon: Webhook },
+            { href: "/dashboard/bot-settings", label: "Config. do bot", icon: Bot },
+            { href: "/dashboard/autoreply", label: "Resposta automática", icon: MessageCircleReply },
+            { href: "/dashboard/profile", label: "Perfil do bot", icon: UserCircle },
+            { href: "/dashboard/scheduler", label: "Agendador", icon: CalendarClock },
+            { href: "/dashboard/webhooks", label: "Webhooks e API", icon: Webhook },
         ],
     },
     {
-        label: "Developer",
+        label: "Desenvolvedor",
         items: [
-            { href: "/docs", label: "API Docs", icon: FileText },
+            { href: "/docs", label: "Docs da API", icon: FileText },
             { href: "/swagger", label: "Swagger UI", icon: Code, external: true },
         ],
     },
     {
-        label: "Administration",
+        label: "Administração",
         items: [
-            { href: "/dashboard/media", label: "Media Manager", icon: HardDrive },
-            { href: "/dashboard/sessions/access", label: "Session Access", icon: UserPlus },
-            { href: "/dashboard/users", label: "Users", icon: Users },
-            { href: "/dashboard/settings", label: "Settings", icon: Settings },
-            { href: "/dashboard/system-monitor", label: "System Monitor", icon: Activity, superadminOnly: true },
-            { href: "/dashboard/notifications", label: "Notifications", icon: Bell, superadminOnly: true },
+            { href: "/dashboard/media", label: "Gerenciador de mídia", icon: HardDrive },
+            { href: "/dashboard/sessions/access", label: "Acesso às sessões", icon: UserPlus },
+            { href: "/dashboard/users", label: "Usuários", icon: Users },
+            { href: "/dashboard/settings", label: "Configurações", icon: Settings },
+            { href: "/dashboard/system-monitor", label: "Monitor do sistema", icon: Activity, superadminOnly: true },
+            { href: "/dashboard/notifications", label: "Notificações", icon: Bell, superadminOnly: true },
         ],
     },
 ];
 
-export function MobileNav({ appName = "WA-AKG" }: { appName?: string }) {
+export function MobileNav({ appName = "WA-AKG", logoUrl }: { appName?: string; logoUrl?: string | null }) {
     const [open, setOpen] = useState(false);
     const pathname = usePathname();
     const { data: session } = useSession();
@@ -112,9 +112,26 @@ export function MobileNav({ appName = "WA-AKG" }: { appName?: string }) {
                 </Button>
             </SheetTrigger>
             <SheetContent side="left" className="w-[85vw] sm:w-[320px] p-0 flex flex-col">
-                <SheetHeader className="px-5 py-4 text-left border-b border-slate-100">
-                    <SheetTitle className="text-xl font-bold text-slate-800">{appName}</SheetTitle>
-                    <SheetDescription className="text-[11px] text-slate-400 -mt-1">WhatsApp Gateway</SheetDescription>
+                <SheetHeader className="px-5 py-5 text-left border-b border-slate-100 space-y-3">
+                    <SheetTitle className="text-lg font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-500">
+                        {appName}
+                    </SheetTitle>
+                    {logoUrl ? (
+                        <div className="relative overflow-hidden rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/[0.08] via-background to-emerald-500/[0.06] p-3 shadow-[0_8px_24px_-12px_rgba(16,185,129,0.35)]">
+                            <div className="relative flex items-center justify-center min-h-[80px] rounded-xl bg-background/70 ring-1 ring-border/40 px-3 py-2">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                    src={logoUrl}
+                                    alt={`${appName} logo`}
+                                    className="max-h-[72px] w-auto max-w-full object-contain"
+                                />
+                            </div>
+                        </div>
+                    ) : (
+                        <SheetDescription className="text-[11px] text-slate-400">
+                            Gateway WhatsApp
+                        </SheetDescription>
+                    )}
                 </SheetHeader>
 
                 <nav className="flex-1 px-3 py-3 overflow-y-auto space-y-1">
@@ -174,17 +191,7 @@ export function MobileNav({ appName = "WA-AKG" }: { appName?: string }) {
                             <p className="text-[11px] text-slate-400 truncate">{session?.user?.email}</p>
                         </div>
                     </div>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full flex items-center justify-center gap-2 text-xs h-8"
-                        onClick={async () => {
-                            setOpen(false);
-                            await signOut({ callbackUrl: "/auth/login" });
-                        }}
-                    >
-                        <LogOut size={14} /> Sign Out
-                    </Button>
+                    <LogoutButton className="w-full flex items-center justify-center gap-2 text-xs h-8 rounded-lg" />
                     <p className="text-[10px] text-slate-300 text-center mt-2 font-mono">v{pkg.version}</p>
                 </div>
             </SheetContent>

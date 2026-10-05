@@ -29,15 +29,18 @@ export const viewport: Viewport = {
 
 export async function generateMetadata(): Promise<Metadata> {
   let appName = "WA-AKG";
+  let faviconUrl = "/favicon.ico";
   try {
     // @ts-ignore
     const config = await prisma.systemConfig.findUnique({ where: { id: "default" } });
     if (config?.appName) appName = config.appName;
+    if (config?.faviconUrl) faviconUrl = config.faviconUrl;
   } catch (e) {
     console.error("Failed to fetch system config for metadata:", e);
   }
 
   const appDefaultTitle = `${appName} | Premium WhatsApp Gateway`;
+  const iconHref = faviconUrl.split("?")[0] || "/favicon.ico";
 
   return {
     metadataBase: new URL(APP_URL),
@@ -47,6 +50,11 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     description: APP_DESCRIPTION,
     applicationName: appName,
+    icons: {
+      icon: [{ url: faviconUrl }],
+      shortcut: faviconUrl,
+      apple: iconHref.endsWith(".ico") ? "/favicon.ico" : faviconUrl,
+    },
     generator: "Next.js",
     keywords: [
       "whatsapp gateway", "whatsapp api", "whatsapp bot", "whatsapp management",
@@ -71,7 +79,7 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     openGraph: {
       type: "website",
-      locale: "en_US",
+      locale: "pt_BR",
       siteName: appName,
       title: appDefaultTitle,
       description: APP_DESCRIPTION,
@@ -99,7 +107,7 @@ export default function RootLayout({
   const allowIndexing = process.env.NEXT_PUBLIC_ALLOW_INDEXING === "true";
 
   return (
-    <html lang="en" suppressHydrationWarning className="scroll-smooth">
+    <html lang="pt-BR" suppressHydrationWarning className="scroll-smooth">
       <head>
         {/* Conditional robots meta (noindex for staging/dev) */}
         {!allowIndexing && <meta name="robots" content="noindex, nofollow" />}

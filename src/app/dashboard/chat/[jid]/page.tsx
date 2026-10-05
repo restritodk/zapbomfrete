@@ -4,6 +4,7 @@ import { ChatLayoutClient } from "@/components/chat/chat-layout-client";
 import { cookies } from "next/headers";
 import { canAccessSession } from "@/lib/api-auth";
 import { SessionGuard } from "@/components/dashboard/session-guard";
+import { toWhatsAppJid } from "@/lib/phone-br";
 
 export default async function ChatWithJidPage({
     params,
@@ -13,11 +14,13 @@ export default async function ChatWithJidPage({
     const { jid: rawJid } = await params;
     const session = await auth();
 
-    if (!session?.user?.id) return <div>Unauthorized</div>;
+    if (!session?.user?.id) return <div>Não autorizado</div>;
 
-    let clean = rawJid.replace(/\D/g, '');
-    if (clean.startsWith('0')) clean = '62' + clean.substring(1);
-    const resolvedJid = `${clean}@s.whatsapp.net`;
+    const decoded = decodeURIComponent(rawJid);
+    // Preserve group / LID JIDs from the URL; only normalize phone-like slugs
+    const resolvedJid = decoded.includes("@g.us") || decoded.includes("@lid")
+        ? decoded
+        : (toWhatsAppJid(decoded) || `${decoded.replace(/\D/g, "")}@s.whatsapp.net`);
 
     const cookieStore = await cookies();
     const sessionId = cookieStore.get("sessionId")?.value;

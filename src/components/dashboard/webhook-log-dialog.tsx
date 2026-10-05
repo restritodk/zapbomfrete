@@ -54,9 +54,9 @@ function formatTime(ts: string, tz: string) {
     const d = new Date(ts);
     if (isNaN(d.getTime())) return ts || "";
     try {
-        return d.toLocaleString("id-ID", { timeZone: tz });
+        return d.toLocaleString("pt-BR", { timeZone: tz });
     } catch {
-        return d.toLocaleString("id-ID");
+        return d.toLocaleString("pt-BR");
     }
 }
 
@@ -65,9 +65,9 @@ function formatTimeOnly(ts: string, tz: string) {
     const d = new Date(ts);
     if (isNaN(d.getTime())) return "";
     try {
-        return d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: tz });
+        return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: tz });
     } catch {
-        return d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     }
 }
 
@@ -253,10 +253,10 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                             <div className="bg-primary/10 p-1.5 rounded-lg text-primary">
                                 <History className="h-4 w-4" />
                             </div>
-                            Webhook Delivery Logs
+                            Logs de entrega de webhook
                         </DialogTitle>
                         <DialogDescription className="text-xs text-muted-foreground">
-                            {webhookName} — Monitor event payloads, server response headers, and latency.
+                            {webhookName} — Monitore payloads de eventos, headers de resposta do servidor e latência.
                         </DialogDescription>
                     </div>
                 </DialogHeader>
@@ -264,7 +264,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                 {loading && logs.length === 0 ? (
                     <div className="flex-1 flex flex-col items-center justify-center text-sm text-muted-foreground gap-3">
                         <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                        <p className="font-medium text-xs">Loading logs...</p>
+                        <p className="font-medium text-xs">Carregando logs...</p>
                     </div>
                 ) : logs.length === 0 ? (
                     <div className="flex-1 flex flex-col items-center justify-center text-sm text-muted-foreground space-y-3 p-6 text-center">
@@ -272,9 +272,9 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                             <History className="h-5 w-5 opacity-60" />
                         </div>
                         <div className="space-y-1">
-                            <p className="font-semibold text-slate-800 text-sm">No delivery logs yet</p>
+                            <p className="font-semibold text-slate-800 text-sm">Nenhum log de entrega ainda</p>
                             <p className="text-xs text-muted-foreground max-w-[280px]">
-                                Logs will appear here as soon as webhooks are dispatched or when you click "Test".
+                                Os logs aparecerão aqui assim que os webhooks forem disparados ou quando você clicar em "Testar".
                             </p>
                         </div>
                     </div>
@@ -293,7 +293,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                     </span>
                                     <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full flex items-center gap-1 font-semibold text-[10px] border border-emerald-100/40">
                                         <span className="h-1 w-1 rounded-full bg-emerald-500 animate-pulse inline-block" />
-                                        Live
+                                        Ao vivo
                                     </span>
                                 </span>
                                 <div className="flex items-center gap-1.5">
@@ -303,7 +303,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                         size="icon"
                                         className="h-6 w-6 text-slate-500 hover:text-slate-900 hover:bg-slate-100"
                                         onClick={fetchLogs}
-                                        title="Refresh logs"
+                                        title="Atualizar logs"
                                     >
                                         <RefreshCw className="h-3 w-3" />
                                     </Button>
@@ -350,7 +350,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                                         "text-[10px] font-semibold uppercase tracking-wider",
                                                         isSuccess ? "text-emerald-600" : "text-rose-600"
                                                     )}>
-                                                        {isSuccess ? "Success" : "Failed"}
+                                                        {isSuccess ? "Sucesso" : "Falhou"}
                                                     </span>
                                                 </div>
 
@@ -392,12 +392,12 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                             ) : (
                                                 <ChevronDown className="h-3 w-3 mr-1" />
                                             )}
-                                            Load {total - shown} more
+                                            Carregar mais {total - shown}
                                         </Button>
                                     </div>
                                 ) : shown > 0 ? (
                                     <div className="p-4 text-[10px] text-center text-slate-400 bg-transparent font-mono select-none">
-                                        All {total} logs loaded
+                                        Todos os {total} logs carregados
                                     </div>
                                 ) : null}
                             </div>
@@ -412,9 +412,9 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                 <div className="flex-1 flex flex-col min-h-0">
                                     {/* Details Subheader */}
                                     <div className="p-4 px-5 border-b flex flex-col gap-3 bg-slate-50/10 shrink-0">
-                                        {/* Row 1: Back Button & Badges */}
+                                        {/* Row 1: Voltar Button & Badges */}
                                         <div className="flex items-center justify-between gap-2.5 flex-wrap">
-                                            {/* Mobile Back Button */}
+                                            {/* Mobile Voltar Button */}
                                             <Button
                                                 variant="ghost"
                                                 size="sm"
@@ -422,7 +422,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                                 onClick={() => setShowMobileDetails(false)}
                                             >
                                                 <ArrowLeft className="h-4 w-4" />
-                                                Back
+                                                Voltar
                                             </Button>
 
                                             <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -451,7 +451,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
 
                                                 {selectedLog.responseTimeMs != null && (
                                                     <span className="text-slate-500 text-xs font-mono">
-                                                        ({selectedLog.responseTimeMs}ms latency)
+                                                        ({selectedLog.responseTimeMs}ms de latência)
                                                     </span>
                                                 )}
                                             </div>
@@ -469,7 +469,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                                 variant="ghost"
                                                 size="icon"
                                                 className="h-5 w-5 text-slate-400 hover:text-slate-800 shrink-0 mt-0.5"
-                                                onClick={() => copyToClipboard(selectedLog.requestUrl, "URL copied to clipboard")}
+                                                onClick={() => copyToClipboard(selectedLog.requestUrl, "URL copiada para a área de transferência")}
                                             >
                                                 <Copy className="h-3 w-3" />
                                             </Button>
@@ -479,7 +479,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                         <div className="text-[10px] text-slate-400 flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono">
                                             <div className="flex items-center gap-1.5">
                                                 <Info className="h-3.5 w-3.5 text-slate-400/80" />
-                                                <span>Attempted:</span>
+                                                <span>Tentativa:</span>
                                                 <span className="font-semibold text-slate-600">{formatTime(selectedLog.createdAt, timezone)}</span>
                                             </div>
                                             <span className="text-slate-300 hidden sm:inline select-none">•</span>
@@ -495,7 +495,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                         <div className="mx-5 mt-3 p-3.5 bg-rose-50/50 border border-rose-100 text-rose-800 text-xs rounded-xl flex items-start gap-2.5">
                                             <AlertCircle className="h-4 w-4 text-rose-500 shrink-0 mt-0.5" />
                                             <div className="space-y-1">
-                                                <p className="font-semibold text-rose-900 text-xs">Delivery Failure</p>
+                                                <p className="font-semibold text-rose-900 text-xs">Falha na entrega</p>
                                                 <p className="font-mono break-all text-[11px] leading-relaxed">{selectedLog.errorMessage}</p>
                                             </div>
                                         </div>
@@ -527,7 +527,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                                     )}
                                                 >
                                                     <ArrowRight className="h-3.5 w-3.5" />
-                                                    Response
+                                                    Resposta
                                                 </button>
                                                 <button
                                                     onClick={() => setActiveTab("headers")}
@@ -562,15 +562,15 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                                                 ? selectedLog.responseBody || ""
                                                                 : formatJson(selectedLog.requestHeaders);
                                                         const msg = activeTab === "payload" 
-                                                            ? "Payload copied" 
+                                                            ? "Payload copiado" 
                                                             : activeTab === "response"
-                                                                ? "Response body copied"
-                                                                : "Headers copied";
+                                                                ? "Corpo da resposta copiado"
+                                                                : "Headers copiados";
                                                         copyToClipboard(textToCopy, msg);
                                                     }}
                                                 >
                                                     <Copy className="h-3 w-3 mr-1" />
-                                                    Copy
+                                                    Copiar
                                                 </Button>
                                             </div>
                                             
@@ -578,7 +578,7 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                             <div className="flex-1 overflow-auto p-5 select-text custom-scrollbar-dark">
                                                 <pre className="font-mono text-xs text-slate-300 leading-relaxed select-text py-1 whitespace-pre-wrap break-all">
                                                     {activeTab === "payload" && (selectedLog.requestBody ? formatJson(selectedLog.requestBody) : "{}")}
-                                                    {activeTab === "response" && (selectedLog.responseBody || "No response body returned from server.")}
+                                                    {activeTab === "response" && (selectedLog.responseBody || "Nenhum corpo de resposta retornado pelo servidor.")}
                                                     {activeTab === "headers" && (selectedLog.requestHeaders ? formatJson(selectedLog.requestHeaders) : "{}")}
                                                 </pre>
                                             </div>
@@ -591,9 +591,9 @@ export default function WebhookLogDialog({ webhookId, webhookName, targetSession
                                         <FileJson className="h-6 w-6" />
                                     </div>
                                     <div className="max-w-[280px]">
-                                        <h4 className="text-sm font-semibold text-slate-800">No Log Selected</h4>
+                                        <h4 className="text-sm font-semibold text-slate-800">Nenhum log selecionado</h4>
                                         <p className="text-xs text-muted-foreground mt-1">
-                                            Select a webhook attempt from the sidebar to inspect detailed metadata and payloads.
+                                            Selecione uma tentativa de webhook na barra lateral para inspecionar metadados e payloads.
                                         </p>
                                     </div>
                                 </div>

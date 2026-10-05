@@ -1,5 +1,13 @@
 import { prisma } from "./prisma";
 import { logger } from "./logger";
+export {
+    normalizeBrazilianPhone,
+    toWhatsAppJid,
+    extractPhonesFromParticipants,
+    parsePhoneList,
+    BROADCAST_IMPORT_KEY,
+} from "./phone-br";
+import { toWhatsAppJid } from "./phone-br";
 
 /**
  * Check if a JID is in @lid format (WhatsApp Linked ID)
@@ -10,16 +18,28 @@ export function isLidJid(jid: string | undefined | null): boolean {
 }
 
 /**
- * Normalize a JID to standard format.
- * Primarily ensures that @c.us is converted to @s.whatsapp.net.
- * Does not touch @g.us or @broadcast.
+ * Normalize a JID to standard WhatsApp format.
+ * - Converts @c.us → @s.whatsapp.net
+ * - Applies Brazilian DDI (55) to local phone numbers
+ * - Strips +, spaces, dashes and other non-digits from phone JIDs
+ * - Leaves @g.us, @lid and @broadcast JIDs unchanged
  */
 export function normalizeJid(jid: string | undefined | null): string {
     if (!jid) return "";
-    if (jid.endsWith("@c.us")) {
-        return jid.replace("@c.us", "@s.whatsapp.net");
+
+    const value = jid.trim();
+    if (!value) return "";
+
+    if (!value.includes("@")) {
+        return toWhatsAppJid(value);
     }
-    return jid;
+
+    if (value.endsWith("@c.us") || value.endsWith("@s.whatsapp.net")) {
+        return toWhatsAppJid(value);
+    }
+
+    // Do not alter groups, LIDs, broadcast lists, etc.
+    return value;
 }
 
 /**
