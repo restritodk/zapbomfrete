@@ -30,7 +30,7 @@ import {
     CheckSquare,
     Square,
     X,
-    AtualizarCw,
+    RefreshCw,
     FolderOpen,
     ChevronDown,
     ChevronRight,

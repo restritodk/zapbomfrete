@@ -18,10 +18,32 @@ type SystemConfigState = {
     enableRegistration: boolean;
 };
 
+const LOGO_ACCEPT = "image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg";
+const FAVICON_ACCEPT = "image/png,image/x-icon,image/vnd.microsoft.icon,image/jpeg,image/webp,.png,.ico,.jpg,.jpeg,.webp";
+const MAX_BYTES = 2 * 1024 * 1024;
+
+function isAllowedLogo(file: File): boolean {
+    const name = file.name.toLowerCase();
+    const type = (file.type || "").toLowerCase();
+    return (
+        /\.(png|jpe?g|webp|svg)$/i.test(name) ||
+        ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/svg+xml"].includes(type)
+    );
+}
+
+function isAllowedFavicon(file: File): boolean {
+    const name = file.name.toLowerCase();
+    const type = (file.type || "").toLowerCase();
+    return (
+        /\.(png|ico|jpe?g|webp)$/i.test(name) ||
+        ["image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/jpeg", "image/jpg", "image/webp"].includes(type)
+    );
+}
+
 export default function SettingsPage() {
-    const { data: authSession } = useSession();
+    const { data: authSession, status: authStatus } = useSession();
     const router = useRouter();
-    const isSuperAdmin = (authSession?.user as any)?.role === "SUPERADMIN";
+    const isSuperAdmin = authSession?.user?.role === "SUPERADMIN";
 
     const [systemConfig, setSystemConfig] = useState<SystemConfigState>({
         appName: "WA-AKG",
@@ -34,6 +56,8 @@ export default function SettingsPage() {
     const [uploading, setUploading] = useState<"logo" | "favicon" | null>(null);
     const [logoBroken, setLogoBroken] = useState(false);
     const [faviconBroken, setFaviconBroken] = useState(false);
+    const [logoFileName, setLogoFileName] = useState<string | null>(null);
+    const [faviconFileName, setFaviconFileName] = useState<string | null>(null);
     const [timezones, setTimezones] = useState<string[]>([
         "UTC",
         "America/Sao_Paulo",
@@ -43,6 +67,8 @@ export default function SettingsPage() {
 
     const logoInputRef = useRef<HTMLInputElement>(null);
     const faviconInputRef = useRef<HTMLInputElement>(null);
+    const logoObjectUrlRef = useRef<string | null>(null);
+    const faviconObjectUrlRef = useRef<string | null>(null);
 
     useEffect(() => {
         try {
@@ -60,7 +86,7 @@ export default function SettingsPage() {
     useEffect(() => {
         fetch("/api/settings/system")
             .then((r) => {
-                if (!r.ok) throw new Error();
+                if (!r.ok) throw new Error("Falha ao carregar configurações");
                 return r.json();
             })
             .then((responseData) => {
@@ -82,23 +108,62 @@ export default function SettingsPage() {
                     setFaviconBroken(false);
                 }
             })
-            .catch(() => {});
+            .catch(() => {
+                toast.error("Não foi possível carregar as configurações do sistema");
+            });
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (logoObjectUrlRef.current) URL.revokeObjectURL(logoObjectUrlRef.current);
+            if (faviconObjectUrlRef.current) URL.revokeObjectURL(faviconObjectUrlRef.current);
+        };
     }, []);
 
     const handleSaveSystem = async () => {
+        if (!isSuperAdmin) {
+            toast.error("Sem permissão. Apenas SuperAdmin pode salvar configurações.");
+            return;
+        }
         setSystemLoading(true);
         try {
+            // Never persist blob: preview URLs
+            const payload = {
+                ...systemConfig,
+                logoUrl: systemConfig.logoUrl.startsWith("blob:") ? undefined : systemConfig.logoUrl,
+                faviconUrl: systemConfig.faviconUrl.startsWith("blob:")
+                    ? undefined
+                    : systemConfig.faviconUrl,
+            };
+
             const res = await fetch("/api/settings/system", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(systemConfig),
+                body: JSON.stringify(payload),
             });
 
+            const data = await res.json().catch(() => ({}));
             if (res.ok) {
+                if (data?.data) {
+                    setSystemConfig((prev) => ({
+                        ...prev,
+                        appName: data.data.appName ?? prev.appName,
+                        logoUrl: data.data.logoUrl ?? prev.logoUrl,
+                        faviconUrl:
+                            data.data.faviconUrl && data.data.faviconUrl !== "/favicon.ico"
+                                ? data.data.faviconUrl
+                                : prev.faviconUrl,
+                        timezone: data.data.timezone ?? prev.timezone,
+                        enableRegistration:
+                            data.data.enableRegistration !== undefined
+                                ? data.data.enableRegistration
+                                : prev.enableRegistration,
+                    }));
+                }
                 toast.success("Configurações salvas. Atualizando a interface...");
                 router.refresh();
             } else {
-                toast.error("Falha ao atualizar as configurações do sistema");
+                toast.error(data.message || "Falha ao atualizar as configurações do sistema");
             }
         } catch (e) {
             console.error(e);
@@ -109,7 +174,50 @@ export default function SettingsPage() {
     };
 
     const handleUpload = async (type: "logo" | "favicon", file: File | undefined) => {
-        if (!file || !isSuperAdmin) return;
+        if (!file) return;
+
+        if (authStatus === "loading") {
+            toast.message("Aguarde", { description: "Verificando sessão…" });
+            return;
+        }
+        if (authStatus !== "authenticated") {
+            toast.error("Sessão expirada. Faça login novamente.");
+            return;
+        }
+        if (!isSuperAdmin) {
+            toast.error("Sem permissão. Apenas SuperAdmin pode enviar logo/favicon.");
+            return;
+        }
+
+        if (file.size > MAX_BYTES) {
+            toast.error("Arquivo maior que 2 MB");
+            return;
+        }
+        if (type === "logo" && !isAllowedLogo(file)) {
+            toast.error("Formato não permitido. Use PNG, JPG, WEBP ou SVG");
+            return;
+        }
+        if (type === "favicon" && !isAllowedFavicon(file)) {
+            toast.error("Formato não permitido. Use PNG ou ICO");
+            return;
+        }
+
+        // Immediate local preview
+        const objectUrl = URL.createObjectURL(file);
+        if (type === "logo") {
+            if (logoObjectUrlRef.current) URL.revokeObjectURL(logoObjectUrlRef.current);
+            logoObjectUrlRef.current = objectUrl;
+            setSystemConfig((prev) => ({ ...prev, logoUrl: objectUrl }));
+            setLogoBroken(false);
+            setLogoFileName(file.name);
+        } else {
+            if (faviconObjectUrlRef.current) URL.revokeObjectURL(faviconObjectUrlRef.current);
+            faviconObjectUrlRef.current = objectUrl;
+            setSystemConfig((prev) => ({ ...prev, faviconUrl: objectUrl }));
+            setFaviconBroken(false);
+            setFaviconFileName(file.name);
+        }
+
         setUploading(type);
         try {
             const form = new FormData();
@@ -120,29 +228,72 @@ export default function SettingsPage() {
                 method: "POST",
                 body: form,
             });
-            const data = await res.json();
+
+            let data: any = {};
+            try {
+                data = await res.json();
+            } catch {
+                data = {};
+            }
+
             if (!res.ok) {
                 toast.error(data.message || "Falha no upload");
+                // Keep local preview so user still sees what they picked; they can retry
                 return;
             }
 
+            const serverLogo = data.data?.logoUrl;
+            const serverFavicon = data.data?.faviconUrl;
+
             setSystemConfig((prev) => ({
                 ...prev,
-                logoUrl: data.data?.logoUrl ?? prev.logoUrl,
-                faviconUrl: data.data?.faviconUrl ?? prev.faviconUrl,
+                logoUrl: type === "logo" ? serverLogo || prev.logoUrl : prev.logoUrl,
+                faviconUrl: type === "favicon" ? serverFavicon || prev.faviconUrl : prev.faviconUrl,
             }));
-            if (type === "logo") setLogoBroken(false);
-            if (type === "favicon") setFaviconBroken(false);
+
+            if (type === "logo") {
+                if (logoObjectUrlRef.current) {
+                    URL.revokeObjectURL(logoObjectUrlRef.current);
+                    logoObjectUrlRef.current = null;
+                }
+                setLogoBroken(false);
+            }
+            if (type === "favicon") {
+                if (faviconObjectUrlRef.current) {
+                    URL.revokeObjectURL(faviconObjectUrlRef.current);
+                    faviconObjectUrlRef.current = null;
+                }
+                setFaviconBroken(false);
+                // Hint browser to refresh favicon
+                const link = document.querySelector("link[rel='icon']") as HTMLLinkElement | null;
+                if (link && serverFavicon) {
+                    link.href = serverFavicon;
+                }
+            }
+
             toast.success(type === "logo" ? "Logo enviado com sucesso" : "Favicon enviado com sucesso");
             router.refresh();
         } catch (e) {
             console.error(e);
-            toast.error("Erro ao enviar arquivo");
+            toast.error("Erro ao enviar arquivo. Verifique a conexão e tente novamente.");
         } finally {
             setUploading(null);
             if (type === "logo" && logoInputRef.current) logoInputRef.current.value = "";
             if (type === "favicon" && faviconInputRef.current) faviconInputRef.current.value = "";
         }
+    };
+
+    const openFilePicker = (type: "logo" | "favicon") => {
+        if (authStatus === "loading") {
+            toast.message("Aguarde", { description: "Verificando sessão…" });
+            return;
+        }
+        if (!isSuperAdmin) {
+            toast.error("Sem permissão. Apenas SuperAdmin pode enviar logo/favicon.");
+            return;
+        }
+        if (type === "logo") logoInputRef.current?.click();
+        else faviconInputRef.current?.click();
     };
 
     const inputClass =
@@ -157,7 +308,7 @@ export default function SettingsPage() {
                 </p>
             </div>
 
-            {!isSuperAdmin && (
+            {!isSuperAdmin && authStatus === "authenticated" && (
                 <Card className="border-yellow-200 bg-yellow-50">
                     <CardContent className="pt-6">
                         <div className="flex items-start gap-3">
@@ -228,7 +379,7 @@ export default function SettingsPage() {
                             <input
                                 ref={logoInputRef}
                                 type="file"
-                                accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif,.png,.jpg,.jpeg,.webp,.svg"
+                                accept={LOGO_ACCEPT}
                                 className="hidden"
                                 disabled={!isSuperAdmin || uploading === "logo"}
                                 onChange={(e) => handleUpload("logo", e.target.files?.[0])}
@@ -251,7 +402,7 @@ export default function SettingsPage() {
                                     <div className="min-w-0 flex-1">
                                         <p className="text-xs text-muted-foreground truncate">
                                             {systemConfig.logoUrl && !logoBroken
-                                                ? "Logo atual carregado"
+                                                ? logoFileName || "Logo atual carregado"
                                                 : "Nenhum logo enviado"}
                                         </p>
                                         <Button
@@ -260,14 +411,14 @@ export default function SettingsPage() {
                                             size="sm"
                                             className="mt-2"
                                             disabled={!isSuperAdmin || uploading === "logo"}
-                                            onClick={() => logoInputRef.current?.click()}
+                                            onClick={() => openFilePicker("logo")}
                                         >
                                             {uploading === "logo" ? (
                                                 <RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                                             ) : (
                                                 <Upload className="h-3.5 w-3.5 mr-1.5" />
                                             )}
-                                            Anexar do computador
+                                            {uploading === "logo" ? "Enviando…" : "Anexar do computador"}
                                         </Button>
                                     </div>
                                 </div>
@@ -284,7 +435,7 @@ export default function SettingsPage() {
                             <input
                                 ref={faviconInputRef}
                                 type="file"
-                                accept="image/png,image/x-icon,image/vnd.microsoft.icon,image/jpeg,image/webp,.png,.ico,.jpg,.jpeg,.webp"
+                                accept={FAVICON_ACCEPT}
                                 className="hidden"
                                 disabled={!isSuperAdmin || uploading === "favicon"}
                                 onChange={(e) => handleUpload("favicon", e.target.files?.[0])}
@@ -307,7 +458,7 @@ export default function SettingsPage() {
                                     <div className="min-w-0 flex-1">
                                         <p className="text-xs text-muted-foreground truncate">
                                             {systemConfig.faviconUrl && !faviconBroken
-                                                ? "Favicon atual carregado"
+                                                ? faviconFileName || "Favicon atual carregado"
                                                 : "Nenhum favicon enviado"}
                                         </p>
                                         <Button
@@ -316,14 +467,14 @@ export default function SettingsPage() {
                                             size="sm"
                                             className="mt-2"
                                             disabled={!isSuperAdmin || uploading === "favicon"}
-                                            onClick={() => faviconInputRef.current?.click()}
+                                            onClick={() => openFilePicker("favicon")}
                                         >
                                             {uploading === "favicon" ? (
                                                 <RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                                             ) : (
                                                 <Upload className="h-3.5 w-3.5 mr-1.5" />
                                             )}
-                                            Anexar do computador
+                                            {uploading === "favicon" ? "Enviando…" : "Anexar do computador"}
                                         </Button>
                                     </div>
                                 </div>

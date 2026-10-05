@@ -44,7 +44,12 @@ next-env.d.ts
 # media files (downloaded by app)
 /data/media/*
 !/data/media/.gitkeep
+/data/branding/*
+!/data/branding/.gitkeep
+/uploads/
 /public/media/*
+/public/branding/*
+!/public/branding/.gitkeep
 !/public/media/logo.png
 !/public/media/logo-white.png
 !/public/media/logo-transparent.png

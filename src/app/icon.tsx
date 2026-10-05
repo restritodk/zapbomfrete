@@ -1,60 +1,101 @@
-import { ImageResponse } from "next/og";
+import { readFile } from "fs/promises";
 import { prisma } from "@/lib/prisma";
+import { resolveBrandingFile } from "@/lib/branding-storage";
+import { ImageResponse } from "next/og";
+import path from "path";
 
-// Use nodejs runtime to allow Prisma access
 export const runtime = "nodejs";
 
-// Image metadata
 export const size = {
     width: 32,
     height: 32,
 };
+
 export const contentType = "image/png";
 
-// Image generation
+/**
+ * Dynamic app icon: prefer uploaded favicon from SystemConfig; fallback to letter mark.
+ */
 export default async function Icon() {
-    // Default config
-    let letter = "W";
-    let color = "#16a34a"; // green-600
-
     try {
-        // Fetch system config
-        // @ts-ignore
         const config = await prisma.systemConfig.findUnique({
-            where: { id: "default" }
+            where: { id: "default" },
         });
 
-        if (config?.appName) {
-            letter = config.appName.charAt(0).toUpperCase();
-        }
-    } catch (e) {
-        console.error("Failed to fetch favicon config", e);
-    }
+        const faviconUrl = config?.faviconUrl || "";
+        const pathOnly = faviconUrl.split("?")[0] || "";
 
-    return new ImageResponse(
-        (
-            // ImageResponse JSX element
-            <div
-                style={{
-                    fontSize: 20,
-                    fontWeight: 800,
-                    background: color,
-                    width: "100%",
-                    height: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "white",
-                    borderRadius: "20%", // Rounded square looks more app-like
-                    fontFamily: 'sans-serif'
-                }}
-            >
-                {letter}
-            </div>
-        ),
-        // ImageResponse options
-        {
-            ...size,
+        if (pathOnly.startsWith("/branding/")) {
+            const fileName = path.basename(pathOnly);
+            const filePath = resolveBrandingFile(fileName);
+            if (filePath) {
+                const buf = await readFile(filePath);
+                const ext = path.extname(fileName).toLowerCase();
+                const mime =
+                    ext === ".ico"
+                        ? "image/x-icon"
+                        : ext === ".jpg" || ext === ".jpeg"
+                          ? "image/jpeg"
+                          : ext === ".webp"
+                            ? "image/webp"
+                            : ext === ".svg"
+                              ? "image/svg+xml"
+                              : "image/png";
+
+                return new Response(buf, {
+                    headers: {
+                        "Content-Type": mime,
+                        "Cache-Control": "public, max-age=3600, must-revalidate",
+                    },
+                });
+            }
         }
-    );
+
+        const letter = (config?.appName || "W").charAt(0).toUpperCase();
+        return new ImageResponse(
+            (
+                <div
+                    style={{
+                        fontSize: 20,
+                        fontWeight: 800,
+                        background: "#16a34a",
+                        width: "100%",
+                        height: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "white",
+                        borderRadius: "20%",
+                        fontFamily: "sans-serif",
+                    }}
+                >
+                    {letter}
+                </div>
+            ),
+            { ...size }
+        );
+    } catch (e) {
+        console.error("Failed to build favicon", e);
+        return new ImageResponse(
+            (
+                <div
+                    style={{
+                        fontSize: 20,
+                        fontWeight: 800,
+                        background: "#16a34a",
+                        width: "100%",
+                        height: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "white",
+                        borderRadius: "20%",
+                    }}
+                >
+                    W
+                </div>
+            ),
+            { ...size }
+        );
+    }
 }

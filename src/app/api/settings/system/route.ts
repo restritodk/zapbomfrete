@@ -31,11 +31,32 @@ export async function POST(req: Request) {
         const body = await req.json();
         const { appName, logoUrl, faviconUrl, timezone, enableRegistration } = body;
 
+        // Ignore transient browser preview URLs
+        const safeLogo =
+            typeof logoUrl === "string" && !logoUrl.startsWith("blob:") ? logoUrl : undefined;
+        const safeFavicon =
+            typeof faviconUrl === "string" && !faviconUrl.startsWith("blob:") ? faviconUrl : undefined;
+
+        const updateData: Record<string, unknown> = {
+            appName,
+            timezone,
+            enableRegistration: enableRegistration ?? true,
+        };
+        if (safeLogo !== undefined) updateData.logoUrl = safeLogo;
+        if (safeFavicon !== undefined) updateData.faviconUrl = safeFavicon;
+
         // @ts-ignore
         const config = await prisma.systemConfig.upsert({
             where: { id: "default" },
-            update: { appName, logoUrl, faviconUrl, timezone, enableRegistration: enableRegistration ?? true },
-            create: { id: "default", appName, logoUrl: logoUrl || "", faviconUrl: faviconUrl || "/favicon.ico", timezone: timezone || "Asia/Jakarta", enableRegistration: enableRegistration ?? true }
+            update: updateData,
+            create: {
+                id: "default",
+                appName: appName || "WA-AKG",
+                logoUrl: safeLogo || "",
+                faviconUrl: safeFavicon || "/favicon.ico",
+                timezone: timezone || "America/Sao_Paulo",
+                enableRegistration: enableRegistration ?? true,
+            },
         });
 
         return NextResponse.json({ status: true, message: "System settings updated", data: config });
