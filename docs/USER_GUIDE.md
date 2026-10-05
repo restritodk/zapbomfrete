@@ -87,5 +87,5 @@ Check the **Settings** page to customize:
 
 ---
 <div align="center">
-  **Version**: 1.6.1 | **Support**: [GitHub Issues](https://github.com/mrifqidaffaaditya/WA-AKG/issues)
+  **Version**: 1.6.1 | **Support**: [GitHub Issues](https://github.com/restritodk/zapbomfrete/issues)
 </div>

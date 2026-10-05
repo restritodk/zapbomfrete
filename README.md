@@ -6,8 +6,8 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Prisma](https://img.shields.io/badge/Prisma-ORM-2D3748?style=for-the-badge&logo=prisma&logoColor=white)](https://www.prisma.io/)
-[![Version](https://img.shields.io/badge/Version-1.6.2-blue?style=for-the-badge)](https://github.com/mrifqidaffaaditya/WA-AKG/releases)
-[![Main Branch](https://img.shields.io/badge/Branch-Main-green?style=for-the-badge&logo=git)](https://github.com/mrifqidaffaaditya/WA-AKG)
+[![Version](https://img.shields.io/badge/Version-1.6.2-blue?style=for-the-badge)](https://github.com/restritodk/zapbomfrete/releases)
+[![Main Branch](https://img.shields.io/badge/Branch-Main-green?style=for-the-badge&logo=git)](https://github.com/restritodk/zapbomfrete)
 
 [![Active Apps](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi-wa-akg.aikeigroup.net%2Fapi%2Factive-apps&query=%24.activeCount&style=flat-square&color=25D366&logo=whatsapp&logoColor=white&label=)](https://api-wa-akg.aikeigroup.net/)
 
@@ -15,7 +15,7 @@
 Built with **Next.js 15**, **React**, and **Baileys** for high-performance messaging automation and real-time WhatsApp Bot Gateway services.
 
 > [!TIP]
-> **Looking for the latest features?** Check out the [beta branch](https://github.com/mrifqidaffaaditya/WA-AKG/tree/beta) or our [pre-releases](https://github.com/mrifqidaffaaditya/WA-AKG/releases) for experimental sources.
+> Repositório do projeto: [github.com/restritodk/zapbomfrete](https://github.com/restritodk/zapbomfrete)
 
 [Features](#-key-features) • [User Guide](docs/USER_GUIDE.md) • [API Documentation](docs/API_DOCUMENTATION.md) • [Database Setup](docs/DATABASE_SETUP.md) • [Installation](#-quick-installation)
 
@@ -114,8 +114,8 @@ WA-AKG natively supports **n8n**! You can build complex, no-code/low-code WhatsA
 ### 2. Setup
 ```bash
 # Clone and install
-git clone https://github.com/mrifqidaffaaditya/WA-AKG.git
-cd WA-AKG
+git clone https://github.com/restritodk/zapbomfrete.git
+cd zapbomfrete
 npm install
 
 # Configure environment
