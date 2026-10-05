@@ -3,6 +3,17 @@ import { prisma } from "@/lib/prisma";
 import { waManager } from "@/modules/whatsapp/manager";
 import { getAuthenticatedUser, canAccessSession } from "@/lib/api-auth";
 import { toWhatsAppJid } from "@/lib/phone-br";
+import {
+    computeInterRecipientDelayMs,
+    normalizeBroadcastDelayMs,
+    sleepMs,
+} from "@/lib/broadcast-delay";
+import {
+    CANCELLED_RECIPIENT_DETAIL,
+    clearBroadcastCancel,
+    registerBroadcastCancel,
+} from "@/lib/broadcast-cancel";
+import { runBroadcastSendLoop } from "@/lib/broadcast-runner";
 import type { AnyMessageContent } from "@whiskeysockets/baileys";
 import { z } from "zod";
 
@@ -63,7 +74,10 @@ async function parseBroadcastRequest(request: NextRequest): Promise<{
         const form = await request.formData();
         const message = String(form.get("message") || "");
         const delayRaw = form.get("delay");
-        const delay = delayRaw != null ? Number(delayRaw) : undefined;
+        const delay =
+            delayRaw != null && String(delayRaw).trim() !== ""
+                ? normalizeBroadcastDelayMs(delayRaw)
+                : undefined;
 
         let recipients: string[] = [];
         const recipientsRaw = form.get("recipients");
@@ -125,7 +139,10 @@ async function parseBroadcastRequest(request: NextRequest): Promise<{
     return {
         recipients: parsed.data.recipients,
         message: parsed.data.message || "",
-        delay: parsed.data.delay,
+        delay:
+            parsed.data.delay !== undefined
+                ? normalizeBroadcastDelayMs(parsed.data.delay)
+                : undefined,
         attachments: [],
     };
 }
@@ -160,7 +177,8 @@ export async function POST(
             );
         }
 
-        const { message, delay, attachments } = payload;
+        const { message, attachments } = payload;
+        const delay = normalizeBroadcastDelayMs(payload.delay);
         const text = (message || "").trim();
 
         if (!text && attachments.length === 0) {
@@ -260,7 +278,7 @@ export async function POST(
                 total: totalAll,
                 sent: 0,
                 failed: skipped.length,
-                delay: delay || 2000,
+                delay,
                 status: "running",
                 recipients: {
                     create: [
@@ -299,9 +317,9 @@ export async function POST(
             });
         }
 
-        // Process in background — keep attachment buffers in closure
-        // Send loop unchanged for resolved recipients only
+        // Process in background — sequential send; delay AFTER each recipient; cancel via AbortSignal
         (async () => {
+            const signal = registerBroadcastCancel(broadcastId, sessionId);
             let sent = 0;
             let failed = skipped.length;
             const errors: { jid: string; error: string }[] = skipped.map((s) => ({
@@ -309,109 +327,198 @@ export async function POST(
                 error: s.error,
             }));
 
-            for (let i = 0; i < recipients.length; i++) {
-                const jid = recipients[i];
-
-                if (io) {
-                    io.to(sessionId).emit("broadcast.progress", {
-                        broadcastId,
-                        status: "running",
-                        total: totalAll,
-                        sent,
-                        failed,
-                        current: jid,
-                        currentIndex: i,
-                        phase: "sending",
-                        progress: Math.round(((sent + failed) / totalAll) * 100),
-                        startedAt: startedAtIso,
-                    });
-                }
-
-                try {
-                    if (attachments.length > 0) {
-                        // First attachment carries the text as caption; rest follow
-                        for (let a = 0; a < attachments.length; a++) {
-                            const caption = a === 0 && text ? text : undefined;
-                            await instance.socket!.sendMessage(
-                                jid,
-                                buildMediaContent(attachments[a], caption)
+            try {
+                const loopResult = await runBroadcastSendLoop({
+                    recipients,
+                    delayMs: delay,
+                    signal,
+                    computeDelay: (base) => {
+                        const waitMs = computeInterRecipientDelayMs(base);
+                        if (process.env.NODE_ENV !== "production") {
+                            console.debug(
+                                `[broadcast-delay] base=${base}ms wait=${waitMs}ms`
                             );
-                            if (a < attachments.length - 1) {
-                                await new Promise((r) => setTimeout(r, 350));
-                            }
                         }
-                    } else {
-                        await instance.socket!.sendMessage(jid, { text } as AnyMessageContent);
-                    }
-                    sent++;
+                        return waitMs;
+                    },
+                    onBeforeSend: async (jid, i) => {
+                        if (io) {
+                            io.to(sessionId).emit("broadcast.progress", {
+                                broadcastId,
+                                status: "running",
+                                total: totalAll,
+                                sent,
+                                failed,
+                                current: jid,
+                                currentIndex: i,
+                                phase: "sending",
+                                progress: Math.round(((sent + failed) / totalAll) * 100),
+                                startedAt: startedAtIso,
+                            });
+                        }
+                    },
+                    sendOne: async (jid) => {
+                        try {
+                            if (attachments.length > 0) {
+                                for (let a = 0; a < attachments.length; a++) {
+                                    const caption = a === 0 && text ? text : undefined;
+                                    await instance.socket!.sendMessage(
+                                        jid,
+                                        buildMediaContent(attachments[a], caption)
+                                    );
+                                    if (a < attachments.length - 1) {
+                                        // Short gap between attachments of the SAME recipient — not cancelable
+                                        await sleepMs(350);
+                                    }
+                                }
+                            } else {
+                                await instance.socket!.sendMessage(jid, {
+                                    text,
+                                } as AnyMessageContent);
+                            }
 
-                    await prisma.broadcastRecipient.updateMany({
-                        where: { broadcastLogId: broadcastId, jid },
-                        data: { status: "sent", sentAt: new Date() },
-                    });
-                } catch (e: any) {
-                    failed++;
-                    errors.push({ jid, error: e.message || "Unknown error" });
-                    console.error(`Failed to send broadcast to ${jid}`, e);
+                            await prisma.broadcastRecipient.updateMany({
+                                where: { broadcastLogId: broadcastId, jid },
+                                data: { status: "sent", sentAt: new Date() },
+                            });
+                            return "sent";
+                        } catch (e: unknown) {
+                            const errMsg =
+                                e instanceof Error ? e.message : "Unknown error";
+                            errors.push({ jid, error: errMsg });
+                            console.error(`Failed to send broadcast to ${jid}`, e);
 
-                    await prisma.broadcastRecipient.updateMany({
-                        where: { broadcastLogId: broadcastId, jid },
-                        data: { status: "failed", error: e.message || "Unknown error" },
-                    });
-                }
+                            await prisma.broadcastRecipient.updateMany({
+                                where: { broadcastLogId: broadcastId, jid },
+                                data: { status: "failed", error: errMsg },
+                            });
+                            return "failed";
+                        }
+                    },
+                    onAfterSend: async (jid, i, result) => {
+                        if (result === "sent") sent++;
+                        else failed++;
 
-                const progress = Math.round(((sent + failed) / totalAll) * 100);
+                        const progress = Math.round(((sent + failed) / totalAll) * 100);
 
-                await prisma.broadcastLog.update({
-                    where: { id: broadcastId },
-                    data: { sent, failed },
+                        await prisma.broadcastLog.update({
+                            where: { id: broadcastId },
+                            data: { sent, failed },
+                        });
+
+                        if (io) {
+                            io.to(sessionId).emit("broadcast.progress", {
+                                broadcastId,
+                                status: "running",
+                                total: totalAll,
+                                sent,
+                                failed,
+                                current: jid,
+                                currentIndex: i,
+                                phase: "processed",
+                                progress,
+                                startedAt: startedAtIso,
+                            });
+                        }
+                    },
                 });
 
-                if (io) {
-                    io.to(sessionId).emit("broadcast.progress", {
+                // Align counters with loop (skipped failures already in `failed`)
+                sent = loopResult.sent;
+                failed = skipped.length + loopResult.failed;
+
+                const finishedAt = new Date();
+
+                if (loopResult.status === "cancelled") {
+                    if (loopResult.cancelledJids.length > 0) {
+                        await prisma.broadcastRecipient.updateMany({
+                            where: {
+                                broadcastLogId: broadcastId,
+                                status: "pending",
+                                jid: { in: loopResult.cancelledJids },
+                            },
+                            data: {
+                                status: "cancelled",
+                                error: CANCELLED_RECIPIENT_DETAIL,
+                                sentAt: finishedAt,
+                            },
+                        });
+                    }
+                    // Any leftover pending (safety net)
+                    await prisma.broadcastRecipient.updateMany({
+                        where: { broadcastLogId: broadcastId, status: "pending" },
+                        data: {
+                            status: "cancelled",
+                            error: CANCELLED_RECIPIENT_DETAIL,
+                            sentAt: finishedAt,
+                        },
+                    });
+
+                    await prisma.broadcastLog.update({
+                        where: { id: broadcastId },
+                        data: {
+                            status: "cancelled",
+                            sent,
+                            failed,
+                            completedAt: finishedAt,
+                        },
+                    });
+
+                    const cancelledCount = loopResult.cancelled;
+                    const payload = {
                         broadcastId,
-                        status: "running",
+                        status: "cancelled" as const,
                         total: totalAll,
                         sent,
                         failed,
-                        current: jid,
-                        currentIndex: i,
-                        phase: "processed",
-                        progress,
+                        cancelled: cancelledCount,
+                        errors,
+                        progress: Math.round(((sent + failed) / totalAll) * 100),
+                        phase: "done" as const,
                         startedAt: startedAtIso,
+                        completedAt: finishedAt.toISOString(),
+                    };
+
+                    if (io) {
+                        io.to(sessionId).emit("broadcast.progress", payload);
+                        io.to(sessionId).emit("broadcast.cancelled", payload);
+                    }
+                    console.log(
+                        `Broadcast ${broadcastId} cancelled: ${sent} sent, ${failed} failed, ${cancelledCount} cancelled out of ${totalAll}`
+                    );
+                } else {
+                    await prisma.broadcastLog.update({
+                        where: { id: broadcastId },
+                        data: {
+                            status: "completed",
+                            sent,
+                            failed,
+                            completedAt: finishedAt,
+                        },
                     });
+
+                    if (io) {
+                        io.to(sessionId).emit("broadcast.progress", {
+                            broadcastId,
+                            status: "completed",
+                            total: totalAll,
+                            sent,
+                            failed,
+                            cancelled: 0,
+                            errors,
+                            progress: 100,
+                            phase: "done",
+                            startedAt: startedAtIso,
+                            completedAt: finishedAt.toISOString(),
+                        });
+                    }
+                    console.log(
+                        `Broadcast ${broadcastId} completed: ${sent} sent, ${failed} failed out of ${totalAll}`
+                    );
                 }
-
-                if (i < recipients.length - 1) {
-                    const baseDelay = delay || 2000;
-                    const randomDelay = baseDelay + Math.floor(Math.random() * (baseDelay * 0.5));
-                    await new Promise((r) => setTimeout(r, randomDelay));
-                }
+            } finally {
+                clearBroadcastCancel(broadcastId);
             }
-
-            const completedAt = new Date();
-            await prisma.broadcastLog.update({
-                where: { id: broadcastId },
-                data: { status: "completed", sent, failed, completedAt },
-            });
-
-            if (io) {
-                io.to(sessionId).emit("broadcast.progress", {
-                    broadcastId,
-                    status: "completed",
-                    total: totalAll,
-                    sent,
-                    failed,
-                    errors,
-                    progress: 100,
-                    phase: "done",
-                    startedAt: startedAtIso,
-                    completedAt: completedAt.toISOString(),
-                });
-            }
-            console.log(
-                `Broadcast ${broadcastId} completed: ${sent} sent, ${failed} failed out of ${totalAll}`
-            );
         })();
 
         return NextResponse.json({
@@ -426,7 +533,7 @@ export async function POST(
                 skipped,
                 attachments: attachments.length,
                 startedAt: startedAtIso,
-                delay: delay || 2000,
+                delay,
             },
         });
     } catch (e) {

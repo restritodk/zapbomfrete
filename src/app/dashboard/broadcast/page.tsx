@@ -31,6 +31,7 @@ import {
     FileText,
     X,
     Paperclip,
+    Ban,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/components/dashboard/session-provider";
@@ -49,10 +50,11 @@ import {
 
 interface BroadcastProgress {
     broadcastId: string;
-    status: "running" | "completed";
+    status: "running" | "completed" | "cancelled";
     total: number;
     sent: number;
     failed: number;
+    cancelled?: number;
     current?: string | null;
     currentIndex?: number;
     phase?: "queued" | "sending" | "processed" | "done";
@@ -152,6 +154,7 @@ export default function BroadcastPage() {
     const [broadcastDelayMs, setBroadcastDelayMs] = useState(2000);
     const [systemTimezone, setSystemTimezone] = useState("America/Sao_Paulo");
     const [activeTab, setActiveTab] = useState<"new" | "history">("new");
+    const [cancellingBroadcast, setCancellingBroadcast] = useState(false);
     const lastProcessedJidRef = useRef<string | null>(null);
     const activeBroadcastIdRef = useRef<string | null>(null);
     const processableJidsRef = useRef<string[]>([]);
@@ -393,6 +396,7 @@ export default function BroadcastPage() {
 
             if (data.status === "completed") {
                 setLoading(false);
+                setCancellingBroadcast(false);
                 setBroadcastCompletedAt(data.completedAt || new Date().toISOString());
                 setProgressModalOpen(true);
                 countersRef.current = { sent: data.sent, failed: data.failed };
@@ -411,6 +415,7 @@ export default function BroadcastPage() {
                         }
                         if (row.status === "failed") return row;
                         if (row.status === "sent") return row;
+                        if (row.status === "cancelled") return row;
                         return {
                             ...row,
                             status: "sent",
@@ -429,9 +434,37 @@ export default function BroadcastPage() {
                     );
                 }
             }
+
+            if (data.status === "cancelled") {
+                setLoading(false);
+                setCancellingBroadcast(false);
+                setBroadcastCompletedAt(data.completedAt || new Date().toISOString());
+                setProgressModalOpen(true);
+                countersRef.current = { sent: data.sent, failed: data.failed };
+
+                const finishedAt = data.completedAt || new Date().toISOString();
+                setRecipientRows((prev) =>
+                    prev.map((row) => {
+                        if (row.status === "sent" || row.status === "failed") return row;
+                        if (row.status === "cancelled") return row;
+                        return {
+                            ...row,
+                            status: "cancelled" as const,
+                            at: finishedAt,
+                            detail: "Não enviado — disparo cancelado",
+                        };
+                    })
+                );
+
+                void fetchHistory();
+                toast.message(
+                    `Disparo cancelado. ${data.sent} enviado(s), ${data.cancelled ?? 0} cancelado(s).`
+                );
+            }
         };
 
         socket.on("broadcast.progress", handler);
+        // broadcast.cancelled is also emitted by the server; progress.status === "cancelled" is the UI source of truth
         return () => {
             socket.off("connect", onConnect);
             socket.off("broadcast.progress", handler);
@@ -637,6 +670,7 @@ export default function BroadcastPage() {
         }));
 
         setLoading(true);
+        setCancellingBroadcast(false);
         setBroadcastProgress(null);
         setActiveBroadcastId(null);
         activeBroadcastIdRef.current = null;
@@ -778,9 +812,39 @@ export default function BroadcastPage() {
         if (status === "sent") return "enviado";
         if (status === "failed") return "falhou";
         if (status === "pending") return "pendente";
+        if (status === "cancelled") return "cancelado";
         if (status === "running") return "em andamento";
         if (status === "completed") return "concluído";
         return status;
+    };
+
+    const handleCancelBroadcast = async () => {
+        if (!sessionId || !activeBroadcastIdRef.current || cancellingBroadcast) return;
+        setCancellingBroadcast(true);
+        try {
+            const res = await fetch(
+                `/api/messages/${sessionId}/broadcast/${activeBroadcastIdRef.current}/cancel`,
+                { method: "POST" }
+            );
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 409) {
+                setCancellingBroadcast(false);
+                toast.message(data?.message || "Disparo já concluído");
+                return;
+            }
+            if (!res.ok) {
+                setCancellingBroadcast(false);
+                toast.error(data?.message || "Não foi possível cancelar o disparo");
+                return;
+            }
+            // Keep "Cancelando..." until Socket.IO confirms status === cancelled
+            if (data?.data?.alreadyCancelled) {
+                setCancellingBroadcast(false);
+            }
+        } catch {
+            setCancellingBroadcast(false);
+            toast.error("Erro ao solicitar cancelamento");
+        }
     };
 
     const tabs = [
@@ -1026,7 +1090,8 @@ export default function BroadcastPage() {
                                                 disabled={loading}
                                             />
                                             <p className="text-xs text-muted-foreground">
-                                                Intervalo entre mensagens (+ aleatório) para reduzir risco de banimento.
+                                                Intervalo mínimo entre destinatários no servidor. Um acréscimo aleatório
+                                                (até +50%) pode ser aplicado, nunca reduzindo o valor configurado.
                                             </p>
                                         </div>
 
@@ -1060,13 +1125,19 @@ export default function BroadcastPage() {
                             open={progressModalOpen}
                             onOpenChange={setProgressModalOpen}
                             phase={
-                                broadcastProgress?.status === "completed" ? "completed" : "running"
+                                broadcastProgress?.status === "cancelled"
+                                    ? "cancelled"
+                                    : broadcastProgress?.status === "completed"
+                                      ? "completed"
+                                      : "running"
                             }
                             recipients={recipientRows}
                             startedAt={broadcastStartedAt}
                             completedAt={broadcastCompletedAt}
                             delayMs={broadcastDelayMs}
                             timezone={systemTimezone}
+                            cancelling={cancellingBroadcast}
+                            onCancelBroadcast={handleCancelBroadcast}
                             onViewHistory={() => {
                                 void handleViewBroadcastHistory();
                             }}
@@ -1100,7 +1171,9 @@ export default function BroadcastPage() {
                                             className="flex items-center gap-4 p-3 rounded-lg border hover:bg-muted/30 transition-colors"
                                         >
                                             <div className="shrink-0">
-                                                {log.status === "completed" ? (
+                                                {log.status === "cancelled" ? (
+                                                    <Ban className="h-8 w-8 text-amber-600" />
+                                                ) : log.status === "completed" ? (
                                                     log.failed === 0 ? (
                                                         <CheckCircle2 className="h-8 w-8 text-green-500" />
                                                     ) : (
@@ -1141,7 +1214,9 @@ export default function BroadcastPage() {
                     <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
                         <DialogHeader>
                             <DialogTitle className="flex items-center gap-2">
-                                {selectedLog?.status === "completed" ? (
+                                {selectedLog?.status === "cancelled" ? (
+                                    <Ban className="h-5 w-5 text-amber-600" />
+                                ) : selectedLog?.status === "completed" ? (
                                     <CheckCircle2 className="h-5 w-5 text-green-500" />
                                 ) : (
                                     <Radio className="h-5 w-5 text-blue-500 animate-pulse" />
@@ -1195,7 +1270,9 @@ export default function BroadcastPage() {
                                                             ? "bg-green-500/5"
                                                             : r.status === "failed"
                                                               ? "bg-red-500/5"
-                                                              : "bg-muted/30"
+                                                              : r.status === "cancelled"
+                                                                ? "bg-amber-500/5"
+                                                                : "bg-muted/30"
                                                     }`}
                                                 >
                                                     <span className="font-mono truncate">{formatJid(r.jid)}</span>
@@ -1206,13 +1283,22 @@ export default function BroadcastPage() {
                                                                     ? "text-green-600 bg-green-500/10"
                                                                     : r.status === "failed"
                                                                       ? "text-red-500 bg-red-500/10"
-                                                                      : "text-muted-foreground bg-muted/50"
+                                                                      : r.status === "cancelled"
+                                                                        ? "text-amber-700 bg-amber-500/10"
+                                                                        : "text-muted-foreground bg-muted/50"
                                                             }`}
                                                         >
                                                             {statusLabel(r.status)}
                                                         </span>
                                                         {r.error && (
-                                                            <span className="text-red-500 max-w-[200px] truncate" title={r.error}>
+                                                            <span
+                                                                className={`max-w-[200px] truncate ${
+                                                                    r.status === "cancelled"
+                                                                        ? "text-amber-700"
+                                                                        : "text-red-500"
+                                                                }`}
+                                                                title={r.error}
+                                                            >
                                                                 {r.error}
                                                             </span>
                                                         )}

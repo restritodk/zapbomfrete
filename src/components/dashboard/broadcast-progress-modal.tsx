@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
     Send,
     CheckCircle2,
@@ -12,6 +12,7 @@ import {
     List,
     Download,
     AlertCircle,
+    Ban,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,9 +21,19 @@ import {
     DialogDescription,
     DialogTitle,
 } from "@/components/ui/dialog";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 
-export type RecipientRowStatus = "waiting" | "sending" | "sent" | "failed";
+export type RecipientRowStatus = "waiting" | "sending" | "sent" | "failed" | "cancelled";
 
 export interface BroadcastRecipientRow {
     id: string;
@@ -36,13 +47,16 @@ export interface BroadcastRecipientRow {
 export interface BroadcastProgressModalProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    phase: "running" | "completed";
+    phase: "running" | "completed" | "cancelled";
     recipients: BroadcastRecipientRow[];
     startedAt: string | null;
     completedAt: string | null;
     delayMs: number;
     timezone?: string;
     onViewHistory?: () => void;
+    /** Backend cancel — must await real confirmation via socket, not close the modal alone. */
+    onCancelBroadcast?: () => Promise<void>;
+    cancelling?: boolean;
 }
 
 function formatDateTime(value: string | null | undefined, timeZone: string): string {
@@ -80,6 +94,7 @@ function exportCsv(rows: BroadcastRecipientRow[], timeZone: string) {
         sending: "Enviando",
         sent: "Enviado",
         failed: "Nao enviado",
+        cancelled: "Cancelado",
     };
     const lines = [
         header.join(","),
@@ -114,21 +129,26 @@ export function BroadcastProgressModal({
     delayMs,
     timezone = "America/Sao_Paulo",
     onViewHistory,
+    onCancelBroadcast,
+    cancelling = false,
 }: BroadcastProgressModalProps) {
     const titleId = useId();
     const descId = useId();
     const closeRef = useRef<HTMLButtonElement>(null);
     const isRunning = phase === "running";
+    const isCancelled = phase === "cancelled";
+    const [confirmOpen, setConfirmOpen] = useState(false);
 
     const counts = useMemo(() => {
         const sent = recipients.filter((r) => r.status === "sent").length;
         const failed = recipients.filter((r) => r.status === "failed").length;
         const sending = recipients.filter((r) => r.status === "sending").length;
         const waiting = recipients.filter((r) => r.status === "waiting").length;
+        const cancelled = recipients.filter((r) => r.status === "cancelled").length;
         const total = recipients.length;
-        const processed = sent + failed;
+        const processed = sent + failed + cancelled;
         const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
-        return { sent, failed, sending, waiting, total, processed, pct };
+        return { sent, failed, sending, waiting, cancelled, total, processed, pct };
     }, [recipients]);
 
     useEffect(() => {
@@ -138,9 +158,12 @@ export function BroadcastProgressModal({
         }
     }, [open, phase]);
 
+    useEffect(() => {
+        if (!isRunning) setConfirmOpen(false);
+    }, [isRunning]);
+
     const handleOpenChange = (next: boolean) => {
         if (!next && isRunning) {
-            // Never abort the broadcast — keep modal open while running
             return;
         }
         onOpenChange(next);
@@ -148,306 +171,402 @@ export function BroadcastProgressModal({
 
     const delayLabel = `${(delayMs / 1000).toFixed(1)}s`;
 
-    return (
-        <Dialog open={open} onOpenChange={handleOpenChange}>
-            <DialogContent
-                showCloseButton={false}
-                aria-labelledby={titleId}
-                aria-describedby={descId}
-                className={cn(
-                    "flex max-h-[min(92vh,880px)] w-[min(960px,calc(100%-1.5rem))] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border-0 bg-white p-0 shadow-2xl sm:max-w-none",
-                    "data-[state=open]:zoom-in-100"
-                )}
-                onEscapeKeyDown={(e) => {
-                    if (isRunning) e.preventDefault();
-                }}
-                onPointerDownOutside={(e) => {
-                    if (isRunning) e.preventDefault();
-                }}
-                onInteractOutside={(e) => {
-                    if (isRunning) e.preventDefault();
-                }}
-            >
-                {/* Header */}
-                <div className="flex items-start gap-3 border-b border-slate-100 px-5 py-4 sm:px-6 sm:py-5">
-                    <div
-                        className={cn(
-                            "mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full",
-                            isRunning ? "bg-blue-50 text-blue-600" : "bg-emerald-50 text-emerald-600"
-                        )}
-                        aria-hidden
-                    >
-                        {isRunning ? (
-                            <Send className="h-5 w-5" />
-                        ) : (
-                            <CheckCircle2 className="h-5 w-5" />
-                        )}
-                    </div>
-                    <div className="min-w-0 flex-1 pr-8">
-                        <DialogTitle
-                            id={titleId}
-                            className="text-lg font-semibold tracking-tight text-slate-900 sm:text-xl"
-                        >
-                            {isRunning ? "Disparo em andamento" : "Disparo concluído"}
-                        </DialogTitle>
-                        <DialogDescription id={descId} className="mt-1 text-sm text-slate-500">
-                            {isRunning
-                                ? "Enviando mensagens para os destinatários. Aguarde a conclusão."
-                                : "O processo de envio foi finalizado. Veja o resumo e os detalhes abaixo."}
-                        </DialogDescription>
-                    </div>
-                    <button
-                        ref={closeRef}
-                        type="button"
-                        onClick={() => {
-                            if (isRunning) return;
-                            onOpenChange(false);
-                        }}
-                        disabled={isRunning}
-                        className={cn(
-                            "absolute top-4 right-4 rounded-md p-1.5 text-slate-400 transition-colors",
-                            isRunning
-                                ? "cursor-not-allowed opacity-40"
-                                : "hover:bg-slate-100 hover:text-slate-700"
-                        )}
-                        aria-label={
-                            isRunning
-                                ? "Não é possível fechar enquanto o disparo está em andamento"
-                                : "Fechar"
-                        }
-                        title={
-                            isRunning
-                                ? "O disparo continua em andamento — feche após a conclusão"
-                                : "Fechar"
-                        }
-                    >
-                        <X className="h-4 w-4" />
-                    </button>
-                </div>
+    const handleConfirmCancel = async () => {
+        if (!onCancelBroadcast || cancelling) return;
+        setConfirmOpen(false);
+        await onCancelBroadcast();
+    };
 
-                {/* Body */}
-                <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4 sm:gap-5 sm:px-6 sm:py-5">
-                    {isRunning ? (
-                        <>
-                            <div className="space-y-2">
-                                <div className="flex items-end justify-between gap-3">
-                                    <p className="text-sm font-semibold text-slate-800">
-                                        <span className="tabular-nums">{counts.processed}</span>
-                                        {" de "}
-                                        <span className="tabular-nums">{counts.total}</span>
-                                        {" destinatários processados"}
-                                    </p>
-                                    <span className="text-sm font-semibold tabular-nums text-slate-700">
-                                        {counts.pct}%
-                                    </span>
-                                </div>
-                                <div
-                                    className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100"
-                                    role="progressbar"
-                                    aria-valuemin={0}
-                                    aria-valuemax={100}
-                                    aria-valuenow={counts.pct}
-                                    aria-label="Progresso do disparo"
-                                >
+    return (
+        <>
+            <Dialog open={open} onOpenChange={handleOpenChange}>
+                <DialogContent
+                    showCloseButton={false}
+                    aria-labelledby={titleId}
+                    aria-describedby={descId}
+                    className={cn(
+                        "flex max-h-[min(92vh,880px)] w-[min(960px,calc(100%-1.5rem))] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border-0 bg-white p-0 shadow-2xl sm:max-w-none",
+                        "data-[state=open]:zoom-in-100"
+                    )}
+                    onEscapeKeyDown={(e) => {
+                        if (isRunning) e.preventDefault();
+                    }}
+                    onPointerDownOutside={(e) => {
+                        if (isRunning) e.preventDefault();
+                    }}
+                    onInteractOutside={(e) => {
+                        if (isRunning) e.preventDefault();
+                    }}
+                >
+                    {/* Header */}
+                    <div className="flex items-start gap-3 border-b border-slate-100 px-5 py-4 sm:px-6 sm:py-5">
+                        <div
+                            className={cn(
+                                "mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full",
+                                isRunning
+                                    ? "bg-blue-50 text-blue-600"
+                                    : isCancelled
+                                      ? "bg-amber-50 text-amber-600"
+                                      : "bg-emerald-50 text-emerald-600"
+                            )}
+                            aria-hidden
+                        >
+                            {isRunning ? (
+                                <Send className="h-5 w-5" />
+                            ) : isCancelled ? (
+                                <Ban className="h-5 w-5" />
+                            ) : (
+                                <CheckCircle2 className="h-5 w-5" />
+                            )}
+                        </div>
+                        <div className="min-w-0 flex-1 pr-8">
+                            <DialogTitle
+                                id={titleId}
+                                className="text-lg font-semibold tracking-tight text-slate-900 sm:text-xl"
+                            >
+                                {isRunning
+                                    ? "Disparo em andamento"
+                                    : isCancelled
+                                      ? "Disparo cancelado"
+                                      : "Disparo concluído"}
+                            </DialogTitle>
+                            <DialogDescription
+                                id={descId}
+                                className="mt-1 text-sm text-slate-500"
+                            >
+                                {isRunning
+                                    ? "Enviando mensagens para os destinatários. Aguarde a conclusão."
+                                    : isCancelled
+                                      ? "O envio foi interrompido. As mensagens já processadas permaneceram enviadas."
+                                      : "O processo de envio foi finalizado. Veja o resumo e os detalhes abaixo."}
+                            </DialogDescription>
+                        </div>
+                        <button
+                            ref={closeRef}
+                            type="button"
+                            onClick={() => {
+                                if (isRunning) return;
+                                onOpenChange(false);
+                            }}
+                            disabled={isRunning}
+                            className={cn(
+                                "absolute top-4 right-4 rounded-md p-1.5 text-slate-400 transition-colors",
+                                isRunning
+                                    ? "cursor-not-allowed opacity-40"
+                                    : "hover:bg-slate-100 hover:text-slate-700"
+                            )}
+                            aria-label={
+                                isRunning
+                                    ? "Não é possível fechar enquanto o disparo está em andamento"
+                                    : "Fechar"
+                            }
+                            title={
+                                isRunning
+                                    ? "O disparo continua em andamento — feche após a conclusão"
+                                    : "Fechar"
+                            }
+                        >
+                            <X className="h-4 w-4" />
+                        </button>
+                    </div>
+
+                    {/* Body */}
+                    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4 sm:gap-5 sm:px-6 sm:py-5">
+                        {isRunning ? (
+                            <>
+                                <div className="space-y-2">
+                                    <div className="flex items-end justify-between gap-3">
+                                        <p className="text-sm font-semibold text-slate-800">
+                                            <span className="tabular-nums">
+                                                {counts.processed}
+                                            </span>
+                                            {" de "}
+                                            <span className="tabular-nums">{counts.total}</span>
+                                            {" destinatários processados"}
+                                        </p>
+                                        <span className="text-sm font-semibold tabular-nums text-slate-700">
+                                            {counts.pct}%
+                                        </span>
+                                    </div>
                                     <div
-                                        className="h-full rounded-full bg-blue-500 transition-[width] duration-300 ease-out"
-                                        style={{ width: `${counts.pct}%` }}
+                                        className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100"
+                                        role="progressbar"
+                                        aria-valuemin={0}
+                                        aria-valuemax={100}
+                                        aria-valuenow={counts.pct}
+                                        aria-label="Progresso do disparo"
+                                    >
+                                        <div
+                                            className="h-full rounded-full bg-blue-500 transition-[width] duration-300 ease-out"
+                                            style={{ width: `${counts.pct}%` }}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
+                                    <StatusCard
+                                        tone="green"
+                                        icon={<Send className="h-4 w-4" />}
+                                        value={counts.sent}
+                                        label="Enviados"
+                                    />
+                                    <StatusCard
+                                        tone="blue"
+                                        icon={<Loader2 className="h-4 w-4 animate-spin" />}
+                                        value={counts.sending}
+                                        label="Enviando..."
+                                    />
+                                    <StatusCard
+                                        tone="gray"
+                                        icon={<Hourglass className="h-4 w-4" />}
+                                        value={counts.waiting}
+                                        label="Aguardando"
+                                    />
+                                    <StatusCard
+                                        tone="red"
+                                        icon={<XCircle className="h-4 w-4" />}
+                                        value={counts.failed}
+                                        label="Falhas"
                                     />
                                 </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
+                            </>
+                        ) : (
+                            <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4 lg:gap-3">
                                 <StatusCard
                                     tone="green"
                                     icon={<Send className="h-4 w-4" />}
                                     value={counts.sent}
                                     label="Enviados"
-                                />
-                                <StatusCard
-                                    tone="blue"
-                                    icon={<Loader2 className="h-4 w-4 animate-spin" />}
-                                    value={counts.sending}
-                                    label="Enviando..."
-                                />
-                                <StatusCard
-                                    tone="gray"
-                                    icon={<Hourglass className="h-4 w-4" />}
-                                    value={counts.waiting}
-                                    label="Aguardando"
+                                    percent={
+                                        counts.total
+                                            ? Math.round((counts.sent / counts.total) * 100)
+                                            : 0
+                                    }
                                 />
                                 <StatusCard
                                     tone="red"
                                     icon={<XCircle className="h-4 w-4" />}
                                     value={counts.failed}
                                     label="Falhas"
+                                    percent={
+                                        counts.total
+                                            ? Math.round((counts.failed / counts.total) * 100)
+                                            : 0
+                                    }
                                 />
-                            </div>
-                        </>
-                    ) : (
-                        <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4 lg:gap-3">
-                            <StatusCard
-                                tone="green"
-                                icon={<Send className="h-4 w-4" />}
-                                value={counts.sent}
-                                label="Enviados"
-                                percent={
-                                    counts.total
-                                        ? Math.round((counts.sent / counts.total) * 100)
-                                        : 0
-                                }
-                            />
-                            <StatusCard
-                                tone="red"
-                                icon={<XCircle className="h-4 w-4" />}
-                                value={counts.failed}
-                                label="Falhas"
-                                percent={
-                                    counts.total
-                                        ? Math.round((counts.failed / counts.total) * 100)
-                                        : 0
-                                }
-                            />
-                            <StatusCard
-                                tone="gray"
-                                icon={<Hourglass className="h-4 w-4" />}
-                                value={counts.waiting + counts.sending}
-                                label="Pendentes"
-                                percent={
-                                    counts.total
-                                        ? Math.round(
-                                              ((counts.waiting + counts.sending) / counts.total) *
-                                                  100
-                                          )
-                                        : 0
-                                }
-                            />
-                            <div className="col-span-2 flex flex-col justify-between rounded-xl border border-blue-100 bg-blue-50/70 px-3.5 py-3 sm:col-span-1 lg:col-span-1">
-                                <div className="flex items-center gap-2 text-blue-600">
-                                    <Clock className="h-4 w-4" />
-                                    <span className="text-xs font-medium">Duração total</span>
-                                </div>
-                                <p className="mt-2 text-2xl font-bold tabular-nums tracking-tight text-slate-900">
-                                    {formatDuration(startedAt, completedAt)}
-                                </p>
-                                <div className="mt-2 space-y-0.5 text-[11px] leading-relaxed text-slate-500">
-                                    <p>Início: {formatDateTime(startedAt, timezone)}</p>
-                                    <p>Término: {formatDateTime(completedAt, timezone)}</p>
-                                    <p>
-                                        Total:{" "}
-                                        <span className="font-semibold text-slate-700">
-                                            {counts.total} destinatários
+                                {isCancelled ? (
+                                    <StatusCard
+                                        tone="amber"
+                                        icon={<Ban className="h-4 w-4" />}
+                                        value={counts.cancelled}
+                                        label="Cancelados"
+                                        percent={
+                                            counts.total
+                                                ? Math.round(
+                                                      (counts.cancelled / counts.total) * 100
+                                                  )
+                                                : 0
+                                        }
+                                    />
+                                ) : (
+                                    <StatusCard
+                                        tone="gray"
+                                        icon={<Hourglass className="h-4 w-4" />}
+                                        value={counts.waiting + counts.sending}
+                                        label="Pendentes"
+                                        percent={
+                                            counts.total
+                                                ? Math.round(
+                                                      ((counts.waiting + counts.sending) /
+                                                          counts.total) *
+                                                          100
+                                                  )
+                                                : 0
+                                        }
+                                    />
+                                )}
+                                <div className="col-span-2 flex flex-col justify-between rounded-xl border border-blue-100 bg-blue-50/70 px-3.5 py-3 sm:col-span-1 lg:col-span-1">
+                                    <div className="flex items-center gap-2 text-blue-600">
+                                        <Clock className="h-4 w-4" />
+                                        <span className="text-xs font-medium">
+                                            {isCancelled ? "Total" : "Duração total"}
                                         </span>
-                                    </p>
+                                    </div>
+                                    {isCancelled ? (
+                                        <>
+                                            <p className="mt-2 text-2xl font-bold tabular-nums tracking-tight text-slate-900">
+                                                {counts.total}
+                                            </p>
+                                            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                                                destinatários no disparo
+                                            </p>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <p className="mt-2 text-2xl font-bold tabular-nums tracking-tight text-slate-900">
+                                                {formatDuration(startedAt, completedAt)}
+                                            </p>
+                                            <div className="mt-2 space-y-0.5 text-[11px] leading-relaxed text-slate-500">
+                                                <p>Início: {formatDateTime(startedAt, timezone)}</p>
+                                                <p>
+                                                    Término:{" "}
+                                                    {formatDateTime(completedAt, timezone)}
+                                                </p>
+                                                <p>
+                                                    Total:{" "}
+                                                    <span className="font-semibold text-slate-700">
+                                                        {counts.total} destinatários
+                                                    </span>
+                                                </p>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
-                        </div>
-                    )}
+                        )}
 
-                    {/* Table */}
-                    <div className="overflow-hidden rounded-xl border border-slate-200">
-                        <div className="max-h-[min(42vh,360px)] overflow-auto">
-                            <table className="w-full min-w-[640px] border-collapse text-sm">
-                                <thead className="sticky top-0 z-10 bg-slate-50/95 backdrop-blur">
-                                    <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                        <th className="px-3 py-2.5 w-10">#</th>
-                                        <th className="px-3 py-2.5">Destinatário</th>
-                                        <th className="px-3 py-2.5">Status</th>
-                                        <th className="px-3 py-2.5">Data / Hora</th>
-                                        <th className="px-3 py-2.5">Detalhes</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {recipients.map((row, index) => (
-                                        <RecipientTableRow
-                                            key={row.id}
-                                            index={index + 1}
-                                            row={row}
-                                            timeZone={timezone}
-                                        />
-                                    ))}
-                                    {recipients.length === 0 && (
-                                        <tr>
-                                            <td
-                                                colSpan={5}
-                                                className="px-3 py-8 text-center text-sm text-slate-400"
-                                            >
-                                                Aguardando destinatários…
-                                            </td>
+                        {/* Table */}
+                        <div className="overflow-hidden rounded-xl border border-slate-200">
+                            <div className="max-h-[min(42vh,360px)] overflow-auto">
+                                <table className="w-full min-w-[640px] border-collapse text-sm">
+                                    <thead className="sticky top-0 z-10 bg-slate-50/95 backdrop-blur">
+                                        <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                            <th className="px-3 py-2.5 w-10">#</th>
+                                            <th className="px-3 py-2.5">Destinatário</th>
+                                            <th className="px-3 py-2.5">Status</th>
+                                            <th className="px-3 py-2.5">Data / Hora</th>
+                                            <th className="px-3 py-2.5">Detalhes</th>
                                         </tr>
-                                    )}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                        {recipients.map((row, index) => (
+                                            <RecipientTableRow
+                                                key={row.id}
+                                                index={index + 1}
+                                                row={row}
+                                                timeZone={timezone}
+                                            />
+                                        ))}
+                                        {recipients.length === 0 && (
+                                            <tr>
+                                                <td
+                                                    colSpan={5}
+                                                    className="px-3 py-8 text-center text-sm text-slate-400"
+                                                >
+                                                    Aguardando destinatários…
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
+
+                        {isRunning && (
+                            <p className="flex items-start gap-2 text-xs text-slate-500 sm:hidden">
+                                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                O disparo continua mesmo se você sair desta tela. Não inicie outro
+                                envio até concluir.
+                            </p>
+                        )}
                     </div>
 
-                    {isRunning && (
-                        <p className="flex items-start gap-2 text-xs text-slate-500 sm:hidden">
-                            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                            O disparo continua mesmo se você sair desta tela. Não inicie outro envio
-                            até concluir.
-                        </p>
-                    )}
-                </div>
+                    {/* Footer */}
+                    <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/60 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                        {isRunning ? (
+                            <>
+                                <p className="flex items-center gap-2 text-xs text-slate-500 sm:text-sm">
+                                    <Clock className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                    <span>
+                                        Início: {formatDateTime(startedAt, timezone)}
+                                        <span className="mx-1.5 text-slate-300">|</span>
+                                        Intervalo: {delayLabel} mínimo entre mensagens
+                                        <span className="text-slate-400">
+                                            {" "}
+                                            (+ até 50% aleatório)
+                                        </span>
+                                    </span>
+                                </p>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={cancelling || !onCancelBroadcast}
+                                    onClick={() => setConfirmOpen(true)}
+                                    className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
+                                >
+                                    {cancelling ? (
+                                        <>
+                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                            Cancelando...
+                                        </>
+                                    ) : (
+                                        "Cancelar disparo"
+                                    )}
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                <div className="flex flex-wrap gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() => onOpenChange(false)}
+                                        className="gap-1.5"
+                                    >
+                                        <X className="h-4 w-4" />
+                                        Fechar
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={onViewHistory}
+                                        className="gap-1.5"
+                                    >
+                                        <List className="h-4 w-4" />
+                                        Ver histórico deste disparo
+                                    </Button>
+                                </div>
+                                <Button
+                                    type="button"
+                                    onClick={() => exportCsv(recipients, timezone)}
+                                    className="gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Exportar relatório (CSV)
+                                </Button>
+                            </>
+                        )}
+                    </div>
+                </DialogContent>
+            </Dialog>
 
-                {/* Footer */}
-                <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/60 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-                    {isRunning ? (
-                        <>
-                            <p className="flex items-center gap-2 text-xs text-slate-500 sm:text-sm">
-                                <Clock className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                                <span>
-                                    Início: {formatDateTime(startedAt, timezone)}
-                                    <span className="mx-1.5 text-slate-300">|</span>
-                                    Intervalo: {delayLabel} entre mensagens
-                                    <span className="text-slate-400"> (+ aleatório)</span>
-                                </span>
-                            </p>
-                            {/* Cancel not available in backend — keep UI honest */}
-                            <Button
-                                type="button"
-                                variant="outline"
-                                disabled
-                                className="border-red-200 text-red-400 opacity-60"
-                                title="Cancelamento não disponível nesta versão"
-                            >
-                                Cancelar disparo
-                            </Button>
-                        </>
-                    ) : (
-                        <>
-                            <div className="flex flex-wrap gap-2">
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    onClick={() => onOpenChange(false)}
-                                    className="gap-1.5"
-                                >
-                                    <X className="h-4 w-4" />
-                                    Fechar
-                                </Button>
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    onClick={onViewHistory}
-                                    className="gap-1.5"
-                                >
-                                    <List className="h-4 w-4" />
-                                    Ver histórico deste disparo
-                                </Button>
-                            </div>
-                            <Button
-                                type="button"
-                                onClick={() => exportCsv(recipients, timezone)}
-                                className="gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
-                            >
-                                <Download className="h-4 w-4" />
-                                Exportar relatório (CSV)
-                            </Button>
-                        </>
-                    )}
-                </div>
-            </DialogContent>
-        </Dialog>
+            <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Cancelar disparo?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            As mensagens já enviadas não poderão ser canceladas. Os destinatários
+                            que ainda não foram processados não receberão a mensagem.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={cancelling}>
+                            Continuar enviando
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                            disabled={cancelling}
+                            onClick={(e) => {
+                                e.preventDefault();
+                                void handleConfirmCancel();
+                            }}
+                            className="bg-red-600 text-white hover:bg-red-700"
+                        >
+                            Sim, cancelar disparo
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </>
     );
 }
 
@@ -458,7 +577,7 @@ function StatusCard({
     label,
     percent,
 }: {
-    tone: "green" | "blue" | "gray" | "red";
+    tone: "green" | "blue" | "gray" | "red" | "amber";
     icon: ReactNode;
     value: number;
     label: string;
@@ -469,6 +588,7 @@ function StatusCard({
         blue: "border-blue-100 bg-blue-50/80 text-blue-600",
         gray: "border-slate-200 bg-slate-50 text-slate-500",
         red: "border-red-100 bg-red-50/80 text-red-500",
+        amber: "border-amber-100 bg-amber-50/80 text-amber-600",
     } as const;
 
     return (
@@ -499,7 +619,9 @@ function RecipientTableRow({
             ? "bg-blue-50/70"
             : row.status === "failed"
               ? "bg-red-50/50"
-              : "bg-white";
+              : row.status === "cancelled"
+                ? "bg-amber-50/40"
+                : "bg-white";
 
     return (
         <tr className={cn("border-b border-slate-100 last:border-0", rowTone)}>
@@ -548,6 +670,14 @@ function StatusBadge({ status }: { status: RecipientRowStatus }) {
             </span>
         );
     }
+    if (status === "cancelled") {
+        return (
+            <span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-amber-700">
+                <Ban className="h-3.5 w-3.5" aria-hidden />
+                Cancelado
+            </span>
+        );
+    }
     return (
         <span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-slate-500">
             <Hourglass className="h-3.5 w-3.5" aria-hidden />
@@ -578,6 +708,14 @@ function DetailCell({ status, detail }: { status: RecipientRowStatus; detail: st
             <span className="inline-flex items-center gap-1.5 text-[13px] text-red-600">
                 <XCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
                 {detail || "Falha no envio"}
+            </span>
+        );
+    }
+    if (status === "cancelled") {
+        return (
+            <span className="inline-flex items-center gap-1.5 text-[13px] text-amber-700">
+                <Ban className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                {detail || "Não enviado — disparo cancelado"}
             </span>
         );
     }
