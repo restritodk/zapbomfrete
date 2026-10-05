@@ -54,12 +54,39 @@ interface BroadcastProgress {
     sent: number;
     failed: number;
     current?: string | null;
+    currentIndex?: number;
     phase?: "queued" | "sending" | "processed" | "done";
     progress?: number;
     errors?: { jid: string; error: string }[];
     skipped?: { jid: string; error: string }[];
     startedAt?: string;
     completedAt?: string;
+}
+
+/** Compare JIDs even when onWhatsApp rewrites BR 9th digit / suffixes. */
+function jidDigits(jid: string): string {
+    return String(jid || "")
+        .split("@")[0]
+        .replace(/\D/g, "");
+}
+
+/** Canonical BR mobile key: 55 + DDD + 8 subscriber digits (drop mobile 9th digit). */
+function brMobileKey(digits: string): string {
+    if (!digits.startsWith("55") || digits.length < 12) return digits;
+    const ddd = digits.slice(2, 4);
+    let local = digits.slice(4);
+    if (local.length === 9 && local.startsWith("9")) local = local.slice(1);
+    return `55${ddd}${local}`;
+}
+
+function sameRecipientJid(a: string, b: string): boolean {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const da = jidDigits(a);
+    const db = jidDigits(b);
+    if (!da || !db) return false;
+    if (da === db) return true;
+    return brMobileKey(da) === brMobileKey(db);
 }
 
 interface BroadcastLog {
@@ -126,6 +153,9 @@ export default function BroadcastPage() {
     const [systemTimezone, setSystemTimezone] = useState("America/Sao_Paulo");
     const [activeTab, setActiveTab] = useState<"new" | "history">("new");
     const lastProcessedJidRef = useRef<string | null>(null);
+    const activeBroadcastIdRef = useRef<string | null>(null);
+    const processableJidsRef = useRef<string[]>([]);
+    const trackingSyncedRef = useRef(false);
 
     const [history, setHistory] = useState<BroadcastLog[]>([]);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -201,24 +231,54 @@ export default function BroadcastPage() {
 
     const countersRef = useRef({ sent: 0, failed: 0 });
 
-    const applySkippedFailures = useCallback(
-        (skipped: { jid: string; error: string }[] | undefined, atIso: string) => {
-            if (!skipped?.length) return;
-            setRecipientRows((prev) =>
-                prev.map((row) => {
-                    const hit = skipped.find((s) => s.jid === row.jid);
-                    if (!hit) return row;
-                    return {
-                        ...row,
-                        status: "failed" as const,
-                        at: atIso,
-                        detail: hit.error || "Número não disponível no WhatsApp",
-                    };
-                })
-            );
+    const buildTrackingRows = useCallback(
+        (
+            processable: string[],
+            skipped: { jid: string; error: string }[] | undefined,
+            startedAtIso: string
+        ): BroadcastRecipientRow[] => {
+            const rows: BroadcastRecipientRow[] = processable.map((jid, index) => ({
+                id: `ok-${jid}-${index}`,
+                jid,
+                display: displayJid(jid),
+                status: "waiting",
+                at: null,
+                detail: "Aguardando na fila...",
+            }));
+            for (const [index, s] of (skipped || []).entries()) {
+                rows.push({
+                    id: `skip-${s.jid}-${index}`,
+                    jid: s.jid,
+                    display: displayJid(s.jid),
+                    status: "failed",
+                    at: startedAtIso,
+                    detail: s.error || "Número não disponível no WhatsApp",
+                });
+            }
+            return rows;
         },
-        []
+        [displayJid]
     );
+
+    const findRowIndex = useCallback((rows: BroadcastRecipientRow[], data: BroadcastProgress) => {
+        // Prefer JID match (with BR digit tolerance). Index only after API sync to resolved list.
+        if (data.current) {
+            const idx = rows.findIndex((r) => sameRecipientJid(r.jid, data.current!));
+            if (idx >= 0) return idx;
+        }
+        if (
+            trackingSyncedRef.current &&
+            typeof data.currentIndex === "number" &&
+            data.currentIndex >= 0
+        ) {
+            const byIndex = processableJidsRef.current[data.currentIndex];
+            if (byIndex) {
+                const idx = rows.findIndex((r) => sameRecipientJid(r.jid, byIndex));
+                if (idx >= 0) return idx;
+            }
+        }
+        return -1;
+    }, []);
 
     const fetchHistory = useCallback(async () => {
         if (!sessionId) return;
@@ -245,51 +305,76 @@ export default function BroadcastPage() {
         socket.on("connect", onConnect);
 
         const handler = (data: BroadcastProgress) => {
-            if (activeBroadcastId && data.broadcastId && data.broadcastId !== activeBroadcastId) {
+            const trackedId = activeBroadcastIdRef.current;
+            if (trackedId && data.broadcastId && data.broadcastId !== trackedId) {
                 return;
             }
 
             setBroadcastProgress(data);
-            if (data.broadcastId) setActiveBroadcastId(data.broadcastId);
+            if (data.broadcastId) {
+                activeBroadcastIdRef.current = data.broadcastId;
+                setActiveBroadcastId(data.broadcastId);
+            }
             if (data.startedAt) setBroadcastStartedAt(data.startedAt);
             if (data.completedAt) setBroadcastCompletedAt(data.completedAt);
 
-            if (data.phase === "queued" || (data.skipped && data.skipped.length > 0)) {
-                applySkippedFailures(data.skipped, data.startedAt || new Date().toISOString());
+            if (data.phase === "queued") {
                 countersRef.current = { sent: data.sent, failed: data.failed };
-            }
-
-            if (data.phase === "sending" && data.current) {
-                setRecipientRows((prev) =>
-                    prev.map((row) => {
-                        if (row.jid === data.current && row.status !== "failed" && row.status !== "sent") {
+                if (data.skipped?.length) {
+                    setRecipientRows((prev) => {
+                        // If rows were already rebuilt from API, just ensure skipped are marked
+                        return prev.map((row) => {
+                            const hit = data.skipped!.find((s) => sameRecipientJid(s.jid, row.jid));
+                            if (!hit || row.status === "failed") return row;
                             return {
                                 ...row,
-                                status: "sending",
-                                at: new Date().toISOString(),
-                                detail: "Enviando mensagem...",
+                                status: "failed" as const,
+                                at: data.startedAt || new Date().toISOString(),
+                                detail: hit.error || "Número não disponível no WhatsApp",
                             };
-                        }
-                        return row;
-                    })
-                );
+                        });
+                    });
+                }
             }
 
-            if (data.phase === "processed" && data.current) {
-                const jid = data.current;
+            if (data.phase === "sending") {
+                const nowIso = new Date().toISOString();
+                setRecipientRows((prev) => {
+                    const idx = findRowIndex(prev, data);
+                    if (idx < 0) return prev;
+                    return prev.map((row, i) => {
+                        if (i !== idx) return row;
+                        if (row.status === "failed" || row.status === "sent") return row;
+                        return {
+                            ...row,
+                            // Keep canonical jid from server event when available
+                            jid: data.current || row.jid,
+                            status: "sending",
+                            at: nowIso,
+                            detail: "Enviando mensagem...",
+                        };
+                    });
+                });
+            }
+
+            if (data.phase === "processed") {
+                const jid = data.current || "";
                 const prevCounters = countersRef.current;
                 const failedIncreased = data.failed > prevCounters.failed;
                 countersRef.current = { sent: data.sent, failed: data.failed };
                 lastProcessedJidRef.current = jid;
                 const nowIso = new Date().toISOString();
 
-                setRecipientRows((prev) =>
-                    prev.map((row) => {
-                        if (row.jid !== jid) return row;
+                setRecipientRows((prev) => {
+                    const idx = findRowIndex(prev, data);
+                    if (idx < 0) return prev;
+                    return prev.map((row, i) => {
+                        if (i !== idx) return row;
                         if (row.status === "failed" && !failedIncreased) return row;
                         if (failedIncreased) {
                             return {
                                 ...row,
+                                jid: jid || row.jid,
                                 status: "failed",
                                 at: nowIso,
                                 detail: "Falha no envio",
@@ -297,12 +382,13 @@ export default function BroadcastPage() {
                         }
                         return {
                             ...row,
+                            jid: jid || row.jid,
                             status: "sent",
                             at: nowIso,
                             detail: "Mensagem enviada com sucesso",
                         };
-                    })
-                );
+                    });
+                });
             }
 
             if (data.status === "completed") {
@@ -312,15 +398,15 @@ export default function BroadcastPage() {
                 countersRef.current = { sent: data.sent, failed: data.failed };
 
                 setRecipientRows((prev) => {
-                    const errorMap = new Map((data.errors || []).map((e) => [e.jid, e.error]));
+                    const errors = data.errors || [];
                     return prev.map((row) => {
-                        const err = errorMap.get(row.jid);
+                        const err = errors.find((e) => sameRecipientJid(e.jid, row.jid));
                         if (err) {
                             return {
                                 ...row,
                                 status: "failed",
                                 at: row.at || data.completedAt || new Date().toISOString(),
-                                detail: err,
+                                detail: err.error,
                             };
                         }
                         if (row.status === "failed") return row;
@@ -350,7 +436,7 @@ export default function BroadcastPage() {
             socket.off("connect", onConnect);
             socket.off("broadcast.progress", handler);
         };
-    }, [sessionId, getSocket, joinSession, activeBroadcastId, applySkippedFailures, fetchHistory]);
+    }, [sessionId, getSocket, joinSession, fetchHistory, findRowIndex]);
 
     useEffect(() => {
         if (activeTab === "history" && sessionId) {
@@ -553,6 +639,9 @@ export default function BroadcastPage() {
         setLoading(true);
         setBroadcastProgress(null);
         setActiveBroadcastId(null);
+        activeBroadcastIdRef.current = null;
+        processableJidsRef.current = recipients;
+        trackingSyncedRef.current = false;
         setRecipientRows(initialRows);
         setBroadcastStartedAt(new Date().toISOString());
         setBroadcastCompletedAt(null);
@@ -579,29 +668,50 @@ export default function BroadcastPage() {
 
             if (res.ok) {
                 const payload = data?.data || {};
-                if (payload.broadcastId) setActiveBroadcastId(payload.broadcastId);
+                if (payload.broadcastId) {
+                    activeBroadcastIdRef.current = payload.broadcastId;
+                    setActiveBroadcastId(payload.broadcastId);
+                }
+                const startedAtIso = payload.startedAt || new Date().toISOString();
                 if (payload.startedAt) setBroadcastStartedAt(payload.startedAt);
                 if (typeof payload.delay === "number") setBroadcastDelayMs(payload.delay);
 
-                if (Array.isArray(payload.skipped) && payload.skipped.length > 0) {
-                    applySkippedFailures(
-                        payload.skipped,
-                        payload.startedAt || new Date().toISOString()
-                    );
-                    countersRef.current = {
-                        sent: 0,
-                        failed: payload.skipped.length,
-                    };
-                }
+                // Critical: track the SAME resolved JIDs the send loop / socket events use
+                const resolved: string[] = Array.isArray(payload.recipients)
+                    ? payload.recipients.map(String)
+                    : recipients;
+                const skipped = Array.isArray(payload.skipped) ? payload.skipped : [];
+                processableJidsRef.current = resolved;
+                trackingSyncedRef.current = true;
+                setRecipientRows((prev) => {
+                    const next = buildTrackingRows(resolved, skipped, startedAtIso);
+                    // Preserve statuses already applied by early socket events (race with HTTP)
+                    return next.map((row) => {
+                        const prior = prev.find((p) => sameRecipientJid(p.jid, row.jid));
+                        if (!prior) return row;
+                        if (
+                            prior.status === "sending" ||
+                            prior.status === "sent" ||
+                            (prior.status === "failed" && row.status !== "failed")
+                        ) {
+                            return {
+                                ...row,
+                                status: prior.status,
+                                at: prior.at,
+                                detail: prior.detail,
+                            };
+                        }
+                        return row;
+                    });
+                });
+                countersRef.current = {
+                    sent: 0,
+                    failed: skipped.length,
+                };
 
-                const processable =
-                    typeof payload.processable === "number"
-                        ? payload.processable
-                        : recipients.length;
-                const skippedCount = Array.isArray(payload.skipped) ? payload.skipped.length : 0;
                 toast.info(
-                    `Disparo iniciado: ${processable} na fila` +
-                        (skippedCount ? `, ${skippedCount} indisponível(is) no WhatsApp` : "") +
+                    `Disparo iniciado: ${resolved.length} na fila` +
+                        (skipped.length ? `, ${skipped.length} indisponível(is) no WhatsApp` : "") +
                         (attachments.length ? ` · ${attachments.length} anexo(s)` : "")
                 );
             } else {
@@ -609,6 +719,9 @@ export default function BroadcastPage() {
                 setLoading(false);
                 setProgressModalOpen(false);
                 setRecipientRows([]);
+                activeBroadcastIdRef.current = null;
+                processableJidsRef.current = [];
+                trackingSyncedRef.current = false;
             }
         } catch (e) {
             console.error(e);
@@ -616,6 +729,9 @@ export default function BroadcastPage() {
             setLoading(false);
             setProgressModalOpen(false);
             setRecipientRows([]);
+            activeBroadcastIdRef.current = null;
+            processableJidsRef.current = [];
+            trackingSyncedRef.current = false;
         }
     };
 
