@@ -3,10 +3,13 @@ import { WhatsAppInstance } from "./instance";
 import { Server } from "socket.io";
 import { initScheduler } from "@/lib/cron";
 import { logger } from "@/lib/logger";
+import { ACTIVE_OR_CONNECTING } from "./connection-lifecycle";
 
 export class WhatsAppManager {
     private static instance: WhatsAppManager;
     private sessions: Map<string, WhatsAppInstance> = new Map();
+    /** Per-session start mutex — concurrent startSession share one promise */
+    private startLocks: Map<string, Promise<void>> = new Map();
     public io: Server | null = null;
 
     private constructor() {
@@ -28,34 +31,41 @@ export class WhatsAppManager {
         if (!this.io) throw new Error("Socket.IO not initialized in WhatsAppManager");
         const sessions = await prisma.session.findMany({
             where: {
-                status: { not: "LOGGED_OUT" }
+                status: { not: "LOGGED_OUT" },
             },
-            select: { sessionId: true, userId: true, status: true }
+            select: { sessionId: true, userId: true, status: true },
         });
 
         let started = 0;
         for (const session of sessions) {
-            // Only auto-init sessions that were CONNECTED before (have auth creds)
             const authCount = await prisma.authState.count({
-                where: { sessionId: session.sessionId }
+                where: { sessionId: session.sessionId },
             });
             if (authCount === 0) {
-                // No credentials — session was created but never connected
-                // Set to STOPPED so it doesn't spam reconnect
-                await prisma.session.update({
-                    where: { sessionId: session.sessionId },
-                    data: { status: "STOPPED" }
-                }).catch(() => {});
+                await prisma.session
+                    .update({
+                        where: { sessionId: session.sessionId },
+                        data: { status: "STOPPED" },
+                    })
+                    .catch(() => {});
                 continue;
             }
 
-            const instance = new WhatsAppInstance(session.sessionId, session.userId, this.io);
-            instance.onRemovedFromManager = () => this.removeInstance(session.sessionId);
+            const instance = new WhatsAppInstance(
+                session.sessionId,
+                session.userId,
+                this.io
+            );
+            instance.onRemovedFromManager = () =>
+                this.removeInstance(session.sessionId);
             this.sessions.set(session.sessionId, instance);
             await instance.init();
             started++;
         }
-        logger.success("Manager", `Loaded ${started} sessions (${sessions.length - started} idle skipped).`);
+        logger.success(
+            "Manager",
+            `Loaded ${started} sessions (${sessions.length - started} idle skipped).`
+        );
     }
 
     async createSession(userId: string, name: string, customSessionId?: string) {
@@ -75,19 +85,21 @@ export class WhatsAppManager {
                 userId,
                 name,
                 sessionId,
-                status: "STOPPED", // Default: stopped, user must click Start
+                status: "STOPPED",
                 botConfig: {
                     create: {
                         enabled: true,
                         botMode: "OWNER",
-                        autoReplyMode: "ALL"
-                    }
-                }
-            }
+                        autoReplyMode: "ALL",
+                    },
+                },
+            },
         });
 
-        // Don't init socket — user clicks Start manually
-        logger.info("Manager", `Session ${sessionId} created (STOPPED). User must click Start to connect.`);
+        logger.info(
+            "Manager",
+            `Session ${sessionId} created (STOPPED). User must click Start to connect.`
+        );
         return session;
     }
 
@@ -95,7 +107,6 @@ export class WhatsAppManager {
         return this.sessions.get(sessionId);
     }
 
-    /** Remove instance from memory manager (cleanup after stop/logout) */
     public removeInstance(sessionId: string) {
         const inst = this.sessions.get(sessionId);
         if (inst) {
@@ -118,43 +129,70 @@ export class WhatsAppManager {
         if (instance) {
             await instance.shutdown();
             instance.status = "STOPPED";
-            this.io?.to(sessionId).emit("connection.update", { status: "STOPPED", qr: null });
-            await prisma.session.update({
-                where: { sessionId },
-                data: { status: "STOPPED" }
-            }).catch(() => {});
-            // Remove from memory immediately
+            this.io?.to(sessionId).emit("connection.update", {
+                status: "STOPPED",
+                qr: null,
+            });
+            await prisma.session
+                .update({
+                    where: { sessionId },
+                    data: { status: "STOPPED" },
+                })
+                .catch(() => {});
             this.sessions.delete(sessionId);
         }
+        this.startLocks.delete(sessionId);
     }
 
     async startSession(sessionId: string) {
-        // If already running, do nothing
+        const inflight = this.startLocks.get(sessionId);
+        if (inflight) {
+            return inflight;
+        }
+
+        const run = this.doStartSession(sessionId).finally(() => {
+            if (this.startLocks.get(sessionId) === run) {
+                this.startLocks.delete(sessionId);
+            }
+        });
+        this.startLocks.set(sessionId, run);
+        return run;
+    }
+
+    private async doStartSession(sessionId: string) {
         const existingInstance = this.sessions.get(sessionId);
-        if (existingInstance && existingInstance.status === "CONNECTED") {
+        if (existingInstance && ACTIVE_OR_CONNECTING.has(existingInstance.status)) {
+            // CONNECTED / CONNECTING / SCAN_QR — idempotent no-op
+            // If init still in flight, await it so callers observe readiness
+            if (existingInstance.hasInitInFlight) {
+                await existingInstance.init();
+            }
+            logger.info(
+                "Manager",
+                `startSession(${sessionId}) skipped — already ${existingInstance.status}`
+            );
             return;
         }
 
         const session = await prisma.session.findUnique({ where: { sessionId } });
         if (!session) throw new Error("Session not found");
 
-        // Create fresh instance
         let instance = this.sessions.get(sessionId);
         if (!instance) {
             instance = new WhatsAppInstance(sessionId, session.userId, this.io!);
             instance.onRemovedFromManager = () => this.removeInstance(sessionId);
             this.sessions.set(sessionId, instance);
         } else {
-            // Reset stopped flag for retry
-            instance.isStopped = false;
+            instance.resumeForStart();
         }
 
         await instance.init();
     }
 
     async restartSession(sessionId: string) {
+        // Fully tear down previous generation (cancels timers, ends socket)
         await this.stopSession(sessionId);
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         await this.startSession(sessionId);
     }
 
@@ -167,6 +205,7 @@ export class WhatsAppManager {
 
 const globalForWhatsapp = global as unknown as { waManager: WhatsAppManager };
 
-export const waManager = globalForWhatsapp.waManager || WhatsAppManager.getInstance();
+export const waManager =
+    globalForWhatsapp.waManager || WhatsAppManager.getInstance();
 
 globalForWhatsapp.waManager = waManager;
