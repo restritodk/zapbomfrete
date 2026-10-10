@@ -83,6 +83,19 @@ export function isAdmin(userRole: string): boolean {
 }
 
 /**
+ * Developer tools + global Datafy credentials/templates UI.
+ * SUPERADMIN only — OWNER keeps operational Chat/Campanhas/Boletins.
+ */
+export function canAccessDeveloperTools(userRole: string): boolean {
+    return isAdmin(userRole);
+}
+
+/** Alias — same gate as canAccessDeveloperTools (global Datafy settings). */
+export function canManageDatafyIntegration(userRole: string): boolean {
+    return isAdmin(userRole);
+}
+
+/**
  * Check if user can access a Baileys session.
  * Datafy official channel ids are never treated as Baileys sessions here
  * (returns false) — use canAccessChannel / canAccessDatafyChannel instead.

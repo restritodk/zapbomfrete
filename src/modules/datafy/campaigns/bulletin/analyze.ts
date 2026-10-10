@@ -101,6 +101,53 @@ function trimLine(line: string): string {
         .trim();
 }
 
+/**
+ * Remove rótulos redundantes do valor (evita "Frete: FRETE: R$ …" / "Janela: JANELA …").
+ */
+export function stripFieldLabelPrefix(
+    key: keyof BulletinLoadFields,
+    value: string
+): string {
+    let v = value.trim();
+    if (!v) return v;
+    const patterns: Partial<Record<keyof BulletinLoadFields, RegExp[]>> = {
+        origem: [/^(?:origem|orige[mn]|de)\s*[:：\-–]?\s*/i],
+        destino: [/^(?:destino|para|até|ate)\s*[:：\-–]?\s*/i],
+        terminal: [
+            /^(?:terminal|porto|descarga|local\s*de\s*descarga|armaz[eé]m)\s*[:：\-–]?\s*/i,
+        ],
+        localCarregamento: [
+            /^(?:local\s*(?:de\s*)?carreg(?:amento)?|carregamento|fazenda|algodoeira)\s*[:：\-–]?\s*/i,
+        ],
+        janela: [
+            /^(?:janela|carreg(?:amento)?\/?entrega|prazo|data(?:\s*de\s*carregamento)?|agendamento|tipo\s*de\s*janela)\s*[:：\-–]?\s*/i,
+        ],
+        veiculo: [
+            /^(?:ve[ií]culo|tipo\s*(?:de\s*)?ve[ií]culo|caminh[aã]o|equipamento)\s*[:：\-–]?\s*/i,
+        ],
+        quantidade: [
+            /^(?:qtd|quantidade|qtde|ve[ií]culos?)\s*[:：\-–]?\s*/i,
+        ],
+        frete: [
+            /^(?:frete|valor(?:\s*do\s*frete)?|pre[cç]o)\s*[:：\-–]?\s*/i,
+        ],
+        lote: [/^(?:lote|pedido|os)\s*[:：\-–]?\s*/i],
+        pedagio: [
+            /^(?:ped[aá]gio|tag|condi[cç][aã]o\s*(?:do\s*)?ped[aá]gio)\s*[:：\-–]?\s*/i,
+        ],
+        localizacaoUrl: [
+            /^(?:localiza[cç][aã]o|maps?|link)\s*[:：\-–]?\s*/i,
+        ],
+        observacoes: [
+            /^(?:observa[cç][oõ]es?|obs\.?|notas?)\s*[:：\-–]?\s*/i,
+        ],
+    };
+    for (const re of patterns[key] || []) {
+        v = v.replace(re, "").trim();
+    }
+    return v || value.trim();
+}
+
 function setField(
     fields: BulletinLoadFields,
     key: keyof BulletinLoadFields,
@@ -108,7 +155,7 @@ function setField(
     ambiguous: BulletinAmbiguousField[],
     loadIndex: number
 ) {
-    const v = value.trim();
+    const v = stripFieldLabelPrefix(key, value.trim());
     if (!v) return;
     const prev = fields[key];
     if (prev && prev !== v) {
@@ -252,19 +299,37 @@ function extractFieldsFromBlock(
         unrecognizedLines.push(line);
     }
 
-    // Compose observacoes / detalhes without inventing
+    // Drop lines that only repeat Maps URL already captured as localizacaoUrl
+    const mapsUrl = fields.localizacaoUrl?.trim();
+    const cleanUnrecognized = unrecognizedLines.filter((line) => {
+        if (mapsUrl && line.includes(mapsUrl)) return false;
+        if (MAPS_URL_RE.test(line) && mapsUrl) return false;
+        const onlyMaps = line.match(MAPS_URL_RE);
+        if (
+            onlyMaps?.[1] &&
+            line.replace(onlyMaps[1], "").replace(/localiza[cç][aã]o|maps?|link|[:：]/gi, "").trim() ===
+                ""
+        ) {
+            // Prefer structured localizacaoUrl; do not dump link into obs
+            if (!fields.localizacaoUrl) {
+                fields.localizacaoUrl = onlyMaps[1];
+            }
+            return false;
+        }
+        return true;
+    });
+
+    // Compose observacoes / detalhes without inventing or duplicating maps
     const obsParts: string[] = [];
     if (fields.observacoes) obsParts.push(fields.observacoes);
     if (fields.rotaPedagio) obsParts.push(`Rota: ${fields.rotaPedagio}`);
-    if (fields.lote && !fields.quantidade) {
-        // keep lote as structured; also surface in detalhes for v1 templates
-    }
-    if (unrecognizedLines.length) {
-        obsParts.push(...unrecognizedLines);
+    if (cleanUnrecognized.length) {
+        obsParts.push(...cleanUnrecognized);
     }
     if (obsParts.length) {
         fields.observacoes = obsParts.join(" · ");
     }
+    // v1 catch-all: structured extras without re-prefixing values that still carry labels
     const detalheBits = [
         fields.localCarregamento && `Local: ${fields.localCarregamento}`,
         fields.janela && `Janela: ${fields.janela}`,
@@ -280,7 +345,7 @@ function extractFieldsFromBlock(
         fields.detalhes = `Grupo: ${fields.grupoUrl}`;
     }
 
-    return { fields, unrecognizedLines, ambiguous };
+    return { fields, unrecognizedLines: cleanUnrecognized, ambiguous };
 }
 
 function completenessOf(fields: BulletinLoadFields): number {

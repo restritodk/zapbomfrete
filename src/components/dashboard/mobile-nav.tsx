@@ -52,6 +52,7 @@ const navGroups: NavGroup[] = [
         items: [
             { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
             { href: "/dashboard/broadcast", label: "Disparo em massa", icon: Megaphone },
+            { href: "/dashboard/boletim", label: "Criador de boletins", icon: FileText },
             { href: "/dashboard/sticker", label: "Criador de figurinhas", icon: ImageIcon },
         ],
     },
@@ -76,8 +77,9 @@ const navGroups: NavGroup[] = [
     {
         label: "Desenvolvedor",
         items: [
-            { href: "/docs", label: "Docs da API", icon: FileText },
-            { href: "/swagger", label: "Swagger UI", icon: Code, external: true },
+            { href: "/docs", label: "Docs da API", icon: FileText, superadminOnly: true },
+            { href: "/swagger", label: "Swagger UI", icon: Code, external: true, superadminOnly: true },
+            { href: "/dashboard/api-docs", label: "Docs (painel)", icon: FileText, superadminOnly: true },
         ],
     },
     {
@@ -85,9 +87,14 @@ const navGroups: NavGroup[] = [
         items: [
             { href: "/dashboard/media", label: "Gerenciador de mídia", icon: HardDrive },
             { href: "/dashboard/sessions/access", label: "Acesso às sessões", icon: UserPlus },
-            { href: "/dashboard/users", label: "Usuários", icon: Users },
+            { href: "/dashboard/users", label: "Usuários", icon: Users, superadminOnly: true },
             { href: "/dashboard/settings", label: "Configurações", icon: Settings },
-            { href: "/dashboard/settings/integrations/datafy", label: "Integrações · Datafy", icon: Plug },
+            {
+                href: "/dashboard/settings/integrations/datafy",
+                label: "Integrações · Datafy",
+                icon: Plug,
+                superadminOnly: true,
+            },
             { href: "/dashboard/system-monitor", label: "Monitor do sistema", icon: Activity, superadminOnly: true },
             { href: "/dashboard/notifications", label: "Notificações", icon: Bell, superadminOnly: true },
         ],

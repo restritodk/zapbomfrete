@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import SwaggerUI from "swagger-ui-react";
 import "swagger-ui-react/swagger-ui.css";
+import { SuperadminGate } from "@/components/auth/superadmin-gate";
 
-export default function ApiDocsPage() {
+function SwaggerInner() {
     const [authorized, setAuthorized] = useState(false);
     const [loading, setLoading] = useState(true);
     const [username, setUsername] = useState("");
@@ -157,5 +158,13 @@ export default function ApiDocsPage() {
                 <SwaggerUI url="/api/docs" />
             </div>
         </div>
+    );
+}
+
+export default function ApiDocsPage() {
+    return (
+        <SuperadminGate title="Swagger UI — acesso restrito">
+            <SwaggerInner />
+        </SuperadminGate>
     );
 }

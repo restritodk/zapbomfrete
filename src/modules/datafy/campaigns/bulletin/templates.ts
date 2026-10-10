@@ -5,6 +5,7 @@ import type {
     BulletinPart,
     CampaignMessagePart,
 } from "./types";
+import { META_TEMPLATE_BODY_MAX } from "./types";
 import {
     BULLETIN_TEMPLATE_LIBRARY,
     fillTemplatePreview,
@@ -18,6 +19,7 @@ import {
     hasCatchAll,
     uncoveredFilledFields,
 } from "./field-map";
+import { packParts, stripFieldLabelPrefix } from "./analyze";
 
 export type { BulletinTemplateSpec };
 
@@ -96,41 +98,60 @@ function pickTemplateForCapacity(
     return scored[0]?.m || null;
 }
 
+function cleanParam(
+    key: keyof BulletinLoadFields | "localizacao",
+    raw: string | null | undefined
+): string {
+    if (!raw?.trim()) return "N/D";
+    const fieldKey: keyof BulletinLoadFields =
+        key === "localizacao" ? "localizacaoUrl" : key;
+    const stripped = stripFieldLabelPrefix(fieldKey, raw);
+    return sanitizeTemplateParam(stripped);
+}
+
 function fieldValue(
     fields: BulletinLoadFields,
     key: LoadSlotField
 ): string {
     switch (key) {
         case "localizacao":
-            return sanitizeTemplateParam(fields.localizacaoUrl);
+            return cleanParam("localizacao", fields.localizacaoUrl);
         case "origem":
-            return sanitizeTemplateParam(fields.origem);
+            return cleanParam("origem", fields.origem);
         case "localCarregamento":
-            return sanitizeTemplateParam(fields.localCarregamento);
+            return cleanParam("localCarregamento", fields.localCarregamento);
         case "destino":
-            return sanitizeTemplateParam(fields.destino);
+            return cleanParam("destino", fields.destino);
         case "terminal":
-            return sanitizeTemplateParam(fields.terminal);
+            return cleanParam("terminal", fields.terminal);
         case "janela":
-            return sanitizeTemplateParam(fields.janela);
+            return cleanParam("janela", fields.janela);
         case "veiculo":
-            return sanitizeTemplateParam(fields.veiculo);
+            return cleanParam("veiculo", fields.veiculo);
         case "quantidade":
-            return sanitizeTemplateParam(
+            return cleanParam(
+                "quantidade",
                 fields.quantidade || fields.lote
             );
         case "frete":
-            return sanitizeTemplateParam(fields.frete);
+            return cleanParam("frete", fields.frete);
         case "lote":
-            return sanitizeTemplateParam(fields.lote);
+            return cleanParam("lote", fields.lote);
         case "pedagio":
-            return sanitizeTemplateParam(fields.pedagio);
-        case "observacoes":
-            return sanitizeTemplateParam(
-                fields.observacoes || fields.detalhes
-            );
+            return cleanParam("pedagio", fields.pedagio);
+        case "observacoes": {
+            // Never re-inject Maps URL already in localizacao slot
+            let obs = fields.observacoes || fields.detalhes || "";
+            if (fields.localizacaoUrl) {
+                obs = obs
+                    .split(" · ")
+                    .filter((p) => !p.includes(fields.localizacaoUrl!))
+                    .join(" · ");
+            }
+            return cleanParam("observacoes", obs);
+        }
         case "detalhes":
-            return sanitizeTemplateParam(fields.detalhes);
+            return cleanParam("detalhes" as keyof BulletinLoadFields, fields.detalhes);
         default:
             return "N/D";
     }
@@ -197,21 +218,42 @@ export function composeReusableBulletinParts(
         opts?.purpose === "utility" ? "UTILITY" : "MARKETING";
 
     if (!availableCaps.length) {
-        return [
-            {
-                index: 0,
-                label: `${analysis.title} — sem template reutilizável`,
-                bodyText: analysis.rawText.slice(0, 500),
-                loadIndexes: loads.map((l) => l.index),
-                charCount: analysis.rawText.length,
-                readyForRealSend: false,
-                compatibility: "missing_template",
-                blockReason:
-                    "Nenhum template APPROVED compatível na biblioteca gerenciada. Crie/aprove modelos em Integrações → Datafy com mapeamento de campos.",
-                policyWarning:
-                    "Divulgação de cargas costuma ser MARKETING na Meta — não force UTILITY só para facilitar aprovação.",
-            },
-        ];
+        // Full char-aware packing for preview — never silently truncate to 500 chars
+        const packed =
+            analysis.parts?.length > 0
+                ? analysis.parts
+                : packParts(analysis.title, loads).parts;
+        const partsOut: CampaignMessagePart[] = packed.map((p, i) => ({
+            index: i,
+            label: p.label,
+            bodyText: p.bodyText,
+            loadIndexes: p.loadIndexes,
+            charCount: p.charCount,
+            readyForRealSend: false,
+            compatibility: "missing_template" as const,
+            blockReason:
+                "Nenhum template APPROVED compatível na biblioteca gerenciada. Crie/aprove modelos em Integrações → Datafy com mapeamento de campos.",
+            policyWarning:
+                "Divulgação de cargas costuma ser MARKETING na Meta — não force UTILITY só para facilitar aprovação." +
+                (p.charCount > META_TEMPLATE_BODY_MAX
+                    ? ` Parte ${i + 1} tem ${p.charCount} chars (limite ${META_TEMPLATE_BODY_MAX}).`
+                    : ""),
+        }));
+        return partsOut.length
+            ? partsOut
+            : [
+                  {
+                      index: 0,
+                      label: `${analysis.title} — sem template reutilizável`,
+                      bodyText: analysis.rawText,
+                      loadIndexes: loads.map((l) => l.index),
+                      charCount: analysis.rawText.length,
+                      readyForRealSend: false,
+                      compatibility: "missing_template",
+                      blockReason:
+                          "Nenhum template APPROVED compatível na biblioteca gerenciada. Crie/aprove modelos em Integrações → Datafy com mapeamento de campos.",
+                  },
+              ];
     }
 
     const parts: CampaignMessagePart[] = [];
@@ -328,6 +370,7 @@ export function composeReusableBulletinParts(
                 : analysis.title;
 
         const blockedCoverage = !coverage.ok;
+        const bodyTooLong = filled.length > META_TEMPLATE_BODY_MAX;
         parts.push({
             index: partIndex,
             label,
@@ -341,15 +384,18 @@ export function composeReusableBulletinParts(
             templateComponents: tmpl.components || null,
             variableMapping: { body: trimmed },
             libraryTemplateId: tmpl.spec.id,
-            readyForRealSend: !overflow && !blockedCoverage,
+            readyForRealSend:
+                !overflow && !blockedCoverage && !bodyTooLong,
             compatibility: blockedCoverage
                 ? "incomplete_fields"
-                : overflow
+                : overflow || bodyTooLong
                   ? "param_overflow"
                   : "ready",
             blockReason: blockedCoverage
                 ? `Template incompatível: campos preenchidos sem mapeamento (${coverage.uncovered.join(", ")}). Ajuste o template ou os dados — nada foi descartado.`
-                : overflow
+                : bodyTooLong
+                  ? `Mensagem gerada com ${filled.length} caracteres excede o limite Meta de ${META_TEMPLATE_BODY_MAX} no corpo — reduza cargas por parte ou revise o template.`
+                  : overflow
                   ? "Um ou mais campos excedem o limite de 1024 caracteres da variável Meta (valor truncado na prévia — revise o boletim)."
                   : null,
             policyWarning,

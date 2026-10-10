@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { BulletinTemplateManager } from "@/components/dashboard/bulletin-template-manager";
+import { SuperadminGate } from "@/components/auth/superadmin-gate";
 import { cn } from "@/lib/utils";
 
 type IntegrationStatus = {
@@ -59,7 +60,7 @@ type TemplateRow = {
     category?: string;
 };
 
-export default function DatafyIntegrationPage() {
+function DatafyIntegrationPageInner() {
     const { data: authSession, status: authStatus } = useSession();
     // Credential management is SUPERADMIN-only (matches API isAdmin).
     const isAdmin = authSession?.user?.role === "SUPERADMIN";
@@ -245,21 +246,6 @@ export default function DatafyIntegrationPage() {
                 <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                 Carregando integração…
             </div>
-        );
-    }
-
-    if (!isAdmin) {
-        return (
-            <Card>
-                <CardHeader>
-                    <CardTitle>Acesso restrito</CardTitle>
-                    <CardDescription>
-                        Apenas SUPERADMIN pode alterar credenciais, webhook e
-                        habilitação da Datafy. Usuários OWNER autorizados podem
-                        selecionar o canal oficial em Sessões / seletor global.
-                    </CardDescription>
-                </CardHeader>
-            </Card>
         );
     }
 
@@ -802,5 +788,13 @@ function InfoRow({
                 {value}
             </dd>
         </div>
+    );
+}
+
+export default function DatafyIntegrationPage() {
+    return (
+        <SuperadminGate title="Integrações Datafy — acesso restrito">
+            <DatafyIntegrationPageInner />
+        </SuperadminGate>
     );
 }

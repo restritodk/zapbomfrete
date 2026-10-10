@@ -1,21 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { FileText, Code, ExternalLink } from "lucide-react";
+import { SuperadminGate } from "@/components/auth/superadmin-gate";
 
-export default function ApiDocsPage() {
-    const { data: session, status } = useSession();
-    const router = useRouter();
+function ApiDocsInner() {
     const [filter, setFilter] = useState("");
     const [selectedCategory, setSelectedCategory] = useState("Todos");
-
-    useEffect(() => {
-        if (status === "unauthenticated") {
-            router.push("/auth/login");
-        }
-    }, [status, router]);
 
     const apiEndpoints = [
         // Sessions
@@ -400,5 +391,13 @@ export default function ApiDocsPage() {
                 </div>
             </div>
         </div>
+    );
+}
+
+export default function ApiDocsPage() {
+    return (
+        <SuperadminGate title="Docs da API — acesso restrito">
+            <ApiDocsInner />
+        </SuperadminGate>
     );
 }

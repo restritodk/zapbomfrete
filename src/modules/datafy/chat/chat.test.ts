@@ -7,7 +7,11 @@ import {
     DATAFY_SERVICE_WINDOW_MS,
 } from "./window";
 import { canManageDatafyCredentials } from "@/modules/channels/access";
-import { isAdmin } from "@/lib/api-auth";
+import {
+    isAdmin,
+    canAccessDeveloperTools,
+    canManageDatafyIntegration,
+} from "@/lib/api-auth";
 import { baileysRouteRejectedForChannel } from "@/modules/channels/guards";
 import { DATAFY_OFFICIAL_CHANNEL_ID } from "@/modules/channels/ids";
 
@@ -50,6 +54,13 @@ describe("Phase 3 auth boundaries", () => {
         assert.equal(canManageDatafyCredentials("OWNER"), false);
         assert.equal(isAdmin("OWNER"), false);
         assert.equal(isAdmin("SUPERADMIN"), true);
+    });
+
+    it("OWNER cannot access developer tools or global Datafy settings UI", () => {
+        assert.equal(canAccessDeveloperTools("OWNER"), false);
+        assert.equal(canManageDatafyIntegration("OWNER"), false);
+        assert.equal(canAccessDeveloperTools("SUPERADMIN"), true);
+        assert.equal(canManageDatafyIntegration("SUPERADMIN"), true);
     });
 
     it("Datafy channel id never routes to Baileys QR/send", () => {

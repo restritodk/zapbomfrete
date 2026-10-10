@@ -309,28 +309,31 @@ export default function SettingsPage() {
                 </p>
             </div>
 
-            <Card className="border-emerald-100 bg-gradient-to-br from-emerald-50/50 via-white to-white shadow-sm">
-                <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
-                    <div className="flex items-start gap-3">
-                        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
-                            <Plug className="h-5 w-5" />
+            {isSuperAdmin && (
+                <Card className="border-emerald-100 bg-gradient-to-br from-emerald-50/50 via-white to-white shadow-sm">
+                    <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+                        <div className="flex items-start gap-3">
+                            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+                                <Plug className="h-5 w-5" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-lg">Integrações</CardTitle>
+                                <CardDescription className="mt-1">
+                                    Datafy API (WhatsApp oficial Meta Cloud) —
+                                    conexão, webhook e templates. Baileys
+                                    permanece intacto.
+                                </CardDescription>
+                            </div>
                         </div>
-                        <div>
-                            <CardTitle className="text-lg">Integrações</CardTitle>
-                            <CardDescription className="mt-1">
-                                Datafy API (WhatsApp oficial Meta Cloud) — conexão, webhook e
-                                templates. Baileys permanece intacto.
-                            </CardDescription>
-                        </div>
-                    </div>
-                    <Button asChild variant="outline" className="shrink-0">
-                        <Link href="/dashboard/settings/integrations/datafy">
-                            Abrir Datafy
-                            <ArrowRight className="ml-2 h-4 w-4" />
-                        </Link>
-                    </Button>
-                </CardHeader>
-            </Card>
+                        <Button asChild variant="outline" className="shrink-0">
+                            <Link href="/dashboard/settings/integrations/datafy">
+                                Abrir Datafy
+                                <ArrowRight className="ml-2 h-4 w-4" />
+                            </Link>
+                        </Button>
+                    </CardHeader>
+                </Card>
+            )}
 
             {!isSuperAdmin && authStatus === "authenticated" && (
                 <Card className="border-yellow-200 bg-yellow-50">

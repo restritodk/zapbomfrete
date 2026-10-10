@@ -222,6 +222,8 @@ function WhatsAppMessagePreview({
     partLabel,
     partIndex,
     partCount,
+    partCharCount,
+    loadCountInPart,
     onPrevPart,
     onNextPart,
     warnings,
@@ -232,17 +234,21 @@ function WhatsAppMessagePreview({
     partLabel?: string | null;
     partIndex?: number;
     partCount?: number;
+    partCharCount?: number;
+    loadCountInPart?: number;
     onPrevPart?: () => void;
     onNextPart?: () => void;
     warnings?: string[];
 }) {
     const multi = (partCount || 0) > 1;
+    const overLimit =
+        typeof partCharCount === "number" && partCharCount > 1024;
     return (
         <div
             className={cn(
-                "flex flex-col rounded-[18px] border border-slate-200/80 overflow-hidden",
+                "flex flex-col rounded-[18px] border border-slate-200/80 overflow-hidden min-h-0",
                 "bg-gradient-to-b from-slate-50 to-[#e8eef2]",
-                compact ? "min-h-[200px]" : "min-h-[280px] h-full"
+                compact ? "min-h-[220px] max-h-[70vh]" : "min-h-[320px] h-full max-h-full"
             )}
         >
             <div className="shrink-0 flex items-center gap-2.5 px-3.5 py-2.5 bg-[#075e54] text-white">
@@ -258,37 +264,66 @@ function WhatsAppMessagePreview({
                     </p>
                 </div>
             </div>
-            {multi && (
-                <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 bg-white/80 border-b border-slate-200/80">
-                    <button
-                        type="button"
-                        className="rounded-lg p-1.5 hover:bg-slate-100 disabled:opacity-30"
-                        disabled={!onPrevPart || (partIndex || 0) <= 0}
-                        onClick={onPrevPart}
-                        aria-label="Parte anterior"
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </button>
-                    <span className="text-xs font-medium text-slate-600 tabular-nums">
-                        Parte {(partIndex || 0) + 1} de {partCount}
-                    </span>
-                    <button
-                        type="button"
-                        className="rounded-lg p-1.5 hover:bg-slate-100 disabled:opacity-30"
-                        disabled={
-                            !onNextPart ||
-                            (partIndex || 0) >= (partCount || 1) - 1
-                        }
-                        onClick={onNextPart}
-                        aria-label="Próxima parte"
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </button>
+            {(multi ||
+                typeof partCharCount === "number" ||
+                typeof loadCountInPart === "number") && (
+                <div className="shrink-0 flex flex-col gap-1 px-3 py-2 bg-white/80 border-b border-slate-200/80">
+                    <div className="flex items-center justify-between gap-2">
+                        <button
+                            type="button"
+                            className="rounded-lg p-1.5 hover:bg-slate-100 disabled:opacity-30"
+                            disabled={
+                                !multi ||
+                                !onPrevPart ||
+                                (partIndex || 0) <= 0
+                            }
+                            onClick={onPrevPart}
+                            aria-label="Parte anterior"
+                        >
+                            <ChevronLeft className="h-4 w-4" />
+                        </button>
+                        <span className="text-xs font-medium text-slate-600 tabular-nums text-center">
+                            {multi
+                                ? `Parte ${(partIndex || 0) + 1} de ${partCount}`
+                                : "Prévia"}
+                            {typeof loadCountInPart === "number"
+                                ? ` · ${loadCountInPart} carga(s)`
+                                : ""}
+                        </span>
+                        <button
+                            type="button"
+                            className="rounded-lg p-1.5 hover:bg-slate-100 disabled:opacity-30"
+                            disabled={
+                                !multi ||
+                                !onNextPart ||
+                                (partIndex || 0) >= (partCount || 1) - 1
+                            }
+                            onClick={onNextPart}
+                            aria-label="Próxima parte"
+                        >
+                            <ChevronRight className="h-4 w-4" />
+                        </button>
+                    </div>
+                    {typeof partCharCount === "number" && (
+                        <p
+                            className={cn(
+                                "text-[10px] text-center tabular-nums",
+                                overLimit
+                                    ? "text-red-700 font-medium"
+                                    : "text-slate-500"
+                            )}
+                        >
+                            {partCharCount}/1024 caracteres nesta mensagem
+                            {overLimit
+                                ? " — excede limite Meta (envio bloqueado)"
+                                : ""}
+                        </p>
+                    )}
                 </div>
             )}
             <div
                 className={cn(
-                    "flex-1 overflow-y-auto p-3 sm:p-4",
+                    "flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 sm:p-4",
                     "bg-[#e5ddd5]"
                 )}
             >
@@ -2082,15 +2117,50 @@ export function DatafyCampaignsPanel() {
                                 />
                                 {contentKind === "bulletin" &&
                                     bulletinAnalysis && (
-                                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600 space-y-1">
+                                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600 space-y-1.5">
+                                            <p className="font-medium text-slate-700">
+                                                {bulletinAnalysis.title}
+                                            </p>
+                                            <p className="tabular-nums">
+                                                {bulletinAnalysis.loadCount}{" "}
+                                                carga(s) ·{" "}
+                                                {bulletinAnalysis.totalChars}{" "}
+                                                caracteres no texto ·{" "}
+                                                {bulletinParts.length ||
+                                                    bulletinAnalysis.partCount}{" "}
+                                                mensagem(ns) para envio
+                                                {bulletinParts.length > 0
+                                                    ? ` · prévia = conteúdo preparado (${bulletinParts.reduce((s, p) => s + (p.charCount || 0), 0)} chars nas partes)`
+                                                    : ""}
+                                            </p>
+                                            {bulletinParts.length > 1 && (
+                                                <ul className="space-y-0.5 text-[11px] text-slate-500">
+                                                    {bulletinParts.map((p) => (
+                                                        <li key={p.index}>
+                                                            Parte {p.index + 1}
+                                                            :{" "}
+                                                            {p.loadIndexes
+                                                                ?.length || 0}{" "}
+                                                            carga(s) ·{" "}
+                                                            {p.charCount}/1024
+                                                            chars
+                                                            {p.templateName
+                                                                ? ` · ${p.templateName}`
+                                                                : ""}
+                                                            {!p.readyForRealSend
+                                                                ? " · bloqueada"
+                                                                : ""}
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            )}
                                             <p>
-                                                <strong>
-                                                    {bulletinAnalysis.title}
-                                                </strong>{" "}
-                                                — cargas preenchidas em templates
+                                                Cargas preenchidas em templates
                                                 reutilizáveis (1/2/3 por
                                                 mensagem). Variáveis mudam todo
-                                                dia sem nova aprovação Meta.
+                                                dia sem nova aprovação Meta. O
+                                                tamanho do campo de texto não
+                                                equivale a uma mensagem Meta.
                                             </p>
                                             {purpose === "utility" && (
                                                 <p className="text-amber-800">
@@ -3744,6 +3814,21 @@ export function DatafyCampaignsPanel() {
                                                     ? bulletinParts.length
                                                     : 1
                                             }
+                                            partCharCount={
+                                                contentKind === "bulletin"
+                                                    ? bulletinParts[
+                                                          previewPartIndex
+                                                      ]?.charCount
+                                                    : previewText.length
+                                            }
+                                            loadCountInPart={
+                                                contentKind === "bulletin"
+                                                    ? bulletinParts[
+                                                          previewPartIndex
+                                                      ]?.loadIndexes
+                                                          ?.length
+                                                    : undefined
+                                            }
                                             onPrevPart={() =>
                                                 setPreviewPartIndex((i) =>
                                                     Math.max(0, i - 1)
@@ -3782,6 +3867,18 @@ export function DatafyCampaignsPanel() {
                                     contentKind === "bulletin"
                                         ? bulletinParts.length
                                         : 1
+                                }
+                                partCharCount={
+                                    contentKind === "bulletin"
+                                        ? bulletinParts[previewPartIndex]
+                                              ?.charCount
+                                        : previewText.length
+                                }
+                                loadCountInPart={
+                                    contentKind === "bulletin"
+                                        ? bulletinParts[previewPartIndex]
+                                              ?.loadIndexes?.length
+                                        : undefined
                                 }
                                 onPrevPart={() =>
                                     setPreviewPartIndex((i) =>

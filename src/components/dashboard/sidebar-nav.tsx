@@ -90,8 +90,9 @@ const navGroups: NavGroup[] = [
     {
         label: "Desenvolvedor",
         items: [
-            { href: "/docs", label: "Docs da API", icon: FileText },
-            { href: "/swagger", label: "Swagger UI", icon: Code, external: true },
+            { href: "/docs", label: "Docs da API", icon: FileText, superadminOnly: true },
+            { href: "/swagger", label: "Swagger UI", icon: Code, external: true, superadminOnly: true },
+            { href: "/dashboard/api-docs", label: "Docs (painel)", icon: FileText, superadminOnly: true },
         ],
     },
     {
@@ -101,7 +102,12 @@ const navGroups: NavGroup[] = [
             { href: "/dashboard/sessions/access", label: "Acesso às sessões", icon: UserPlus },
             { href: "/dashboard/users", label: "Usuários", icon: Users, superadminOnly: true },
             { href: "/dashboard/settings", label: "Configurações", icon: Settings },
-            { href: "/dashboard/settings/integrations/datafy", label: "Integrações · Datafy", icon: Plug },
+            {
+                href: "/dashboard/settings/integrations/datafy",
+                label: "Integrações · Datafy",
+                icon: Plug,
+                superadminOnly: true,
+            },
             { href: "/dashboard/system-monitor", label: "Monitor do sistema", icon: Activity, superadminOnly: true },
             { href: "/dashboard/notifications", label: "Notificações", icon: Bell, superadminOnly: true },
         ],
