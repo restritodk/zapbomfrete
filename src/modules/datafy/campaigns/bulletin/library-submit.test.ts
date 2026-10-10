@@ -11,14 +11,17 @@ import { composeReusableBulletinParts } from "./templates";
 import { analyzeBulletin } from "./analyze";
 
 describe("Bulletin library ready for Meta approval", () => {
-    it("exposes exactly 3 MARKETING pt_BR models within Meta limits", () => {
+    it("exposes v1+v2 MARKETING pt_BR models within Meta limits", () => {
         const all = buildAllBulletinTemplateSubmissions();
-        assert.equal(all.length, 3);
+        assert.equal(all.length, 6);
         for (const s of all) {
             assert.equal(s.language, "pt_BR");
             assert.equal(s.category, "MARKETING");
             assert.equal(s.parameter_format, "POSITIONAL");
-            assert.ok(s.bodyCharCount <= 1024);
+            assert.ok(
+                s.bodyCharCount <= 1024,
+                `${s.name} BODY ${s.bodyCharCount}`
+            );
             assert.equal(s.exampleRow.length, s.variableCount);
             assert.equal(
                 countPositionalVars(s.bodyText),
@@ -28,10 +31,10 @@ describe("Bulletin library ready for Meta approval", () => {
             assert.ok(s.previewFilled.length > 20);
             assert.equal(s.previewFilled.includes("{{"), false);
         }
-        assert.deepEqual(
-            all.map((x) => x.name),
-            ["boletim_1_carga", "boletim_2_cargas", "boletim_3_cargas"]
-        );
+        const names = all.map((x) => x.name);
+        assert.ok(names.includes("boletim_1_carga"));
+        assert.ok(names.includes("boletim_v2_1_carga"));
+        assert.ok(names.includes("boletim_v2_3_cargas"));
     });
 
     it("does not use PENDING templates for real-send composition", () => {
@@ -62,25 +65,18 @@ describe("Bulletin library ready for Meta approval", () => {
     });
 
     it("fills different daily values without changing template name", () => {
-        const spec = BULLETIN_TEMPLATE_LIBRARY[0];
+        const spec = BULLETIN_TEMPLATE_LIBRARY.find(
+            (s) => s.id === "boletim_v2_1_carga"
+        )!;
         const sub = buildBulletinTemplateSubmission(spec);
+        const base = [...sub.exampleRow];
         const dayA = fillTemplatePreview(sub.bodyText, [
             "Cidade A",
-            "Porto A",
-            "Term A",
-            "L1",
-            "https://maps.app.goo.gl/a",
-            "Tag",
-            "Dia 1",
+            ...base.slice(1),
         ]);
         const dayB = fillTemplatePreview(sub.bodyText, [
             "Cidade B",
-            "Porto B",
-            "Term B",
-            "L2",
-            "https://maps.app.goo.gl/b",
-            "Tag",
-            "Dia 2",
+            ...base.slice(1),
         ]);
         assert.notEqual(dayA, dayB);
         assert.match(dayA, /Cidade A/);

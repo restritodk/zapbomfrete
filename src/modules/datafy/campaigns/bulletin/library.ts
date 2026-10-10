@@ -1,11 +1,13 @@
 /**
  * Reusable Meta template library for daily freight bulletins.
  *
- * Approve these once (MARKETING recommended for divulgação de cargas).
- * Daily values change via variables — no new approval per bulletin.
+ * v1 (7 vars/load): origem, destino, terminal, lote, localização, pedágio, detalhes
+ * v2 (11 vars/load): rich freight fields — prefer when APPROVED
  *
- * Meta limits used here:
- * - Template BODY text ≤ 1024 chars (fixed structure + {{n}})
+ * Approve once (MARKETING). Daily values change via variables.
+ *
+ * Meta limits:
+ * - Template BODY text ≤ 1024 chars
  * - Each body parameter value ≤ 1024 chars at send time
  */
 
@@ -14,14 +16,21 @@ export const META_TEMPLATE_PARAM_MAX = 1024;
 
 export type LoadSlotField =
     | "origem"
+    | "localCarregamento"
     | "destino"
     | "terminal"
+    | "janela"
+    | "veiculo"
+    | "quantidade"
+    | "frete"
     | "lote"
     | "localizacao"
     | "pedagio"
+    | "observacoes"
     | "detalhes";
 
-export const LOAD_SLOT_FIELDS: LoadSlotField[] = [
+/** Legacy 7-slot layout (boletim_1/2/3). */
+export const LOAD_SLOT_FIELDS_V1: LoadSlotField[] = [
     "origem",
     "destino",
     "terminal",
@@ -31,30 +40,39 @@ export const LOAD_SLOT_FIELDS: LoadSlotField[] = [
     "detalhes",
 ];
 
+/** Rich 11-slot layout (boletim_v2_*). */
+export const LOAD_SLOT_FIELDS_V2: LoadSlotField[] = [
+    "origem",
+    "localCarregamento",
+    "destino",
+    "terminal",
+    "janela",
+    "veiculo",
+    "quantidade",
+    "frete",
+    "localizacao",
+    "pedagio",
+    "observacoes",
+];
+
+/** @deprecated use LOAD_SLOT_FIELDS_V1 — kept for older imports */
+export const LOAD_SLOT_FIELDS = LOAD_SLOT_FIELDS_V1;
+
 export type BulletinTemplateSpec = {
-    /** Stable library id */
     id: string;
-    /** Preferred Meta template name (snake_case) */
     preferredName: string;
-    /** Alternate names accepted when matching APPROVED templates */
     namePatterns: RegExp[];
     loadsPerMessage: 1 | 2 | 3;
-    /** Expected {{n}} count in BODY */
     variableCount: number;
-    /**
-     * Recommended Meta category for Bom Frete load broadcasts.
-     * Divulgação de cargas is typically MARKETING — do not force UTILITY.
-     */
+    generation: 1 | 2;
+    slotFields: LoadSlotField[];
     recommendedCategory: "MARKETING" | "UTILITY";
-    /** Human description */
     description: string;
-    /** BODY text to submit once for Meta approval (pt_BR) */
     bodyTextForApproval: string;
-    /** Example row for Meta template examples */
     exampleRow: string[];
 };
 
-function loadBlock(startVar: number, cargaLabel: string): string {
+function loadBlockV1(startVar: number, cargaLabel: string): string {
     const n = startVar;
     return [
         `*${cargaLabel}*`,
@@ -68,11 +86,25 @@ function loadBlock(startVar: number, cargaLabel: string): string {
     ].join("\n");
 }
 
-/**
- * Meta example values: no newlines, no leading/trailing spaces,
- * ≤ 1024 chars. URL samples are allowed in MARKETING body params.
- */
-const EXAMPLE_LOAD = [
+function loadBlockV2(startVar: number, cargaLabel: string): string {
+    const n = startVar;
+    return [
+        `*${cargaLabel}*`,
+        `Origem: {{${n}}}`,
+        `Local carreg.: {{${n + 1}}}`,
+        `Destino: {{${n + 2}}}`,
+        `Descarga: {{${n + 3}}}`,
+        `Janela: {{${n + 4}}}`,
+        `Veículo: {{${n + 5}}}`,
+        `Qtd: {{${n + 6}}}`,
+        `Frete: {{${n + 7}}}`,
+        `Maps: {{${n + 8}}}`,
+        `Pedágio: {{${n + 9}}}`,
+        `Obs.: {{${n + 10}}}`,
+    ].join("\n");
+}
+
+const EXAMPLE_LOAD_V1 = [
     "Rondonopolis/MT",
     "Paranagua/PR",
     "Terminal Exemplo",
@@ -82,78 +114,155 @@ const EXAMPLE_LOAD = [
     "Embarque confirmado",
 ];
 
-function examplesForLoads(n: number): string[] {
-    const row: string[] = [];
+const EXAMPLE_LOAD_V2 = [
+    "Sapezal/MT",
+    "FAZ SAUDADES",
+    "Rondonopolis/MT",
+    "ALG COOPERBEM",
+    "D+5 UTEIS",
+    "RODOTREM",
+    "2",
+    "R$ 280,00/TON",
+    "https://maps.app.goo.gl/exemplo",
+    "PEDAGIO INCLUSO NO FRETE",
+    "Sem observacoes",
+];
+
+function examplesForLoads(n: number, row: string[]): string[] {
+    const out: string[] = [];
     for (let i = 0; i < n; i++) {
-        row.push(...EXAMPLE_LOAD.map((v, j) => (j === 3 ? `Lote ${100 + i}` : v)));
+        out.push(
+            ...row.map((v, j) =>
+                j === 3 && row === EXAMPLE_LOAD_V1 ? `Lote ${100 + i}` : v
+            )
+        );
     }
-    return row;
+    return out;
 }
 
+function makeV1(
+    loads: 1 | 2 | 3,
+    id: string,
+    preferredName: string,
+    patterns: RegExp[],
+    description: string
+): BulletinTemplateSpec {
+    const blocks: string[] = ["*ATUALIZAÇÃO DE EMBARQUE*", ""];
+    for (let i = 0; i < loads; i++) {
+        if (i > 0) blocks.push("");
+        blocks.push(
+            loadBlockV1(
+                1 + i * 7,
+                loads === 1 ? "Carga" : `Carga ${i + 1}`
+            )
+        );
+    }
+    return {
+        id,
+        preferredName,
+        namePatterns: patterns,
+        loadsPerMessage: loads,
+        variableCount: loads * 7,
+        generation: 1,
+        slotFields: LOAD_SLOT_FIELDS_V1,
+        recommendedCategory: "MARKETING",
+        description,
+        bodyTextForApproval: blocks.join("\n"),
+        exampleRow: examplesForLoads(loads, EXAMPLE_LOAD_V1),
+    };
+}
+
+function makeV2(
+    loads: 1 | 2 | 3,
+    id: string,
+    preferredName: string,
+    patterns: RegExp[],
+    description: string
+): BulletinTemplateSpec {
+    const blocks: string[] = ["*ATUALIZAÇÃO DE EMBARQUE*", ""];
+    for (let i = 0; i < loads; i++) {
+        if (i > 0) blocks.push("");
+        blocks.push(
+            loadBlockV2(
+                1 + i * 11,
+                loads === 1 ? "Carga" : `Carga ${i + 1}`
+            )
+        );
+    }
+    return {
+        id,
+        preferredName,
+        namePatterns: patterns,
+        loadsPerMessage: loads,
+        variableCount: loads * 11,
+        generation: 2,
+        slotFields: LOAD_SLOT_FIELDS_V2,
+        recommendedCategory: "MARKETING",
+        description,
+        bodyTextForApproval: blocks.join("\n"),
+        exampleRow: examplesForLoads(loads, EXAMPLE_LOAD_V2),
+    };
+}
+
+/**
+ * Full library: v2 first (preferred when APPROVED), then v1 (already in use).
+ * Do not mutate APPROVED v1 bodies — new fields require v2 submission.
+ */
 export const BULLETIN_TEMPLATE_LIBRARY: BulletinTemplateSpec[] = [
-    {
-        id: "boletim_1_carga",
-        preferredName: "boletim_1_carga",
-        namePatterns: [
+    makeV2(
+        1,
+        "boletim_v2_1_carga",
+        "boletim_v2_1_carga",
+        [/^boletim_v2_1_carga$/i, /^bf_boletim_v2_1(_carga)?$/i],
+        "v2 · 1 carga (11 variáveis: frete, janela, veículo…)"
+    ),
+    makeV2(
+        2,
+        "boletim_v2_2_cargas",
+        "boletim_v2_2_cargas",
+        [/^boletim_v2_2_cargas$/i, /^bf_boletim_v2_2(_cargas)?$/i],
+        "v2 · 2 cargas (22 variáveis)"
+    ),
+    makeV2(
+        3,
+        "boletim_v2_3_cargas",
+        "boletim_v2_3_cargas",
+        [/^boletim_v2_3_cargas$/i, /^bf_boletim_v2_3(_cargas)?$/i],
+        "v2 · 3 cargas (33 variáveis) — BODY estrutural ≤ 1024"
+    ),
+    makeV1(
+        1,
+        "boletim_1_carga",
+        "boletim_1_carga",
+        [
             /^boletim_1_carga$/i,
             /^bf_boletim_1(_carga)?$/i,
             /^bomfrete_boletim_1$/i,
         ],
-        loadsPerMessage: 1,
-        variableCount: 7,
-        recommendedCategory: "MARKETING",
-        description: "1 carga por mensagem (7 variáveis)",
-        bodyTextForApproval: [
-            "*ATUALIZAÇÃO DE EMBARQUE*",
-            "",
-            loadBlock(1, "Carga"),
-        ].join("\n"),
-        exampleRow: examplesForLoads(1),
-    },
-    {
-        id: "boletim_2_cargas",
-        preferredName: "boletim_2_cargas",
-        namePatterns: [
+        "v1 · 1 carga (7 variáveis) — legado"
+    ),
+    makeV1(
+        2,
+        "boletim_2_cargas",
+        "boletim_2_cargas",
+        [
             /^boletim_2_cargas$/i,
             /^bf_boletim_2(_cargas)?$/i,
             /^bomfrete_boletim_2$/i,
         ],
-        loadsPerMessage: 2,
-        variableCount: 14,
-        recommendedCategory: "MARKETING",
-        description: "2 cargas por mensagem (14 variáveis)",
-        bodyTextForApproval: [
-            "*ATUALIZAÇÃO DE EMBARQUE*",
-            "",
-            loadBlock(1, "Carga 1"),
-            "",
-            loadBlock(8, "Carga 2"),
-        ].join("\n"),
-        exampleRow: examplesForLoads(2),
-    },
-    {
-        id: "boletim_3_cargas",
-        preferredName: "boletim_3_cargas",
-        namePatterns: [
+        "v1 · 2 cargas (14 variáveis) — legado"
+    ),
+    makeV1(
+        3,
+        "boletim_3_cargas",
+        "boletim_3_cargas",
+        [
             /^boletim_3_cargas$/i,
             /^bf_boletim_3(_cargas)?$/i,
             /^bomfrete_boletim_3$/i,
         ],
-        loadsPerMessage: 3,
-        variableCount: 21,
-        recommendedCategory: "MARKETING",
-        description: "3 cargas por mensagem (21 variáveis)",
-        bodyTextForApproval: [
-            "*ATUALIZAÇÃO DE EMBARQUE*",
-            "",
-            loadBlock(1, "Carga 1"),
-            "",
-            loadBlock(8, "Carga 2"),
-            "",
-            loadBlock(15, "Carga 3"),
-        ].join("\n"),
-        exampleRow: examplesForLoads(3),
-    },
+        "v1 · 3 cargas (21 variáveis) — legado"
+    ),
 ];
 
 export function countPositionalVars(bodyText: string): number {
@@ -166,20 +275,23 @@ export function countPositionalVars(bodyText: string): number {
 export function sanitizeTemplateParam(value: string | null | undefined): string {
     const raw = (value || "").trim();
     if (!raw) return "N/D";
-    const flat = raw.replace(/\r\n/g, "\n").replace(/\n+/g, " · ").replace(/\s+/g, " ");
+    const flat = raw
+        .replace(/\r\n/g, "\n")
+        .replace(/\n+/g, " · ")
+        .replace(/\s+/g, " ");
     if (flat.length <= META_TEMPLATE_PARAM_MAX) return flat;
     return flat.slice(0, META_TEMPLATE_PARAM_MAX - 1) + "…";
 }
 
-export function matchLibrarySpec(
-    template: { name: string; components?: unknown[] }
-): BulletinTemplateSpec | null {
+export function matchLibrarySpec(template: {
+    name: string;
+    components?: unknown[];
+}): BulletinTemplateSpec | null {
     for (const spec of BULLETIN_TEMPLATE_LIBRARY) {
         if (spec.namePatterns.some((re) => re.test(template.name))) {
             return spec;
         }
     }
-    // Fallback: variable count
     if (Array.isArray(template.components)) {
         for (const c of template.components) {
             const comp = c as { type?: string; text?: string };
@@ -218,6 +330,7 @@ export type BulletinTemplateSubmission = {
     variableCount: number;
     bodyCharCount: number;
     loadsPerMessage: 1 | 2 | 3;
+    generation: 1 | 2;
     description: string;
     previewFilled: string;
     checks: {
@@ -259,11 +372,19 @@ export function buildBulletinTemplateSubmission(
     if (!categoryMarketing) {
         notes.push("Categoria recomendada deveria ser MARKETING para divulgação.");
     }
+    if (spec.generation === 2) {
+        notes.push(
+            "Template v2 — não altera modelos v1 já APPROVED; submeter novos nomes boletim_v2_*."
+        );
+    }
     notes.push(
         "Submissão via Datafy POST /v1/{waba_id}/message_templates — Meta analisa e retorna PENDING."
     );
     notes.push(
         "Não usar em campanha real até status APPROVED na listagem oficial."
+    );
+    notes.push(
+        "Links de grupo WhatsApp não entram automaticamente nas variáveis — política e revisão humana."
     );
 
     return {
@@ -276,6 +397,7 @@ export function buildBulletinTemplateSubmission(
         variableCount,
         bodyCharCount: bodyText.length,
         loadsPerMessage: spec.loadsPerMessage,
+        generation: spec.generation,
         description: spec.description,
         previewFilled: fillTemplatePreview(bodyText, exampleRow),
         checks: {
@@ -295,6 +417,13 @@ export function buildBulletinTemplateSubmission(
 
 export function buildAllBulletinTemplateSubmissions(): BulletinTemplateSubmission[] {
     return BULLETIN_TEMPLATE_LIBRARY.map(buildBulletinTemplateSubmission);
+}
+
+/** Only v2 specs — for checklist when preparing rich templates. */
+export function buildV2BulletinTemplateSubmissions(): BulletinTemplateSubmission[] {
+    return BULLETIN_TEMPLATE_LIBRARY.filter((s) => s.generation === 2).map(
+        buildBulletinTemplateSubmission
+    );
 }
 
 export function findBulletinSpecByName(

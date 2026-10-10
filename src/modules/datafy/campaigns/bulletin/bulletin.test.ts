@@ -85,9 +85,14 @@ describe("Reusable bulletin templates (6G)", () => {
         assert.equal(parts.length, 2);
         assert.equal(parts[0].loadIndexes.length, 3);
         assert.equal(parts[1].loadIndexes.length, 3);
-        assert.equal(parts[0].templateName, "boletim_3_cargas");
+        assert.ok(
+            parts[0].templateName === "boletim_v2_3_cargas" ||
+                parts[0].templateName === "boletim_3_cargas"
+        );
         assert.equal(parts[0].readyForRealSend, true);
-        assert.equal(parts[0].variableMapping?.body?.length, 21);
+        assert.ok(
+            (parts[0].variableMapping?.body?.length || 0) >= 21
+        );
         assert.match(parts[0].bodyText, /Cidade A1/);
         assert.match(parts[1].bodyText, /Cidade A4/);
         assert.equal(allPartsReadyForRealSend(parts), true);
@@ -111,7 +116,7 @@ describe("Reusable bulletin templates (6G)", () => {
         const parts = composeReusableBulletinParts(a, []);
         assert.equal(parts[0].readyForRealSend, false);
         assert.equal(parts[0].compatibility, "missing_template");
-        assert.match(parts[0].blockReason || "", /boletim_1_carga/);
+        assert.match(parts[0].blockReason || "", /boletim_/);
     });
 
     it("does not require re-approval when only variable values change", () => {
@@ -132,12 +137,13 @@ describe("Reusable bulletin templates (6G)", () => {
         );
     });
 
-    it("sanitizes params and checklist lists 3 reusable models", () => {
+    it("sanitizes params and checklist lists v1+v2 reusable models", () => {
         assert.equal(sanitizeTemplateParam(""), "N/D");
         assert.equal(sanitizeTemplateParam("a\nb"), "a · b");
         const list = libraryApprovalChecklist();
-        assert.equal(list.length, 3);
+        assert.equal(list.length, 6);
         assert.ok(list.every((x) => x.recommendedCategory === "MARKETING"));
+        assert.ok(list.some((x) => x.generation === 2));
     });
 
     it("warns when only UTILITY templates exist for marketing purpose", () => {

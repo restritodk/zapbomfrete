@@ -1,19 +1,19 @@
 import type {
     BulletinAnalysis,
     BulletinLoad,
+    BulletinLoadFields,
     BulletinPart,
     CampaignMessagePart,
 } from "./types";
 import {
     BULLETIN_TEMPLATE_LIBRARY,
-    LOAD_SLOT_FIELDS,
     fillTemplatePreview,
     matchLibrarySpec,
     sanitizeTemplateParam,
     type BulletinTemplateSpec,
+    type LoadSlotField,
 } from "./library";
 
-// Re-export match helpers that library doesn't export as ApprovedTemplateLite
 export type { BulletinTemplateSpec };
 
 export type ApprovedTemplateLite = {
@@ -29,7 +29,8 @@ type MatchedTemplate = ApprovedTemplateLite & {
 };
 
 /**
- * Map APPROVED Datafy templates to library specs (1/2/3 loads).
+ * Map APPROVED Datafy templates to library specs (v1 + v2).
+ * Prefer richer (v2) and larger packs when sorting.
  */
 export function resolveReusableBulletinTemplates(
     templates: ApprovedTemplateLite[]
@@ -43,8 +44,12 @@ export function resolveReusableBulletinTemplates(
         if (!spec) continue;
         matched.push({ ...t, spec });
     }
-    // Prefer larger packs when multiple matches for same capacity
-    matched.sort((a, b) => b.spec.loadsPerMessage - a.spec.loadsPerMessage);
+    matched.sort((a, b) => {
+        if (b.spec.loadsPerMessage !== a.spec.loadsPerMessage) {
+            return b.spec.loadsPerMessage - a.spec.loadsPerMessage;
+        }
+        return b.spec.generation - a.spec.generation;
+    });
     return matched;
 }
 
@@ -55,37 +60,69 @@ function pickTemplateForCapacity(
 ): MatchedTemplate | null {
     const pool = matched.filter((m) => m.spec.loadsPerMessage === capacity);
     if (!pool.length) return null;
+    // Prefer v2 (richer) then category
+    const sorted = [...pool].sort(
+        (a, b) => b.spec.generation - a.spec.generation
+    );
     if (preferredCategory) {
-        const pref = pool.find(
+        const pref = sorted.find(
             (m) =>
                 String(m.category || "").toUpperCase() ===
                 preferredCategory.toUpperCase()
         );
         if (pref) return pref;
     }
-    // Prefer MARKETING for load broadcast when available
-    const marketing = pool.find(
+    const marketing = sorted.find(
         (m) => String(m.category || "").toUpperCase() === "MARKETING"
     );
-    return marketing || pool[0];
+    return marketing || sorted[0];
 }
 
-function valuesForLoad(load: BulletinLoad): string[] {
-    const f = load.fields;
-    return LOAD_SLOT_FIELDS.map((key) => {
-        if (key === "localizacao") {
-            return sanitizeTemplateParam(f.localizacaoUrl);
-        }
-        if (key === "detalhes") {
-            return sanitizeTemplateParam(f.detalhes);
-        }
-        if (key === "origem") return sanitizeTemplateParam(f.origem);
-        if (key === "destino") return sanitizeTemplateParam(f.destino);
-        if (key === "terminal") return sanitizeTemplateParam(f.terminal);
-        if (key === "lote") return sanitizeTemplateParam(f.lote);
-        if (key === "pedagio") return sanitizeTemplateParam(f.pedagio);
-        return "N/D";
-    });
+function fieldValue(
+    fields: BulletinLoadFields,
+    key: LoadSlotField
+): string {
+    switch (key) {
+        case "localizacao":
+            return sanitizeTemplateParam(fields.localizacaoUrl);
+        case "origem":
+            return sanitizeTemplateParam(fields.origem);
+        case "localCarregamento":
+            return sanitizeTemplateParam(fields.localCarregamento);
+        case "destino":
+            return sanitizeTemplateParam(fields.destino);
+        case "terminal":
+            return sanitizeTemplateParam(fields.terminal);
+        case "janela":
+            return sanitizeTemplateParam(fields.janela);
+        case "veiculo":
+            return sanitizeTemplateParam(fields.veiculo);
+        case "quantidade":
+            return sanitizeTemplateParam(
+                fields.quantidade || fields.lote
+            );
+        case "frete":
+            return sanitizeTemplateParam(fields.frete);
+        case "lote":
+            return sanitizeTemplateParam(fields.lote);
+        case "pedagio":
+            return sanitizeTemplateParam(fields.pedagio);
+        case "observacoes":
+            return sanitizeTemplateParam(
+                fields.observacoes || fields.detalhes
+            );
+        case "detalhes":
+            return sanitizeTemplateParam(fields.detalhes);
+        default:
+            return "N/D";
+    }
+}
+
+export function valuesForLoad(
+    load: BulletinLoad,
+    slotFields: LoadSlotField[]
+): string[] {
+    return slotFields.map((key) => fieldValue(load.fields, key));
 }
 
 function bodyTextOf(t: ApprovedTemplateLite): string | null {
@@ -122,7 +159,6 @@ export function composeReusableBulletinParts(
         opts?.purpose === "utility" ? "UTILITY" : "MARKETING";
 
     if (!availableCaps.length) {
-        // No reusable library template approved — one blocked part explaining the gap
         return [
             {
                 index: 0,
@@ -133,7 +169,7 @@ export function composeReusableBulletinParts(
                 readyForRealSend: false,
                 compatibility: "missing_template",
                 blockReason:
-                    "Nenhum template APPROVED da biblioteca de boletins (boletim_1_carga / boletim_2_cargas / boletim_3_cargas). Aprove esses modelos uma vez em Integrações → Datafy e reutilize diariamente.",
+                    "Nenhum template APPROVED da biblioteca de boletins (v1 boletim_* ou v2 boletim_v2_*). Aprove os modelos em Integrações → Datafy.",
                 policyWarning:
                     "Divulgação de cargas costuma ser MARKETING na Meta — não force UTILITY só para facilitar aprovação.",
             },
@@ -172,8 +208,9 @@ export function composeReusableBulletinParts(
             continue;
         }
 
-        const bodyValues = slice.flatMap(valuesForLoad);
-        // Pad to expected variable count with N/D
+        const bodyValues = slice.flatMap((load) =>
+            valuesForLoad(load, tmpl.spec.slotFields)
+        );
         while (bodyValues.length < tmpl.spec.variableCount) {
             bodyValues.push("N/D");
         }
@@ -189,12 +226,17 @@ export function composeReusableBulletinParts(
 
         const cat = String(tmpl.category || "").toUpperCase();
         let policyWarning: string | null = null;
-        if (
-            preferredCategory === "MARKETING" &&
-            cat === "UTILITY"
-        ) {
+        if (preferredCategory === "MARKETING" && cat === "UTILITY") {
             policyWarning =
                 "Template UTILITY selecionado para divulgação de cargas — revise a classificação Meta (geralmente MARKETING).";
+        }
+        if (tmpl.spec.generation === 1) {
+            policyWarning = [
+                policyWarning,
+                "Usando template v1 (7 campos). Campos ricos (frete/janela/veículo) vão em Detalhes até aprovar boletim_v2_*.",
+            ]
+                .filter(Boolean)
+                .join(" ");
         }
 
         const totalPartsEstimate = Math.ceil(
@@ -230,7 +272,6 @@ export function composeReusableBulletinParts(
         partIndex++;
     }
 
-    // Fix PART X/Y labels with final count
     const total = parts.length;
     if (total > 1) {
         for (const p of parts) {
@@ -242,25 +283,25 @@ export function composeReusableBulletinParts(
 }
 
 /**
- * @deprecated Prefer composeReusableBulletinParts — kept for transitional callers.
- * Exact body match is no longer the primary strategy for daily bulletins.
+ * @deprecated Prefer composeReusableBulletinParts
  */
 export function associatePartsWithTemplates(
     parts: BulletinPart[],
     templates: ApprovedTemplateLite[],
     opts?: { purpose?: string }
 ): CampaignMessagePart[] {
-    // Bridge: rebuild a minimal analysis from free-text parts (legacy)
     const loads: BulletinLoad[] = parts.flatMap((p) =>
         p.loadIndexes.map((idx) => ({
             index: idx,
             text: p.bodyText,
             fields: {},
+            unrecognizedLines: [],
+            ambiguous: [],
             charCount: p.bodyText.length,
             exceedsLimit: false,
+            completeness: 0,
         }))
     );
-    // Deduplicate by index
     const byIdx = new Map<number, BulletinLoad>();
     for (const l of loads) {
         if (!byIdx.has(l.index)) byIdx.set(l.index, l);
@@ -268,12 +309,14 @@ export function associatePartsWithTemplates(
     const analysis: BulletinAnalysis = {
         title: "Boletim de cargas",
         rawText: parts.map((p) => p.bodyText).join("\n\n"),
+        general: { title: "Boletim de cargas" },
         loads: Array.from(byIdx.values()).sort((a, b) => a.index - b.index),
         parts,
         loadCount: byIdx.size,
         partCount: parts.length,
         warnings: [],
         totalChars: parts.reduce((s, p) => s + p.charCount, 0),
+        unrecognizedLines: [],
     };
     if (!analysis.loads.length) {
         return composeReusableBulletinParts(
@@ -283,8 +326,11 @@ export function associatePartsWithTemplates(
                     index: i,
                     text: p.bodyText,
                     fields: {},
+                    unrecognizedLines: [],
+                    ambiguous: [],
                     charCount: p.charCount,
                     exceedsLimit: false,
+                    completeness: 0,
                 })),
             },
             templates,
@@ -311,6 +357,7 @@ export function libraryApprovalChecklist(): Array<{
     preferredName: string;
     loadsPerMessage: number;
     variableCount: number;
+    generation: number;
     recommendedCategory: string;
     description: string;
 }> {
@@ -318,6 +365,7 @@ export function libraryApprovalChecklist(): Array<{
         preferredName: s.preferredName,
         loadsPerMessage: s.loadsPerMessage,
         variableCount: s.variableCount,
+        generation: s.generation,
         recommendedCategory: s.recommendedCategory,
         description: s.description,
     }));

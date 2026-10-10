@@ -65,6 +65,7 @@ const navGroups: NavGroup[] = [
         items: [
             { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
             { href: "/dashboard/broadcast", label: "Disparo em massa", icon: Megaphone },
+            { href: "/dashboard/boletim", label: "Criador de boletins", icon: FileText },
             { href: "/dashboard/sticker", label: "Criador de figurinhas", icon: ImageIcon },
         ],
     },

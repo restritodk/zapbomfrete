@@ -97,6 +97,7 @@ import {
     formatPhoneDisplay,
     parsePhoneList,
 } from "@/lib/phone-br";
+import { DATAFY_BULLETIN_IMPORT_KEY } from "@/modules/datafy/campaigns/bulletin/constants";
 import { cn } from "@/lib/utils";
 
 type AudienceResult = {
@@ -795,6 +796,36 @@ export function DatafyCampaignsPanel() {
             setStep(2);
             toast.success(
                 `${parsed.phones.length} número(s) importados dos grupos. Calcule a audiência para cruzar com o CRM.`
+            );
+        } catch {
+            /* ignore */
+        }
+    }, []);
+
+    // Handoff from Criador inteligente de boletins → Step 1 (bulletin)
+    useEffect(() => {
+        try {
+            const raw = sessionStorage.getItem(DATAFY_BULLETIN_IMPORT_KEY);
+            if (!raw) return;
+            sessionStorage.removeItem(DATAFY_BULLETIN_IMPORT_KEY);
+            const parsed = JSON.parse(raw) as {
+                title?: string;
+                rawText?: string;
+                loadCount?: number;
+            };
+            if (!parsed.rawText?.trim()) return;
+            setContentKind("bulletin");
+            setContentMode("custom");
+            setPurpose("marketing");
+            setName(
+                parsed.title?.trim() ||
+                    `Boletim ${new Date().toLocaleDateString("pt-BR")}`
+            );
+            setMessageBody(parsed.rawText);
+            setWizardOpen(true);
+            setStep(1);
+            toast.success(
+                `Boletim importado (${parsed.loadCount || "?"} cargas). Revise e avance para o público.`
             );
         } catch {
             /* ignore */

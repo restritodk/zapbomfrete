@@ -1,8 +1,13 @@
 import {
+    BULLETIN_IMPORT_MAX_CHARS,
+    BULLETIN_IMPORT_MAX_LOADS,
     BULLETIN_PART_SAFETY_MARGIN,
     META_TEMPLATE_BODY_MAX,
     type BulletinAnalysis,
+    type BulletinAmbiguousField,
+    type BulletinGeneralMeta,
     type BulletinLoad,
+    type BulletinLoadFields,
     type BulletinPart,
 } from "./types";
 
@@ -10,75 +15,289 @@ import {
 const SEPARATOR_LINE =
     /^(?:[-_=─━═\*~]{3,}|\.{3,}|▪️{2,}|●{2,}|•{3,})\s*$/;
 
-const FIELD_PATTERNS: Array<{
-    key: keyof BulletinLoad["fields"];
+const MAPS_URL_RE =
+    /(https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.[^\s]+|www\.google\.[^\s]*maps[^\s]*|maps\.apple\.[^\s]+)[^\s]*)/i;
+
+const GROUP_URL_RE = /(https?:\/\/chat\.whatsapp\.com\/[^\s]+)/i;
+
+const LABEL_PATTERNS: Array<{
+    key: keyof BulletinLoadFields;
     re: RegExp;
 }> = [
-    { key: "origem", re: /(?:^|\n)\s*(?:origem|orige[mn]|de)\s*[:：]\s*(.+)/i },
+    {
+        key: "origem",
+        re: /^(?:origem|orige[mn]|de)\s*[:：\-–]\s*(.+)$/i,
+    },
     {
         key: "destino",
-        re: /(?:^|\n)\s*(?:destino|para|até)\s*[:：]\s*(.+)/i,
+        re: /^(?:destino|para|até|ate)\s*[:：\-–]\s*(.+)$/i,
     },
     {
         key: "terminal",
-        re: /(?:^|\n)\s*(?:terminal|porto|armazém|armazem)\s*[:：]\s*(.+)/i,
+        re: /^(?:terminal|porto|descarga|local\s*de\s*descarga|armaz[eé]m)\s*[:：\-–]\s*(.+)$/i,
     },
-    { key: "lote", re: /(?:^|\n)\s*(?:lote|pedido|os)\s*[:：]\s*(.+)/i },
+    {
+        key: "localCarregamento",
+        re: /^(?:local\s*(?:de\s*)?carreg(?:amento)?|carregamento|fazenda|algodoeira|cooperativa|ind[uú]stria)\s*[:：\-–]\s*(.+)$/i,
+    },
+    {
+        key: "janela",
+        re: /^(?:janela|carreg(?:amento)?\/?entrega|prazo|data(?:\s*de\s*carregamento)?|agendamento)\s*[:：\-–]\s*(.+)$/i,
+    },
+    {
+        key: "veiculo",
+        re: /^(?:ve[ií]culo|tipo\s*(?:de\s*)?ve[ií]culo|caminh[aã]o|equipamento)\s*[:：\-–]\s*(.+)$/i,
+    },
+    {
+        key: "quantidade",
+        re: /^(?:qtd|quantidade|qtde|ve[ií]culos?|lote\s*de\s*ve[ií]culos?)\s*[:：\-–]\s*(.+)$/i,
+    },
+    {
+        key: "frete",
+        re: /^(?:frete|valor(?:\s*do\s*frete)?|pre[cç]o)\s*[:：\-–]\s*(.+)$/i,
+    },
+    {
+        key: "lote",
+        re: /^(?:lote|pedido|os|n[ºo°]\s*lote)\s*[:：\-–]\s*(.+)$/i,
+    },
     {
         key: "pedagio",
-        re: /(?:^|\n)\s*(?:pedágio|pedagio|tag)\s*[:：]\s*(.+)/i,
+        re: /^(?:ped[aá]gio|tag|condi[cç][aã]o\s*(?:do\s*)?ped[aá]gio)\s*[:：\-–]\s*(.+)$/i,
     },
     {
-        key: "localizacaoUrl",
-        re: /(https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.[^\s]+|www\.google\.[^\s]*maps[^\s]*|maps\.apple\.[^\s]+)[^\s]*)/i,
+        key: "rotaPedagio",
+        re: /^(?:rota|observa[cç][aã]o\s*(?:de\s*)?ped[aá]gio|obs\.?\s*ped[aá]gio)\s*[:：\-–]\s*(.+)$/i,
     },
     {
-        key: "grupoUrl",
-        re: /(https?:\/\/chat\.whatsapp\.com\/[^\s]+)/i,
+        key: "observacoes",
+        re: /^(?:observa[cç][oõ]es?|obs\.?|notas?|info(?:rma[cç][oõ]es?)?)\s*[:：\-–]\s*(.+)$/i,
     },
 ];
 
-const STRUCTURED_LINE =
-    /^\s*(?:origem|destino|terminal|porto|armaz[eé]m|lote|pedido|os|pedágio|pedagio|tag|localiza[cç][aã]o|grupo)\s*[:：]/i;
+const PLACE_PREFIX =
+    /^(?:FAZ(?:ENDA)?|ALG(?:ODOEIRA)?|COOP(?:ERATIVA)?|ARMAZ(?:[EÉ]M)?|IND(?:[UÚ]STRIA)?|TERMINAL|PORTO)\b[\s.\-]*(.+)$/i;
 
-function extractFields(text: string): BulletinLoad["fields"] {
-    const fields: BulletinLoad["fields"] = {};
-    for (const { key, re } of FIELD_PATTERNS) {
-        const m = text.match(re);
-        if (m?.[1]) {
-            const v = m[1].trim().split(/\n/)[0].trim();
-            if (v) fields[key] = v;
+const VEHICLE_INLINE =
+    /\b(rodotrem|bitrem|tritrem|carreta|truck|toco|3\/4|quarto\s*eixo|4[ºo°]?\s*eixo|ls|vanderleia|graneleiro|sider|bau|baú)\b/i;
+
+const WINDOW_INLINE =
+    /\b(D\s*\+\s*\d+\s*(?:[uú]teis?|dias?)?|\d{1,2}[\/.\-]\d{1,2}(?:[\/.\-]\d{2,4})?)\b/i;
+
+const FRETE_INLINE =
+    /(?:R\$\s*[\d.]+(?:,\d{2})?(?:\s*\/?\s*(?:TON|t|kg|un|viagem)?)?|[\d.]+(?:,\d{2})?\s*(?:\/\s*)?(?:TON|t)\b)/i;
+
+const PEDAGIO_INLINE =
+    /ped[aá]gio\s+(incluso|n[aã]o\s+incluso|por\s+conta|tag\s*ok|ok)/i;
+
+const CITY_UF =
+    /\b([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s.'-]{1,40})\s*[\/\-]\s*([A-Z]{2})\b/;
+
+const EMOJI_OR_DECOR =
+    /^[🚛📦✅⭐🔥💪📍⏰🎉🛣🚚🏭📅🔢💰➡️▪️●•▪\-_=─━═\*~.]+$/u;
+
+function trimLine(line: string): string {
+    return line
+        .replace(/^[\s🚛📦✅⭐🔥💪📍⏰🎉🛣🚚🏭📅🔢💰➡️▪️●•▪]+/u, "")
+        .trim();
+}
+
+function setField(
+    fields: BulletinLoadFields,
+    key: keyof BulletinLoadFields,
+    value: string,
+    ambiguous: BulletinAmbiguousField[],
+    loadIndex: number
+) {
+    const v = value.trim();
+    if (!v) return;
+    const prev = fields[key];
+    if (prev && prev !== v) {
+        ambiguous.push({
+            loadIndex,
+            field: key,
+            raw: v,
+            reason: `Conflito com valor já capturado ("${prev}") — preservado o primeiro; revise.`,
+        });
+        return;
+    }
+    fields[key] = v;
+}
+
+function extractFieldsFromBlock(
+    text: string,
+    loadIndex: number
+): {
+    fields: BulletinLoadFields;
+    unrecognizedLines: string[];
+    ambiguous: BulletinAmbiguousField[];
+} {
+    const fields: BulletinLoadFields = {};
+    const unrecognizedLines: string[] = [];
+    const ambiguous: BulletinAmbiguousField[] = [];
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+    for (const rawLine of lines) {
+        const line = trimLine(rawLine);
+        if (!line || EMOJI_OR_DECOR.test(line)) continue;
+
+        const maps = line.match(MAPS_URL_RE);
+        if (maps?.[1]) {
+            setField(fields, "localizacaoUrl", maps[1], ambiguous, loadIndex);
+            const rest = line.replace(maps[1], "").trim();
+            if (!rest || /^(localiza[cç][aã]o|maps?|link)\s*[:：]?$/i.test(rest)) {
+                continue;
+            }
         }
-    }
-    if (!fields.localizacaoUrl) {
-        const anyUrl = text.match(
-            /(https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.[^\s]+|www\.google\.[^\s]*maps[^\s]*|maps\.apple\.[^\s]+)[^\s]*)/i
-        );
-        if (anyUrl?.[1]) fields.localizacaoUrl = anyUrl[1];
-    }
-    if (!fields.grupoUrl) {
-        const g = text.match(/(https?:\/\/chat\.whatsapp\.com\/[^\s]+)/i);
-        if (g?.[1]) fields.grupoUrl = g[1];
+
+        const group = line.match(GROUP_URL_RE);
+        if (group?.[1]) {
+            setField(fields, "grupoUrl", group[1], ambiguous, loadIndex);
+            continue;
+        }
+
+        let matchedLabel = false;
+        for (const { key, re } of LABEL_PATTERNS) {
+            const m = line.match(re);
+            if (m?.[1]) {
+                setField(fields, key, m[1].trim(), ambiguous, loadIndex);
+                matchedLabel = true;
+                break;
+            }
+        }
+        if (matchedLabel) continue;
+
+        // Unlabeled place tokens: FAZ SAUDADES / ALG COOPERBEM
+        const place = line.match(PLACE_PREFIX);
+        if (place) {
+            const kind = line.slice(0, 3).toUpperCase();
+            const name = place[1]?.trim() || line;
+            if (/^(FAZ|ALG|COO|ARM|IND)/i.test(kind) || /FAZ|ALG|COOP/i.test(line)) {
+                if (!fields.localCarregamento) {
+                    setField(
+                        fields,
+                        "localCarregamento",
+                        line,
+                        ambiguous,
+                        loadIndex
+                    );
+                } else if (!fields.terminal) {
+                    setField(fields, "terminal", line, ambiguous, loadIndex);
+                } else {
+                    unrecognizedLines.push(line);
+                }
+                continue;
+            }
+            if (/TERMINAL|PORTO/i.test(line)) {
+                setField(fields, "terminal", line, ambiguous, loadIndex);
+                continue;
+            }
+        }
+
+        if (!fields.origem && CITY_UF.test(line) && /origem|^de\b/i.test(rawLine)) {
+            const m = line.match(CITY_UF);
+            if (m) {
+                setField(
+                    fields,
+                    "origem",
+                    `${m[1].trim()}/${m[2]}`,
+                    ambiguous,
+                    loadIndex
+                );
+                continue;
+            }
+        }
+
+        // Bare city/UF: first → origem, second → destino
+        const city = line.match(CITY_UF);
+        if (city && line.length <= 48 && !/[?:]/.test(line)) {
+            const value = `${city[1].trim()}/${city[2]}`;
+            if (!fields.origem) {
+                setField(fields, "origem", value, ambiguous, loadIndex);
+                continue;
+            }
+            if (!fields.destino) {
+                setField(fields, "destino", value, ambiguous, loadIndex);
+                continue;
+            }
+        }
+
+        if (!fields.veiculo) {
+            const vm = line.match(VEHICLE_INLINE);
+            if (vm) {
+                setField(fields, "veiculo", line, ambiguous, loadIndex);
+                continue;
+            }
+        }
+
+        if (!fields.janela && WINDOW_INLINE.test(line)) {
+            setField(fields, "janela", line, ambiguous, loadIndex);
+            continue;
+        }
+
+        if (!fields.frete && FRETE_INLINE.test(line)) {
+            setField(fields, "frete", line, ambiguous, loadIndex);
+            continue;
+        }
+
+        if (!fields.pedagio && PEDAGIO_INLINE.test(line)) {
+            setField(fields, "pedagio", line, ambiguous, loadIndex);
+            continue;
+        }
+
+        if (/^https?:\/\//i.test(line)) {
+            unrecognizedLines.push(line);
+            continue;
+        }
+
+        unrecognizedLines.push(line);
     }
 
-    // Preserve unmapped lines as detalhes (never invent; keep leftover content)
-    const leftover = text
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .filter((l) => !STRUCTURED_LINE.test(l))
-        .filter((l) => !/^https?:\/\//i.test(l))
-        .filter((l) => !/^[🚛📦✅⭐🔥💪📍⏰🎉\-_=─━═\*~•▪●.]{1,}$/u.test(l))
-        .join(" · ");
-    if (leftover) {
-        const withGrupo = fields.grupoUrl
-            ? `${leftover} · Grupo: ${fields.grupoUrl}`
-            : leftover;
-        fields.detalhes = withGrupo;
+    // Compose observacoes / detalhes without inventing
+    const obsParts: string[] = [];
+    if (fields.observacoes) obsParts.push(fields.observacoes);
+    if (fields.rotaPedagio) obsParts.push(`Rota: ${fields.rotaPedagio}`);
+    if (fields.lote && !fields.quantidade) {
+        // keep lote as structured; also surface in detalhes for v1 templates
+    }
+    if (unrecognizedLines.length) {
+        obsParts.push(...unrecognizedLines);
+    }
+    if (obsParts.length) {
+        fields.observacoes = obsParts.join(" · ");
+    }
+    const detalheBits = [
+        fields.localCarregamento && `Local: ${fields.localCarregamento}`,
+        fields.janela && `Janela: ${fields.janela}`,
+        fields.veiculo && `Veículo: ${fields.veiculo}`,
+        fields.quantidade && `Qtd: ${fields.quantidade}`,
+        fields.frete && `Frete: ${fields.frete}`,
+        fields.observacoes,
+        fields.grupoUrl && `Grupo: ${fields.grupoUrl}`,
+    ].filter(Boolean) as string[];
+    if (detalheBits.length) {
+        fields.detalhes = detalheBits.join(" · ");
     } else if (fields.grupoUrl) {
         fields.detalhes = `Grupo: ${fields.grupoUrl}`;
     }
-    return fields;
+
+    return { fields, unrecognizedLines, ambiguous };
+}
+
+function completenessOf(fields: BulletinLoadFields): number {
+    const keys: (keyof BulletinLoadFields)[] = [
+        "origem",
+        "destino",
+        "localCarregamento",
+        "terminal",
+        "janela",
+        "veiculo",
+        "quantidade",
+        "frete",
+        "localizacaoUrl",
+        "pedagio",
+    ];
+    const filled = keys.filter((k) => Boolean(fields[k])).length;
+    return filled / keys.length;
 }
 
 function isSeparatorLine(line: string): boolean {
@@ -89,7 +308,11 @@ function isSeparatorLine(line: string): boolean {
  * Split raw bulletin into ordered load blocks without dropping content.
  * Prefer explicit separators; fall back to blank-line groups after the title.
  */
-export function splitLoads(raw: string): { title: string; blocks: string[] } {
+export function splitLoads(raw: string): {
+    title: string;
+    blocks: string[];
+    headerLines: string[];
+} {
     const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const lines = normalized.split("\n");
 
@@ -112,14 +335,12 @@ export function splitLoads(raw: string): { title: string; blocks: string[] } {
                 if (!titleDone) {
                     titleDone = true;
                     if (current.length) {
-                        // First separator after content: content before may be title+first load
-                        // If we only collected short title-like lines, treat as title
                         const joined = current.join("\n").trim();
                         if (
                             joined &&
-                            joined.length < 120 &&
-                            !/\n/.test(joined) &&
-                            blocks.length === 0
+                            joined.length < 160 &&
+                            blocks.length === 0 &&
+                            !MAPS_URL_RE.test(joined)
                         ) {
                             titleLines = [...current];
                             current = [];
@@ -127,7 +348,6 @@ export function splitLoads(raw: string): { title: string; blocks: string[] } {
                             flush();
                         }
                     }
-                    titleDone = true;
                     continue;
                 }
                 flush();
@@ -142,11 +362,10 @@ export function splitLoads(raw: string): { title: string; blocks: string[] } {
 
         let title = titleLines.join("\n").trim();
         if (!title && blocks[0]) {
-            // Infer title from first line of first block if it looks like a header
             const first = blocks[0];
             const firstLine = first.split("\n")[0]?.trim() || "";
             if (
-                firstLine.length <= 80 &&
+                firstLine.length <= 100 &&
                 /atualiza|embarque|boletim|cotton|carga|frete/i.test(firstLine)
             ) {
                 title = firstLine;
@@ -156,45 +375,89 @@ export function splitLoads(raw: string): { title: string; blocks: string[] } {
             }
         }
         if (!title) title = "Boletim de cargas";
-        return { title, blocks: blocks.filter((b) => b.trim()) };
+        return {
+            title,
+            blocks: blocks.filter((b) => b.trim()),
+            headerLines: titleLines.map((l) => l.trim()).filter(Boolean),
+        };
     }
 
-    // Blank-line separated: first paragraph = title if short
     const paragraphs = normalized
         .split(/\n{2,}/)
         .map((p) => p.trim())
         .filter(Boolean);
 
     if (!paragraphs.length) {
-        return { title: "Boletim de cargas", blocks: [] };
+        return { title: "Boletim de cargas", blocks: [], headerLines: [] };
     }
 
     let title = "Boletim de cargas";
     let blocks = paragraphs;
+    const headerLines: string[] = [];
     const first = paragraphs[0];
-    if (first.length <= 100 && first.split("\n").length <= 2) {
+    if (first.length <= 120 && first.split("\n").length <= 3) {
         title = first.split("\n")[0].trim() || title;
+        headerLines.push(...first.split("\n").map((l) => l.trim()).filter(Boolean));
         blocks = paragraphs.slice(1);
     }
     if (!blocks.length && paragraphs.length === 1) {
-        // Single blob — treat whole as one load
         blocks = [paragraphs[0]];
-        if (title === paragraphs[0].split("\n")[0]) {
-            // already set
-        }
     }
-    return { title, blocks };
+    return { title, blocks, headerLines };
+}
+
+function extractGeneralMeta(
+    title: string,
+    headerLines: string[],
+    loads: BulletinLoad[]
+): BulletinGeneralMeta {
+    const allHeader = headerLines.join("\n");
+    const groupFromHeader = allHeader.match(GROUP_URL_RE)?.[1];
+    const groupFromLoads = loads
+        .map((l) => l.fields.grupoUrl)
+        .find(Boolean);
+    const groupUrl = groupFromHeader || groupFromLoads;
+
+    let operationType: string | undefined;
+    if (/cotton|algod/i.test(title + allHeader)) operationType = "Cotton / Algodão";
+    else if (/soja/i.test(title + allHeader)) operationType = "Soja";
+    else if (/milho/i.test(title + allHeader)) operationType = "Milho";
+    else if (/frete|embarque|boletim/i.test(title)) operationType = "Embarque";
+
+    const dateMatch =
+        allHeader.match(/\b(\d{1,2}[\/.\-]\d{1,2}(?:[\/.\-]\d{2,4})?)\b/) ||
+        title.match(/\b(\d{1,2}[\/.\-]\d{1,2}(?:[\/.\-]\d{2,4})?)\b/);
+
+    const notes = headerLines
+        .filter((l) => l !== title)
+        .filter((l) => !GROUP_URL_RE.test(l))
+        .filter((l) => !EMOJI_OR_DECOR.test(l));
+
+    return {
+        title,
+        operationType,
+        groupUrl,
+        referenceDate: dateMatch?.[1],
+        generalNotes: notes.length ? notes.join(" · ") : undefined,
+    };
 }
 
 export function buildLoads(blocks: string[]): BulletinLoad[] {
-    return blocks.map((text, index) => {
+    return blocks.slice(0, BULLETIN_IMPORT_MAX_LOADS).map((text, index) => {
         const charCount = text.length;
+        const { fields, unrecognizedLines, ambiguous } = extractFieldsFromBlock(
+            text,
+            index
+        );
         return {
             index,
             text,
-            fields: extractFields(text),
+            fields,
+            unrecognizedLines,
+            ambiguous,
             charCount,
             exceedsLimit: charCount > META_TEMPLATE_BODY_MAX,
+            completeness: completenessOf(fields),
         };
     });
 }
@@ -222,7 +485,6 @@ export function packParts(
         };
     }
 
-    // Estimate total parts with greedy packing (two-pass for correct PARTE X/Y)
     const maxContent = maxBody - BULLETIN_PART_SAFETY_MARGIN;
 
     type Bucket = { loadIndexes: number[]; texts: string[] };
@@ -250,7 +512,6 @@ export function packParts(
 
         const trialTexts = [...current.texts, load.text];
         const trialBody = trialTexts.join("\n\n");
-        // Reserve for worst-case part header (up to 99 parts)
         const reserve = headerReserve(99);
         if (
             current.loadIndexes.length > 0 &&
@@ -268,10 +529,7 @@ export function packParts(
     const total = buckets.length;
     const parts: BulletinPart[] = buckets.map((b, i) => {
         const header = partHeader(title, i, total);
-        const body =
-            total <= 1 && b.texts.length
-                ? `${header}\n\n${b.texts.join("\n\n")}`.trim()
-                : `${header}\n\n${b.texts.join("\n\n")}`.trim();
+        const body = `${header}\n\n${b.texts.join("\n\n")}`.trim();
 
         const oversized = body.length > maxBody;
         if (oversized) {
@@ -302,51 +560,138 @@ export function packParts(
     return { parts, warnings };
 }
 
+/** Rebuild original-ish text from editable loads (for campaign handoff). */
+export function serializeBulletinDraft(opts: {
+    general: BulletinGeneralMeta;
+    loads: BulletinLoad[];
+}): string {
+    const sep = "────────────────────";
+    const chunks: string[] = [opts.general.title || "Boletim de cargas"];
+    if (opts.general.groupUrl) chunks.push(opts.general.groupUrl);
+    if (opts.general.generalNotes) chunks.push(opts.general.generalNotes);
+    for (const load of opts.loads) {
+        chunks.push(sep);
+        const f = load.fields;
+        const lines: string[] = [];
+        if (f.origem) lines.push(`Origem: ${f.origem}`);
+        if (f.localCarregamento) lines.push(`Local de carregamento: ${f.localCarregamento}`);
+        if (f.destino) lines.push(`Destino: ${f.destino}`);
+        if (f.terminal) lines.push(`Terminal: ${f.terminal}`);
+        if (f.janela) lines.push(`Janela: ${f.janela}`);
+        if (f.veiculo) lines.push(`Veículo: ${f.veiculo}`);
+        if (f.quantidade) lines.push(`Quantidade: ${f.quantidade}`);
+        if (f.frete) lines.push(`Frete: ${f.frete}`);
+        if (f.lote) lines.push(`Lote: ${f.lote}`);
+        if (f.localizacaoUrl) lines.push(`Localização: ${f.localizacaoUrl}`);
+        if (f.pedagio) lines.push(`Pedágio: ${f.pedagio}`);
+        if (f.rotaPedagio) lines.push(`Rota: ${f.rotaPedagio}`);
+        if (f.observacoes) lines.push(`Observações: ${f.observacoes}`);
+        if (!lines.length && load.text) {
+            chunks.push(load.text);
+        } else {
+            chunks.push(lines.join("\n"));
+        }
+    }
+    return chunks.join("\n");
+}
+
+export function duplicateLoad(load: BulletinLoad, newIndex: number): BulletinLoad {
+    return {
+        ...load,
+        index: newIndex,
+        fields: { ...load.fields },
+        unrecognizedLines: [...load.unrecognizedLines],
+        ambiguous: load.ambiguous.map((a) => ({ ...a, loadIndex: newIndex })),
+    };
+}
+
+export function emptyLoad(index: number): BulletinLoad {
+    return {
+        index,
+        text: "",
+        fields: {},
+        unrecognizedLines: [],
+        ambiguous: [],
+        charCount: 0,
+        exceedsLimit: false,
+        completeness: 0,
+    };
+}
+
+export function reindexLoads(loads: BulletinLoad[]): BulletinLoad[] {
+    return loads.map((l, index) => ({
+        ...l,
+        index,
+        ambiguous: l.ambiguous.map((a) => ({ ...a, loadIndex: index })),
+        completeness: completenessOf(l.fields),
+        charCount: l.text.length || JSON.stringify(l.fields).length,
+    }));
+}
+
 /** Full analysis pipeline for a pasted bulletin. */
 export function analyzeBulletin(raw: string): BulletinAnalysis {
     const text = (raw || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const warnings: string[] = [];
+
     if (!text.trim()) {
         return {
             title: "Boletim de cargas",
             rawText: text,
+            general: { title: "Boletim de cargas" },
             loads: [],
             parts: [],
             loadCount: 0,
             partCount: 0,
             warnings: ["Cole o texto do boletim para analisar."],
             totalChars: 0,
+            unrecognizedLines: [],
         };
     }
 
-    const { title, blocks } = splitLoads(text);
-    const loads = buildLoads(blocks);
+    if (text.length > BULLETIN_IMPORT_MAX_CHARS) {
+        warnings.push(
+            `Texto excede ${BULLETIN_IMPORT_MAX_CHARS} caracteres — analisando apenas o início.`
+        );
+    }
+    const clipped = text.slice(0, BULLETIN_IMPORT_MAX_CHARS);
+
+    const { title, blocks, headerLines } = splitLoads(clipped);
+    let loads = buildLoads(blocks);
+
+    if (blocks.length > BULLETIN_IMPORT_MAX_LOADS) {
+        warnings.push(
+            `Limite técnico de ${BULLETIN_IMPORT_MAX_LOADS} cargas por importação — restante ignorado para processamento.`
+        );
+    }
+
     if (!loads.length) {
-        // Fallback: entire text as one load
-        const single = buildLoads([text.trim()]);
-        const packed = packParts(title, single);
-        return {
-            title,
-            rawText: text,
-            loads: single,
-            parts: packed.parts,
-            loadCount: single.length,
-            partCount: packed.parts.length,
-            warnings: [...warnings, ...packed.warnings],
-            totalChars: text.length,
-        };
+        loads = buildLoads([clipped.trim()]);
     }
 
-    const packed = packParts(title, loads);
+    const general = extractGeneralMeta(title, headerLines, loads);
+    const packed = packParts(general.title, loads);
+
+    const ambiguousCount = loads.reduce((s, l) => s + l.ambiguous.length, 0);
+    if (ambiguousCount) {
+        warnings.push(
+            `${ambiguousCount} campo(s) ambíguo(s) — revise antes de confirmar.`
+        );
+    }
+    const unrecognized = loads.flatMap((l) =>
+        l.unrecognizedLines.map((line) => `#${l.index + 1}: ${line}`)
+    );
+
     return {
-        title,
+        title: general.title,
         rawText: text,
+        general,
         loads,
         parts: packed.parts,
         loadCount: loads.length,
         partCount: packed.parts.length,
         warnings: [...warnings, ...packed.warnings],
         totalChars: text.length,
+        unrecognizedLines: unrecognized,
     };
 }
 
@@ -355,4 +700,22 @@ export function estimateMessageTotal(
     partCount: number
 ): number {
     return Math.max(0, eligibleRecipients) * Math.max(0, partCount);
+}
+
+/** Analysis → editable draft for the smart creator. */
+export function analysisToEditableDraft(
+    analysis: BulletinAnalysis
+): import("./types").BulletinEditableDraft {
+    return {
+        rawText: analysis.rawText,
+        general: { ...analysis.general },
+        loads: analysis.loads.map((l) => ({
+            ...l,
+            fields: { ...l.fields },
+            unrecognizedLines: [...l.unrecognizedLines],
+            ambiguous: l.ambiguous.map((a) => ({ ...a })),
+        })),
+        warnings: [...analysis.warnings],
+        confirmed: false,
+    };
 }

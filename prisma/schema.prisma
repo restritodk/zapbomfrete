@@ -55,6 +55,7 @@ model User {
   crmContactsCreated CrmContact[] @relation("CrmContactCreatedBy")
   crmContactsUpdated CrmContact[] @relation("CrmContactUpdatedBy")
   datafyCampaignsCreated DatafyCampaign[] @relation("DatafyCampaignCreatedBy")
+  datafyBulletinDraftsCreated DatafyBulletinDraft[] @relation("DatafyBulletinDraftCreatedBy")
 }
 
 model Session {
@@ -725,6 +726,7 @@ model DatafyCampaign {
   createdBy  User?                     @relation("DatafyCampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   recipients DatafyCampaignRecipient[]
   events     DatafyCampaignEvent[]
+  bulletinDrafts DatafyBulletinDraft[]
 
   @@index([organizationKey, status])
   @@index([channelId, status])
@@ -787,4 +789,36 @@ model DatafyCampaignEvent {
 
   @@index([campaignId, createdAt])
   @@index([type])
+}
+
+/// Smart freight bulletin draft (paste → analyze → review → campaign).
+/// Does not store Datafy credentials. Loads live in JSON for flexibility.
+model DatafyBulletinDraft {
+  id              String    @id @default(cuid())
+  organizationKey String    @default("default")
+  /// draft | confirmed | used_in_campaign | archived
+  status          String    @default("draft")
+  title           String
+  operationType   String?
+  groupUrl        String?   @db.Text
+  referenceDate   String?
+  generalNotes    String?   @db.Text
+  /// Original pasted text (preserved integrally)
+  rawText         String    @db.Text
+  /// BulletinLoad[] after human review
+  loads           Json
+  warnings        Json?
+  loadCount       Int       @default(0)
+  campaignId      String?
+  confirmedAt     DateTime?
+  createdById     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  createdBy User?          @relation("DatafyBulletinDraftCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  campaign  DatafyCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([organizationKey, status])
+  @@index([createdAt])
+  @@index([campaignId])
 }
