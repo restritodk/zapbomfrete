@@ -22,6 +22,8 @@ import {
     FileText,
     Trash2,
     AlertTriangle,
+    ChevronDown,
+    ChevronUp,
 } from "lucide-react";
 import { useSession } from "@/components/dashboard/session-provider";
 import { Button } from "@/components/ui/button";
@@ -156,6 +158,82 @@ const STATUS_LABEL: Record<string, string> = {
 
 const EMOJIS = ["👋", "✅", "🚚", "📦", "⭐", "🔥", "💪", "📍", "⏰", "🎉"];
 
+const WIZARD_STEPS = [
+    { n: 1, title: "Informações e mensagem", short: "Mensagem" },
+    { n: 2, title: "Seleção de destinatários", short: "Destinatários" },
+    { n: 3, title: "Template e aprovação", short: "Template" },
+    { n: 4, title: "Programação", short: "Programação" },
+    { n: 5, title: "Revisão e confirmação", short: "Revisão" },
+] as const;
+
+function WhatsAppMessagePreview({
+    previewText,
+    imagePreview,
+    compact,
+}: {
+    previewText: string;
+    imagePreview: string | null;
+    compact?: boolean;
+}) {
+    return (
+        <div
+            className={cn(
+                "flex flex-col rounded-[18px] border border-slate-200/80 overflow-hidden",
+                "bg-gradient-to-b from-slate-50 to-[#e8eef2]",
+                compact ? "min-h-[200px]" : "min-h-[280px] h-full"
+            )}
+        >
+            <div className="shrink-0 flex items-center gap-2.5 px-3.5 py-2.5 bg-[#075e54] text-white">
+                <div className="h-8 w-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-semibold">
+                    BF
+                </div>
+                <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-semibold truncate leading-tight">
+                        Bom Frete
+                    </p>
+                    <p className="text-[10px] text-white/70 leading-tight">
+                        WhatsApp Business · prévia
+                    </p>
+                </div>
+            </div>
+            <div
+                className={cn(
+                    "flex-1 overflow-y-auto p-3 sm:p-4",
+                    "bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2MCIgaGVpZ2h0PSI2MCIgdmlld0JveD0iMCAwIDYwIDYwIj48ZyBmaWxsPSIjYzVkNGRjIiBmaWxsLW9wYWNpdHk9IjAuMzUiPjxjaXJjbGUgY3g9IjMiIGN5PSIzIiByPSIxIi8+PC9nPjwvc3ZnPg==')]",
+                    "bg-[#e5ddd5]"
+                )}
+            >
+                <div className="max-w-[92%] rounded-xl rounded-tl-sm bg-white shadow-sm overflow-hidden">
+                    {imagePreview && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                            src={imagePreview}
+                            alt=""
+                            className="w-full max-h-40 object-cover"
+                        />
+                    )}
+                    <div className="px-3 py-2">
+                        <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-800">
+                            {previewText || (
+                                <span className="text-slate-400 italic">
+                                    Sua mensagem aparecerá aqui…
+                                </span>
+                            )}
+                        </p>
+                        <p className="text-[10px] text-slate-400 text-right mt-1.5 tabular-nums">
+                            12:00
+                        </p>
+                    </div>
+                </div>
+                <p className="mt-3 text-[10px] leading-relaxed text-slate-600/90 px-0.5">
+                    Prévia ilustrativa. No canal oficial, o envio usa template
+                    aprovado pela Meta.
+                </p>
+            </div>
+        </div>
+    );
+}
+
 function mapRecipientStatus(s: string): BroadcastRecipientRow["status"] {
     if (s === "sending") return "sending";
     if (["accepted", "sent", "delivered", "read"].includes(s)) return "sent";
@@ -212,7 +290,9 @@ export function DatafyCampaignsPanel() {
         null
     );
     const [imagePreview, setImagePreview] = useState<string | null>(null);
+    const [imageFileName, setImageFileName] = useState<string | null>(null);
     const [uploadingImage, setUploadingImage] = useState(false);
+    const [mobilePreviewOpen, setMobilePreviewOpen] = useState(false);
     const imageInputRef = useRef<HTMLInputElement>(null);
 
     const [recipientSource, setRecipientSource] =
@@ -685,6 +765,8 @@ export function DatafyCampaignsPanel() {
         setHeaderImageUrl(null);
         setHeaderImageHandle(null);
         setImagePreview(null);
+        setImageFileName(null);
+        setMobilePreviewOpen(false);
         setRecipientSource("crm");
         setCrmPickMode("all");
         setShowGeoFilters(false);
@@ -739,6 +821,7 @@ export function DatafyCampaignsPanel() {
             setHeaderImageUrl(json.data.url);
             setHeaderImageHandle(json.data.handle || null);
             setImagePreview(json.data.url);
+            setImageFileName(file.name);
             if (!json.data.handle) {
                 toast.message(
                     "Imagem salva. Handle Meta indisponível no ambiente local — no envio usaremos o link público."
@@ -753,6 +836,16 @@ export function DatafyCampaignsPanel() {
             if (imageInputRef.current) imageInputRef.current.value = "";
         }
     };
+
+    const clearCampaignImage = () => {
+        setImagePreview(null);
+        setHeaderImageUrl(null);
+        setHeaderImageHandle(null);
+        setImageFileName(null);
+    };
+
+    const currentStepMeta =
+        WIZARD_STEPS.find((s) => s.n === step) || WIZARD_STEPS[0];
 
     const submitCustomTemplate = async (): Promise<{
         templateName: string;
@@ -1273,42 +1366,96 @@ export function DatafyCampaignsPanel() {
 
             {/* Wizard */}
             <Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
-                <DialogContent className="w-[min(920px,calc(100%-1rem))] max-w-none max-h-[92vh] overflow-y-auto rounded-2xl">
-                    <DialogHeader>
-                        <DialogTitle>
-                            Nova campanha · Etapa {step}/5
-                        </DialogTitle>
-                    </DialogHeader>
-                    <div className="flex gap-1 mb-3">
-                        {[1, 2, 3, 4, 5].map((n) => (
-                            <div
-                                key={n}
-                                className={cn(
-                                    "h-1.5 flex-1 rounded-full",
-                                    n <= step ? "bg-emerald-600" : "bg-muted"
-                                )}
-                            />
-                        ))}
+                <DialogContent
+                    showCloseButton={false}
+                    className={cn(
+                        "flex flex-col gap-0 overflow-hidden p-0",
+                        "!flex !flex-col",
+                        "w-[min(1150px,calc(100vw-48px))] max-w-[1200px] sm:max-w-[1200px]",
+                        "max-sm:w-[calc(100vw-16px)] max-sm:h-[min(96vh,920px)]",
+                        "h-[min(90vh,860px)] max-h-[90vh]",
+                        "rounded-[20px] max-sm:rounded-[16px] border border-slate-200/90 bg-[#f7f9fc]",
+                        "shadow-[0_24px_64px_-16px_rgba(15,23,42,0.28)]"
+                    )}
+                >
+                    <div className="relative shrink-0 border-b border-slate-200/80 bg-white px-5 sm:px-6 pt-5 pb-4 pr-12">
+                        <button
+                            type="button"
+                            onClick={() => setWizardOpen(false)}
+                            className="absolute top-4 right-4 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                            aria-label="Fechar"
+                        >
+                            <X className="h-4 w-4" />
+                        </button>
+                        <DialogHeader className="space-y-1 text-left">
+                            <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
+                                Nova campanha
+                            </DialogTitle>
+                            <p className="text-sm text-slate-500">
+                                {currentStepMeta.title}
+                                <span className="mx-1.5 text-slate-300">·</span>
+                                Etapa {step} de 5
+                            </p>
+                        </DialogHeader>
+                        <div className="mt-4 flex items-center gap-2">
+                            {WIZARD_STEPS.map((s) => (
+                                <div
+                                    key={s.n}
+                                    className="flex-1 min-w-0"
+                                    title={s.title}
+                                >
+                                    <div
+                                        className={cn(
+                                            "h-1.5 rounded-full transition-colors duration-300",
+                                            s.n < step
+                                                ? "bg-primary"
+                                                : s.n === step
+                                                  ? "bg-primary/80"
+                                                  : "bg-slate-200"
+                                        )}
+                                    />
+                                    <p
+                                        className={cn(
+                                            "mt-1.5 hidden sm:block text-[10px] truncate",
+                                            s.n === step
+                                                ? "font-medium text-primary"
+                                                : "text-slate-400"
+                                        )}
+                                    >
+                                        {s.short}
+                                    </p>
+                                </div>
+                            ))}
+                        </div>
                     </div>
 
+                    <div className="flex min-h-0 flex-1">
+                        <div className="min-h-0 min-w-0 flex-1 basis-[60%] overflow-y-auto overscroll-contain px-5 py-5 sm:px-6">
                     {step === 1 && (
-                        <div className="grid gap-4 lg:grid-cols-2">
-                            <div className="space-y-3">
-                                <div className="space-y-1.5">
-                                    <Label>Nome da campanha *</Label>
+                        <div className="space-y-5 max-w-3xl">
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div className="space-y-1.5 sm:col-span-2">
+                                    <Label className="text-slate-700">
+                                        Nome da campanha *
+                                    </Label>
                                     <Input
                                         value={name}
-                                        onChange={(e) => setName(e.target.value)}
+                                        onChange={(e) =>
+                                            setName(e.target.value)
+                                        }
                                         placeholder="Ex.: Aviso fretes Sul"
+                                        className="h-11 rounded-xl bg-white border-slate-200 focus-visible:ring-primary/30"
                                     />
                                 </div>
                                 <div className="space-y-1.5">
-                                    <Label>Finalidade</Label>
+                                    <Label className="text-slate-700">
+                                        Finalidade
+                                    </Label>
                                     <Select
                                         value={purpose}
                                         onValueChange={setPurpose}
                                     >
-                                        <SelectTrigger>
+                                        <SelectTrigger className="h-11 rounded-xl bg-white border-slate-200">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -1324,41 +1471,63 @@ export function DatafyCampaignsPanel() {
                                         </SelectContent>
                                     </Select>
                                 </div>
-                                <div className="space-y-1.5">
-                                    <Label>Mensagem *</Label>
-                                    <Textarea
-                                        value={messageBody}
-                                        onChange={(e) =>
-                                            setMessageBody(e.target.value)
-                                        }
-                                        className="min-h-[180px] text-base leading-relaxed"
-                                        placeholder="Escreva sua mensagem…"
-                                    />
-                                    <div className="flex flex-wrap gap-1.5">
-                                        {[
-                                            "fullName",
-                                            "company",
-                                            "city",
-                                            "state",
-                                        ].map((t) => (
-                                            <Button
-                                                key={t}
-                                                type="button"
-                                                size="sm"
-                                                variant="outline"
-                                                className="h-7 text-xs"
-                                                onClick={() => insertToken(t)}
-                                            >
-                                                {`{{${t}}}`}
-                                            </Button>
-                                        ))}
-                                        <span className="inline-flex items-center gap-1 ml-1 text-muted-foreground">
-                                            <Smile className="h-3.5 w-3.5" />
+                            </div>
+
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <Label className="text-slate-700">
+                                        Mensagem *
+                                    </Label>
+                                    <span className="text-[11px] tabular-nums text-slate-400">
+                                        {messageBody.length} caracteres
+                                    </span>
+                                </div>
+                                <Textarea
+                                    value={messageBody}
+                                    onChange={(e) =>
+                                        setMessageBody(e.target.value)
+                                    }
+                                    className="min-h-[200px] resize-y text-[15px] leading-relaxed rounded-xl bg-white border-slate-200 focus-visible:ring-primary/30 shadow-sm"
+                                    placeholder="Escreva a mensagem da campanha…"
+                                />
+                                <div className="rounded-xl border border-slate-200/80 bg-white/80 p-3 space-y-2.5">
+                                    <div>
+                                        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400 mb-1.5">
+                                            Variáveis
+                                        </p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {[
+                                                "fullName",
+                                                "company",
+                                                "city",
+                                                "state",
+                                            ].map((t) => (
+                                                <Button
+                                                    key={t}
+                                                    type="button"
+                                                    size="sm"
+                                                    variant="outline"
+                                                    className="h-7 rounded-lg text-xs border-slate-200 bg-slate-50/80 hover:bg-primary/5 hover:border-primary/30"
+                                                    onClick={() =>
+                                                        insertToken(t)
+                                                    }
+                                                >
+                                                    {`{{${t}}}`}
+                                                </Button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400 mb-1.5 inline-flex items-center gap-1">
+                                            <Smile className="h-3 w-3" />
+                                            Emojis
+                                        </p>
+                                        <div className="flex flex-wrap gap-0.5">
                                             {EMOJIS.map((e) => (
                                                 <button
                                                     key={e}
                                                     type="button"
-                                                    className="hover:scale-110 transition"
+                                                    className="h-8 w-8 rounded-lg text-base transition-colors hover:bg-slate-100 active:scale-95"
                                                     onClick={() =>
                                                         insertEmoji(e)
                                                     }
@@ -1366,104 +1535,106 @@ export function DatafyCampaignsPanel() {
                                                     {e}
                                                 </button>
                                             ))}
-                                        </span>
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="space-y-2">
-                                    <Label>Imagem opcional (cabeçalho)</Label>
-                                    <input
-                                        ref={imageInputRef}
-                                        type="file"
-                                        accept="image/jpeg,image/png,image/webp"
-                                        className="hidden"
-                                        onChange={(e) =>
-                                            void onPickImage(
-                                                e.target.files?.[0] || null
-                                            )
-                                        }
-                                    />
-                                    <div className="flex flex-wrap gap-2">
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            className="rounded-xl"
-                                            disabled={uploadingImage}
-                                            onClick={() =>
-                                                imageInputRef.current?.click()
-                                            }
-                                        >
-                                            {uploadingImage ? (
-                                                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                                            ) : (
-                                                <ImagePlus className="h-4 w-4 mr-1.5" />
-                                            )}
-                                            {imagePreview
-                                                ? "Trocar imagem"
-                                                : "Anexar imagem"}
-                                        </Button>
-                                        {imagePreview && (
-                                            <Button
-                                                type="button"
-                                                variant="ghost"
-                                                onClick={() => {
-                                                    setImagePreview(null);
-                                                    setHeaderImageUrl(null);
-                                                    setHeaderImageHandle(null);
-                                                }}
-                                            >
-                                                <X className="h-4 w-4 mr-1" />
-                                                Remover
-                                            </Button>
-                                        )}
-                                    </div>
-                                    {imagePreview && (
-                                        // eslint-disable-next-line @next/next/no-img-element
-                                        <img
-                                            src={imagePreview}
-                                            alt="Prévia"
-                                            className="mt-2 max-h-40 rounded-xl border object-cover"
-                                        />
-                                    )}
-                                    <p className="text-[11px] text-muted-foreground">
-                                        JPEG/PNG/WebP até 5 MB. Campanhas só com
-                                        texto também são válidas.
-                                    </p>
                                 </div>
                             </div>
-                            <div className="rounded-2xl bg-[#0b141a] p-4 text-white min-h-[280px]">
-                                <p className="text-[11px] uppercase tracking-wider text-white/50 mb-3">
-                                    Prévia WhatsApp
-                                </p>
-                                <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-[#005c4b] px-3 py-2 text-sm shadow">
-                                    {imagePreview && (
-                                        // eslint-disable-next-line @next/next/no-img-element
+
+                            <div className="space-y-2">
+                                <Label className="text-slate-700">
+                                    Imagem opcional
+                                </Label>
+                                <input
+                                    ref={imageInputRef}
+                                    type="file"
+                                    accept="image/jpeg,image/png,image/webp"
+                                    className="hidden"
+                                    onChange={(e) =>
+                                        void onPickImage(
+                                            e.target.files?.[0] || null
+                                        )
+                                    }
+                                />
+                                {!imagePreview ? (
+                                    <button
+                                        type="button"
+                                        disabled={uploadingImage}
+                                        onClick={() =>
+                                            imageInputRef.current?.click()
+                                        }
+                                        className={cn(
+                                            "flex w-full items-center gap-3 rounded-xl border border-dashed border-slate-300 bg-white/70 px-4 py-3.5 text-left transition-colors",
+                                            "hover:border-primary/40 hover:bg-primary/[0.03]",
+                                            "disabled:opacity-60"
+                                        )}
+                                    >
+                                        {uploadingImage ? (
+                                            <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
+                                        ) : (
+                                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+                                                <ImagePlus className="h-5 w-5" />
+                                            </div>
+                                        )}
+                                        <div className="min-w-0">
+                                            <p className="text-sm font-medium text-slate-700">
+                                                Adicionar imagem de cabeçalho
+                                            </p>
+                                            <p className="text-[11px] text-slate-400 mt-0.5">
+                                                JPEG, PNG ou WebP · até 5 MB ·
+                                                opcional
+                                            </p>
+                                        </div>
+                                    </button>
+                                ) : (
+                                    <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
                                         <img
                                             src={imagePreview}
                                             alt=""
-                                            className="mb-2 w-full rounded-lg object-cover max-h-36"
+                                            className="h-12 w-12 rounded-lg object-cover border border-slate-100 shrink-0"
                                         />
-                                    )}
-                                    <p className="whitespace-pre-wrap leading-relaxed">
-                                        {previewText}
-                                    </p>
-                                    <p className="text-[10px] text-white/60 text-right mt-1">
-                                        12:00
-                                    </p>
-                                </div>
-                                <p className="mt-4 text-xs text-white/50 leading-relaxed">
-                                    No WhatsApp oficial, campanhas iniciadas pela
-                                    empresa usam templates aprovados pela Meta.
-                                    Se você criar um texto novo, ele será
-                                    submetido para aprovação antes do envio real.
-                                </p>
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-sm font-medium text-slate-700 truncate">
+                                                {imageFileName ||
+                                                    "Imagem anexada"}
+                                            </p>
+                                            <p className="text-[11px] text-slate-400">
+                                                Visível na prévia ao lado
+                                            </p>
+                                        </div>
+                                        <div className="flex shrink-0 gap-1">
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                className="rounded-lg h-8"
+                                                disabled={uploadingImage}
+                                                onClick={() =>
+                                                    imageInputRef.current?.click()
+                                                }
+                                            >
+                                                Substituir
+                                            </Button>
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="ghost"
+                                                className="rounded-lg h-8 text-slate-500"
+                                                onClick={clearCampaignImage}
+                                            >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
 
                     {step === 2 && (
-                        <div className="space-y-5">
+                        <div className="space-y-5 max-w-3xl">
                             <div>
-                                <p className="text-sm font-medium">
+                                <p className="text-sm font-medium text-slate-800">
                                     Fonte dos destinatários
                                 </p>
                                 <p className="text-xs text-muted-foreground mt-0.5">
@@ -2171,8 +2342,8 @@ export function DatafyCampaignsPanel() {
                     )}
 
                     {step === 3 && (
-                        <div className="space-y-4">
-                            <div className="flex gap-2">
+                        <div className="space-y-4 max-w-3xl">
+                            <div className="flex flex-wrap gap-2">
                                 <Button
                                     type="button"
                                     variant={
@@ -2292,7 +2463,7 @@ export function DatafyCampaignsPanel() {
                     )}
 
                     {step === 4 && (
-                        <div className="space-y-4">
+                        <div className="space-y-4 max-w-3xl">
                             <div className="flex flex-wrap gap-2">
                                 <Button
                                     type="button"
@@ -2364,109 +2535,158 @@ export function DatafyCampaignsPanel() {
                     )}
 
                     {step === 5 && (
-                        <div className="space-y-3 text-sm rounded-2xl border p-4">
-                            <p className="text-lg font-semibold">
-                                {name || "—"}
-                            </p>
-                            <p>Finalidade: {purpose}</p>
-                            <p>
-                                Conteúdo:{" "}
-                                {contentMode === "existing"
-                                    ? `Template ${selectedTemplate?.name || "—"} (${selectedTemplate?.language || ""})`
-                                    : `Personalizado → ${submittedTemplate?.templateName || "(submeter na etapa 3)"}`}
-                            </p>
-                            <div className="rounded-xl bg-[#0b141a] p-3 text-white max-w-sm">
-                                {imagePreview && (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img
-                                        src={imagePreview}
-                                        alt=""
-                                        className="mb-2 w-full rounded-lg max-h-28 object-cover"
-                                    />
-                                )}
-                                <p className="whitespace-pre-wrap text-sm">
-                                    {previewText}
+                        <div className="space-y-4 max-w-3xl">
+                            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3 text-sm">
+                                <p className="text-lg font-semibold text-slate-900 tracking-tight">
+                                    {name || "—"}
                                 </p>
-                            </div>
-                            <p>
-                                Elegíveis:{" "}
-                                <strong>{audience?.eligibleCount ?? 0}</strong> ·
-                                Excluídos:{" "}
-                                <strong>{audience?.excludedCount ?? 0}</strong>
-                            </p>
-                            <p>
-                                Execução:{" "}
-                                {execMode === "schedule"
-                                    ? `Agendada (${scheduledAt || "—"})`
-                                    : "Imediata — com animação de disparo"}
-                            </p>
-                            <p
-                                className={
-                                    dryRun
-                                        ? "text-amber-800 font-medium"
-                                        : "text-red-700 font-medium"
-                                }
-                            >
-                                {dryRun
-                                    ? "SIMULAÇÃO — nenhum envio real"
-                                    : "ENVIO REAL via API Datafy"}
-                            </p>
-                            {!dryRun &&
-                                contentMode === "custom" &&
-                                submittedTemplate?.approvalStatus !==
-                                    "APPROVED" && (
-                                    <p className="text-red-700">
-                                        Aviso: template ainda não APPROVED —
-                                        o início real será bloqueado.
+                                <div className="grid gap-2 sm:grid-cols-2 text-slate-600">
+                                    <p>
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Finalidade
+                                        </span>
+                                        {purpose}
                                     </p>
-                                )}
+                                    <p>
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Destinatários
+                                        </span>
+                                        {audience?.eligibleCount ?? 0} aptos ·{" "}
+                                        {audience?.excludedCount ?? 0} excluídos
+                                    </p>
+                                    <p className="sm:col-span-2">
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Conteúdo
+                                        </span>
+                                        {contentMode === "existing"
+                                            ? `Template ${selectedTemplate?.name || "—"} (${selectedTemplate?.language || ""})`
+                                            : `Personalizado → ${submittedTemplate?.templateName || "(submeter na etapa 3)"}`}
+                                    </p>
+                                    <p className="sm:col-span-2">
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Execução
+                                        </span>
+                                        {execMode === "schedule"
+                                            ? `Agendada (${scheduledAt || "—"}) — sem animação de disparo`
+                                            : "Imediata — com animação de disparo"}
+                                    </p>
+                                </div>
+                                <div
+                                    className={cn(
+                                        "rounded-xl px-3.5 py-2.5 text-sm font-medium",
+                                        dryRun
+                                            ? "bg-amber-50 text-amber-900 border border-amber-200/80"
+                                            : "bg-red-50 text-red-800 border border-red-200/80"
+                                    )}
+                                >
+                                    {dryRun
+                                        ? "SIMULAÇÃO — nenhum envio real"
+                                        : "ENVIO REAL via API Datafy"}
+                                </div>
+                                {!dryRun &&
+                                    contentMode === "custom" &&
+                                    submittedTemplate?.approvalStatus !==
+                                        "APPROVED" && (
+                                        <p className="text-red-700 text-sm">
+                                            Aviso: template ainda não APPROVED —
+                                            o início real será bloqueado.
+                                        </p>
+                                    )}
+                            </div>
                         </div>
                     )}
 
-                    <DialogFooter className="gap-2">
-                        {step > 1 && (
-                            <Button
-                                variant="outline"
-                                onClick={() => setStep((s) => s - 1)}
-                            >
-                                Voltar
-                            </Button>
-                        )}
-                        {step < 5 ? (
-                            <Button
-                                onClick={() => {
-                                    if (
-                                        step === 2 &&
-                                        (!audience ||
-                                            audience.eligibleCount <= 0)
-                                    ) {
-                                        toast.error(
-                                            "Calcule a audiência com elegíveis antes de continuar"
-                                        );
-                                        return;
+                            {/* Prévia no mobile / tablet */}
+                            <div className="lg:hidden mt-6 border-t border-slate-200/80 pt-4">
+                                <button
+                                    type="button"
+                                    className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700"
+                                    onClick={() =>
+                                        setMobilePreviewOpen((v) => !v)
                                     }
-                                    setStep((s) => s + 1);
-                                }}
-                            >
-                                Próximo
-                            </Button>
-                        ) : (
-                            <Button
-                                disabled={saving}
-                                onClick={() => void createCampaign()}
-                                className={cn(
-                                    !dryRun &&
-                                        execMode === "now" &&
-                                        "bg-emerald-600 hover:bg-emerald-700"
+                                >
+                                    Prévia da mensagem
+                                    {mobilePreviewOpen ? (
+                                        <ChevronUp className="h-4 w-4 text-slate-400" />
+                                    ) : (
+                                        <ChevronDown className="h-4 w-4 text-slate-400" />
+                                    )}
+                                </button>
+                                {mobilePreviewOpen && (
+                                    <div className="mt-3">
+                                        <WhatsAppMessagePreview
+                                            previewText={previewText}
+                                            imagePreview={imagePreview}
+                                            compact
+                                        />
+                                    </div>
                                 )}
-                            >
-                                {saving ? (
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                    finalButtonLabel
-                                )}
-                            </Button>
-                        )}
+                            </div>
+                        </div>
+
+                        <aside className="hidden lg:flex w-[min(40%,420px)] shrink-0 flex-col border-l border-slate-200/80 bg-white/60 p-5 overflow-y-auto overscroll-contain">
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3">
+                                Prévia da mensagem
+                            </p>
+                            <WhatsAppMessagePreview
+                                previewText={previewText}
+                                imagePreview={imagePreview}
+                            />
+                        </aside>
+                    </div>
+
+                    <DialogFooter className="shrink-0 gap-2 border-t border-slate-200/80 bg-white px-5 sm:px-6 py-3.5 sm:justify-between flex-row items-center">
+                        <p className="hidden sm:block text-xs text-slate-400">
+                            Etapa {step} de 5 · {currentStepMeta.short}
+                        </p>
+                        <div className="flex flex-1 sm:flex-initial justify-end gap-2">
+                            {step > 1 && (
+                                <Button
+                                    variant="outline"
+                                    className="rounded-xl"
+                                    onClick={() => setStep((s) => s - 1)}
+                                >
+                                    Voltar
+                                </Button>
+                            )}
+                            {step < 5 ? (
+                                <Button
+                                    className="rounded-xl min-w-[110px]"
+                                    onClick={() => {
+                                        if (
+                                            step === 2 &&
+                                            (!audience ||
+                                                audience.eligibleCount <= 0)
+                                        ) {
+                                            toast.error(
+                                                "Calcule a audiência com elegíveis antes de continuar"
+                                            );
+                                            return;
+                                        }
+                                        setStep((s) => s + 1);
+                                    }}
+                                >
+                                    Próximo
+                                </Button>
+                            ) : (
+                                <Button
+                                    disabled={saving}
+                                    onClick={() => void createCampaign()}
+                                    className={cn(
+                                        "rounded-xl min-w-[140px]",
+                                        !dryRun &&
+                                            execMode === "now" &&
+                                            "bg-emerald-600 hover:bg-emerald-700"
+                                    )}
+                                >
+                                    {saving ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                        finalButtonLabel
+                                    )}
+                                </Button>
+                            )}
+                        </div>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
