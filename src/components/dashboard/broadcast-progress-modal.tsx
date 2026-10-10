@@ -57,6 +57,21 @@ export interface BroadcastProgressModalProps {
     /** Backend cancel — must await real confirmation via socket, not close the modal alone. */
     onCancelBroadcast?: () => Promise<void>;
     cancelling?: boolean;
+    /**
+     * Datafy campaigns: allow closing while the queue keeps running in background.
+     * Baileys default remains false (cannot dismiss mid-send).
+     */
+    allowDismissWhileRunning?: boolean;
+    /** Optional subtitle under the title (e.g. campaign name). */
+    subtitle?: string | null;
+    /** Extra counters for official API (accepted ≠ delivered). */
+    datafyCounters?: {
+        accepted: number;
+        delivered: number;
+        read: number;
+        failed: number;
+        dryRun?: boolean;
+    } | null;
 }
 
 function formatDateTime(value: string | null | undefined, timeZone: string): string {
@@ -131,6 +146,9 @@ export function BroadcastProgressModal({
     onViewHistory,
     onCancelBroadcast,
     cancelling = false,
+    allowDismissWhileRunning = false,
+    subtitle = null,
+    datafyCounters = null,
 }: BroadcastProgressModalProps) {
     const titleId = useId();
     const descId = useId();
@@ -138,6 +156,7 @@ export function BroadcastProgressModal({
     const isRunning = phase === "running";
     const isCancelled = phase === "cancelled";
     const [confirmOpen, setConfirmOpen] = useState(false);
+    const blockDismiss = isRunning && !allowDismissWhileRunning;
 
     const counts = useMemo(() => {
         const sent = recipients.filter((r) => r.status === "sent").length;
@@ -163,7 +182,7 @@ export function BroadcastProgressModal({
     }, [isRunning]);
 
     const handleOpenChange = (next: boolean) => {
-        if (!next && isRunning) {
+        if (!next && blockDismiss) {
             return;
         }
         onOpenChange(next);
@@ -189,13 +208,13 @@ export function BroadcastProgressModal({
                         "data-[state=open]:zoom-in-100"
                     )}
                     onEscapeKeyDown={(e) => {
-                        if (isRunning) e.preventDefault();
+                        if (blockDismiss) e.preventDefault();
                     }}
                     onPointerDownOutside={(e) => {
-                        if (isRunning) e.preventDefault();
+                        if (blockDismiss) e.preventDefault();
                     }}
                     onInteractOutside={(e) => {
-                        if (isRunning) e.preventDefault();
+                        if (blockDismiss) e.preventDefault();
                     }}
                 >
                     {/* Header */}
@@ -230,12 +249,19 @@ export function BroadcastProgressModal({
                                       ? "Disparo cancelado"
                                       : "Disparo concluído"}
                             </DialogTitle>
+                            {subtitle && (
+                                <p className="mt-0.5 text-sm font-medium text-slate-700 truncate">
+                                    {subtitle}
+                                </p>
+                            )}
                             <DialogDescription
                                 id={descId}
                                 className="mt-1 text-sm text-slate-500"
                             >
                                 {isRunning
-                                    ? "Enviando mensagens para os destinatários. Aguarde a conclusão."
+                                    ? allowDismissWhileRunning
+                                        ? "Enviando pela fila oficial. Você pode fechar — o processamento continua."
+                                        : "Enviando mensagens para os destinatários. Aguarde a conclusão."
                                     : isCancelled
                                       ? "O envio foi interrompido. As mensagens já processadas permaneceram enviadas."
                                       : "O processo de envio foi finalizado. Veja o resumo e os detalhes abaixo."}
@@ -245,25 +271,27 @@ export function BroadcastProgressModal({
                             ref={closeRef}
                             type="button"
                             onClick={() => {
-                                if (isRunning) return;
+                                if (blockDismiss) return;
                                 onOpenChange(false);
                             }}
-                            disabled={isRunning}
+                            disabled={blockDismiss}
                             className={cn(
                                 "absolute top-4 right-4 rounded-md p-1.5 text-slate-400 transition-colors",
-                                isRunning
+                                blockDismiss
                                     ? "cursor-not-allowed opacity-40"
                                     : "hover:bg-slate-100 hover:text-slate-700"
                             )}
                             aria-label={
-                                isRunning
+                                blockDismiss
                                     ? "Não é possível fechar enquanto o disparo está em andamento"
                                     : "Fechar"
                             }
                             title={
-                                isRunning
+                                blockDismiss
                                     ? "O disparo continua em andamento — feche após a conclusão"
-                                    : "Fechar"
+                                    : allowDismissWhileRunning && isRunning
+                                      ? "Fechar (o envio continua em segundo plano)"
+                                      : "Fechar"
                             }
                         >
                             <X className="h-4 w-4" />
@@ -303,12 +331,54 @@ export function BroadcastProgressModal({
                                     </div>
                                 </div>
 
+                                {datafyCounters && (
+                                    <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                        <span>
+                                            Aceitas API:{" "}
+                                            <strong className="text-slate-900">
+                                                {datafyCounters.accepted}
+                                            </strong>
+                                        </span>
+                                        <span>
+                                            Entregues:{" "}
+                                            <strong className="text-slate-900">
+                                                {datafyCounters.delivered}
+                                            </strong>
+                                        </span>
+                                        <span>
+                                            Lidas:{" "}
+                                            <strong className="text-slate-900">
+                                                {datafyCounters.read}
+                                            </strong>
+                                        </span>
+                                        <span>
+                                            Falhas:{" "}
+                                            <strong className="text-slate-900">
+                                                {datafyCounters.failed}
+                                            </strong>
+                                        </span>
+                                        {datafyCounters.dryRun && (
+                                            <span className="col-span-2 sm:col-span-4 font-medium text-amber-800">
+                                                Modo simulação — nenhum envio real
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+
                                 <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
                                     <StatusCard
                                         tone="green"
                                         icon={<Send className="h-4 w-4" />}
-                                        value={counts.sent}
-                                        label="Enviados"
+                                        value={
+                                            datafyCounters
+                                                ? datafyCounters.accepted
+                                                : counts.sent
+                                        }
+                                        label={
+                                            datafyCounters
+                                                ? "Aceitas (API)"
+                                                : "Enviados"
+                                        }
                                     />
                                     <StatusCard
                                         tone="blue"

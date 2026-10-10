@@ -254,6 +254,11 @@ export type CreateCampaignInput = {
     templateLanguage?: string | null;
     templateCategory?: string | null;
     templateComponents?: unknown;
+    templateApprovalStatus?: string | null;
+    contentSource?: string;
+    messageBody?: string | null;
+    headerImageUrl?: string | null;
+    headerImageHandle?: string | null;
     variableMapping?: unknown;
     segmentFilter?: SegmentFilter | null;
     timezone?: string;
@@ -302,6 +307,11 @@ export async function createCampaign(
                 input.templateComponents === undefined
                     ? undefined
                     : (input.templateComponents as Prisma.InputJsonValue),
+            templateApprovalStatus: input.templateApprovalStatus || null,
+            contentSource: input.contentSource || "existing_template",
+            messageBody: input.messageBody?.trim() || null,
+            headerImageUrl: input.headerImageUrl || null,
+            headerImageHandle: input.headerImageHandle || null,
             variableMapping:
                 input.variableMapping === undefined
                     ? undefined
@@ -399,6 +409,19 @@ export async function updateCampaign(
     if (input.templateComponents !== undefined) {
         data.templateComponents =
             input.templateComponents as Prisma.InputJsonValue;
+    }
+    if (input.templateApprovalStatus !== undefined) {
+        data.templateApprovalStatus = input.templateApprovalStatus;
+    }
+    if (input.contentSource !== undefined) data.contentSource = input.contentSource;
+    if (input.messageBody !== undefined) {
+        data.messageBody = input.messageBody?.trim() || null;
+    }
+    if (input.headerImageUrl !== undefined) {
+        data.headerImageUrl = input.headerImageUrl || null;
+    }
+    if (input.headerImageHandle !== undefined) {
+        data.headerImageHandle = input.headerImageHandle || null;
     }
     if (input.variableMapping !== undefined) {
         data.variableMapping = input.variableMapping as Prisma.InputJsonValue;
@@ -568,7 +591,18 @@ export async function startCampaign(
     });
     if (!c) throw new CampaignError("Campanha não encontrada", 404);
     if (!c.templateName) {
-        throw new CampaignError("Selecione um template aprovado", 400);
+        throw new CampaignError("Selecione ou submeta um template aprovado", 400);
+    }
+    if (
+        !opts?.dryRun &&
+        !c.dryRun &&
+        c.templateApprovalStatus &&
+        c.templateApprovalStatus !== "APPROVED"
+    ) {
+        throw new CampaignError(
+            `Template ainda não aprovado pela Meta (status: ${c.templateApprovalStatus}). Aguarde a aprovação antes do envio real.`,
+            400
+        );
     }
     if (c.totalEligible <= 0) {
         throw new CampaignError("Nenhum destinatário elegível", 400);
@@ -694,6 +728,11 @@ export async function duplicateCampaign(id: string, userId: string) {
             templateLanguage: src.templateLanguage,
             templateCategory: src.templateCategory,
             templateComponents: src.templateComponents ?? undefined,
+            templateApprovalStatus: src.templateApprovalStatus,
+            contentSource: src.contentSource,
+            messageBody: src.messageBody,
+            headerImageUrl: src.headerImageUrl,
+            headerImageHandle: src.headerImageHandle,
             variableMapping: src.variableMapping ?? undefined,
             segmentFilter: (src.segmentFilter as SegmentFilter) || null,
             timezone: src.timezone,

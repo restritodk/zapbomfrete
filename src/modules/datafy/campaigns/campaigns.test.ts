@@ -144,6 +144,52 @@ describe("Template variables", () => {
         assert.equal(comps[0].parameters[0].text, "João");
         assert.equal(comps[0].parameters[1].text, "Bom Frete");
     });
+
+    it("includes optional IMAGE header when URL provided", () => {
+        const comps = buildTemplateComponents(
+            { body: ["fullName"] },
+            { fullName: "Ana" },
+            { headerImageUrl: "https://example.com/a.jpg" }
+        ) as Array<{ type: string; parameters: Array<{ type: string }> }>;
+        assert.equal(comps[0].type, "header");
+        assert.equal(comps[0].parameters[0].type, "image");
+        assert.equal(comps[1].type, "body");
+    });
+});
+
+describe("Audience without geo filters", () => {
+    it("treats empty optional geo as all-Brazil selection", () => {
+        const preview = previewRecipients(
+            [
+                {
+                    id: "pr",
+                    waId: "41999998888",
+                    fullName: "Sul",
+                    company: null,
+                    city: "Curitiba",
+                    state: "PR",
+                    category: null,
+                    origin: "manual",
+                    active: true,
+                    consentStatus: "granted",
+                },
+                {
+                    id: "sp",
+                    waId: "11988887777",
+                    fullName: "Sudeste",
+                    company: null,
+                    city: "São Paulo",
+                    state: "SP",
+                    category: null,
+                    origin: "manual",
+                    active: true,
+                    consentStatus: "granted",
+                },
+            ],
+            { purpose: "marketing", requireConsent: true }
+        );
+        assert.equal(preview.eligibleCount, 2);
+    });
 });
 
 describe("Recipient status ranking", () => {

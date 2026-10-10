@@ -21,9 +21,12 @@ type Mapping = {
  */
 export function buildTemplateComponents(
     mapping: Mapping | null | undefined,
-    contact: ContactFields
+    contact: ContactFields,
+    opts?: {
+        headerImageUrl?: string | null;
+        headerImageMediaId?: string | null;
+    }
 ): unknown[] {
-    if (!mapping) return [];
     const components: unknown[] = [];
 
     const resolve = (token: string) => {
@@ -40,7 +43,19 @@ export function buildTemplateComponents(
         return token;
     };
 
-    if (mapping.header?.length) {
+    if (opts?.headerImageMediaId || opts?.headerImageUrl) {
+        components.push({
+            type: "header",
+            parameters: [
+                {
+                    type: "image",
+                    image: opts.headerImageMediaId
+                        ? { id: opts.headerImageMediaId }
+                        : { link: opts.headerImageUrl },
+                },
+            ],
+        });
+    } else if (mapping?.header?.length) {
         components.push({
             type: "header",
             parameters: mapping.header.map((t) => ({
@@ -49,7 +64,7 @@ export function buildTemplateComponents(
             })),
         });
     }
-    if (mapping.body?.length) {
+    if (mapping?.body?.length) {
         components.push({
             type: "body",
             parameters: mapping.body.map((t) => ({
@@ -59,6 +74,40 @@ export function buildTemplateComponents(
         });
     }
     return components;
+}
+
+/** Convert CRM tokens in free text to positional {{1}} {{2}} for Meta templates. */
+export function prepareTemplateBodyFromCopy(raw: string): {
+    bodyText: string;
+    bodyTokens: string[];
+    exampleRow: string[];
+} {
+    const tokenOrder: string[] = [];
+    const bodyText = raw.replace(
+        /\{\{(fullName|company|city|state|waId|category)\}\}/gi,
+        (_m, key: string) => {
+            const normalized = key;
+            let idx = tokenOrder.indexOf(normalized);
+            if (idx === -1) {
+                tokenOrder.push(normalized);
+                idx = tokenOrder.length - 1;
+            }
+            return `{{${idx + 1}}}`;
+        }
+    );
+    const examples: Record<string, string> = {
+        fullName: "Maria",
+        company: "Transportadora Exemplo",
+        city: "Curitiba",
+        state: "PR",
+        waId: "5541999999999",
+        category: "Motorista",
+    };
+    return {
+        bodyText,
+        bodyTokens: tokenOrder,
+        exampleRow: tokenOrder.map((t) => examples[t] || "Exemplo"),
+    };
 }
 
 export function countBodyVariablesFromTemplateComponents(

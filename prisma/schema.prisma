@@ -672,6 +672,16 @@ model DatafyCampaign {
   templateLanguage   String?
   templateCategory   String?
   templateComponents Json?
+  /// APPROVED | PENDING | REJECTED | PAUSED | DISABLED
+  templateApprovalStatus String?
+  /// existing_template | custom_submitted
+  contentSource      String    @default("existing_template")
+  /// User-authored body text (campaign copy / template body source).
+  messageBody        String?   @db.Text
+  /// Optional HEADER IMAGE — public URL used at send time (link).
+  headerImageUrl     String?   @db.Text
+  /// Meta header_handle from Datafy /uploads (template creation).
+  headerImageHandle  String?
   /// Variable mapping: { "body": ["{{fullName}}", "{{company}}"], "header": [...] }
   variableMapping    Json?
   segmentFilter      Json?

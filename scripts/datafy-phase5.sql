@@ -139,3 +139,15 @@ DO $$ BEGIN
     ON DELETE CASCADE ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+-- Phase 5 UX fix — personalized copy + optional header image
+ALTER TABLE "DatafyCampaign"
+  ADD COLUMN IF NOT EXISTS "templateApprovalStatus" TEXT;
+ALTER TABLE "DatafyCampaign"
+  ADD COLUMN IF NOT EXISTS "contentSource" TEXT NOT NULL DEFAULT 'existing_template';
+ALTER TABLE "DatafyCampaign"
+  ADD COLUMN IF NOT EXISTS "messageBody" TEXT;
+ALTER TABLE "DatafyCampaign"
+  ADD COLUMN IF NOT EXISTS "headerImageUrl" TEXT;
+ALTER TABLE "DatafyCampaign"
+  ADD COLUMN IF NOT EXISTS "headerImageHandle" TEXT;

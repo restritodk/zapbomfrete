@@ -108,6 +108,8 @@ async function sendOneRecipient(
         purpose: string;
         requireConsent: boolean;
         delayMs: number;
+        headerImageUrl?: string | null;
+        messageBody?: string | null;
     },
     recipientId: string
 ) {
@@ -223,8 +225,17 @@ async function sendOneRecipient(
         recipient.fullName
     );
 
+    const fullCampaign = await prisma.datafyCampaign.findUnique({
+        where: { id: campaign.id },
+        select: {
+            headerImageUrl: true,
+            messageBody: true,
+            variableMapping: true,
+        },
+    });
+
     const components = buildTemplateComponents(
-        campaign.variableMapping as {
+        (fullCampaign?.variableMapping || campaign.variableMapping) as {
             body?: string[];
             header?: string[];
         } | null,
@@ -232,10 +243,15 @@ async function sendOneRecipient(
             fullName: recipient.fullName,
             company: recipient.company,
             waId: recipient.waId,
+        },
+        {
+            headerImageUrl: fullCampaign?.headerImageUrl || null,
         }
     );
 
-    const preview = `Template: ${campaign.templateName}`;
+    const preview =
+        fullCampaign?.messageBody?.slice(0, 280) ||
+        `Template: ${campaign.templateName}`;
 
     let messageId = existingMsg?.id;
     if (!messageId) {
@@ -446,6 +462,8 @@ async function processCampaign(campaignId: string) {
                     purpose: true,
                     requireConsent: true,
                     delayMs: true,
+                    headerImageUrl: true,
+                    messageBody: true,
                 },
             });
             if (!fresh || fresh.status !== "running") break;

@@ -258,6 +258,35 @@ export class DatafyClient {
     }> {
         return this.request("GET", `/media/${encodeURIComponent(mediaId)}`);
     }
+
+    /**
+     * POST /v1/{waba_id}/message_templates — submit template for Meta approval.
+     * Returns PENDING; cannot send until APPROVED.
+     */
+    createTemplate(
+        wabaId: string,
+        body: {
+            name: string;
+            language: string;
+            category: "MARKETING" | "UTILITY" | "AUTHENTICATION";
+            parameter_format?: "POSITIONAL" | "NAMED";
+            components: unknown[];
+        }
+    ): Promise<{ id?: string; status?: string; category?: string }> {
+        return this.request("POST", `/v1/${encodeURIComponent(wabaId)}/message_templates`, {
+            body,
+        });
+    }
+
+    /**
+     * POST /uploads — Datafy helper: public URL → Meta file handle
+     * (required for template HEADER IMAGE example.header_handle).
+     */
+    createFileHandle(url: string): Promise<{ handle?: string }> {
+        return this.request("POST", "/uploads", {
+            body: { url },
+        });
+    }
 }
 
 export type DatafySendMessageResponse = {

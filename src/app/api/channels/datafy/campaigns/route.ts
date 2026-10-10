@@ -48,9 +48,15 @@ const createSchema = z.object({
     templateLanguage: z.string().max(20).nullable().optional(),
     templateCategory: z.string().max(40).nullable().optional(),
     templateComponents: z.unknown().optional(),
+    templateApprovalStatus: z.string().max(40).nullable().optional(),
+    contentSource: z.string().max(40).optional(),
+    messageBody: z.string().max(4096).nullable().optional(),
+    headerImageUrl: z.string().max(2000).nullable().optional(),
+    headerImageHandle: z.string().max(2000).nullable().optional(),
     variableMapping: z.unknown().optional(),
     segmentFilter: z
         .object({
+            selectAllEligible: z.boolean().optional(),
             contactIds: z.array(z.string()).optional(),
             tagIds: z.array(z.string()).optional(),
             category: z.string().nullable().optional(),

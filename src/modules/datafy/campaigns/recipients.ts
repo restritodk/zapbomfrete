@@ -4,6 +4,8 @@ import { evaluateEligibility, type EligibilityContact } from "./eligibility";
 import type { CampaignPurpose } from "./constants";
 
 export type SegmentFilter = {
+    /** When true (default UX), load all active org contacts; geo filters remain optional. */
+    selectAllEligible?: boolean;
     contactIds?: string[];
     tagIds?: string[];
     category?: string | null;
@@ -20,6 +22,7 @@ export async function resolveSegmentContacts(filter: SegmentFilter) {
         active: true,
     };
 
+    // Manual multi-select takes precedence; otherwise optional filters / all Brazil
     if (filter.contactIds?.length) {
         where.id = { in: filter.contactIds };
     }

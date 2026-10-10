@@ -10,6 +10,7 @@ const schema = z.object({
     purpose: z.enum(CAMPAIGN_PURPOSES).optional(),
     requireConsent: z.boolean().optional(),
     segmentFilter: z.object({
+        selectAllEligible: z.boolean().optional(),
         contactIds: z.array(z.string()).optional(),
         tagIds: z.array(z.string()).optional(),
         category: z.string().nullable().optional(),
