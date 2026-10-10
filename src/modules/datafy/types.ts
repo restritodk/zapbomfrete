@@ -127,8 +127,8 @@ export interface DatafyPublicStatus {
     webhookConfigured: boolean;
     lastVerifiedAt: string | null;
     lastError: string | null;
-    /** Phase 1: outbound campaigns via Datafy are intentionally disabled. */
-    outboundCampaignsEnabled: false;
+    /** Phase 5: official template campaigns enabled (separate from Baileys). */
+    outboundCampaignsEnabled: boolean;
     encryptionKeySource: "datafy" | "auth_secret" | "none";
 }
 

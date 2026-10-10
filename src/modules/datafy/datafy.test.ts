@@ -319,7 +319,7 @@ describe("Public status never exposes full secrets", () => {
         assert.ok(pub.webhookSecretMasked?.includes("••••"));
         assert.ok(pub.lastError?.includes("sk_live_••••"));
         assert.equal(pub.webhookUrlIsHttps, true);
-        assert.equal(pub.outboundCampaignsEnabled, false);
+        assert.equal(pub.outboundCampaignsEnabled, true);
         assert.equal(pub.webhookUrl, "https://app.example.com/api/webhooks/datafy");
     });
 });

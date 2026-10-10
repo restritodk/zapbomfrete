@@ -16,6 +16,7 @@
     "test:channels": "tsx --test src/modules/channels/channels.test.ts",
     "test:datafy-chat": "tsx --test src/modules/datafy/chat/chat.test.ts",
     "test:crm": "tsx --test src/modules/crm/crm.test.ts",
+    "test:campaigns": "tsx --test src/modules/datafy/campaigns/campaigns.test.ts",
     "db:push": "prisma db push && prisma generate",
     "db:studio": "prisma studio",
     "make-admin": "node scripts/setup-admin.js",

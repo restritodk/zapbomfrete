@@ -156,7 +156,7 @@ export function toPublicStatus(cfg: DatafyResolvedConfig): DatafyPublicStatus {
         webhookConfigured: cfg.webhookConfigured,
         lastVerifiedAt: cfg.lastVerifiedAt?.toISOString() ?? null,
         lastError: cfg.lastError ? redactSecrets(cfg.lastError) : null,
-        outboundCampaignsEnabled: false,
+        outboundCampaignsEnabled: true,
         encryptionKeySource: encryptionKeySource(),
     };
 }

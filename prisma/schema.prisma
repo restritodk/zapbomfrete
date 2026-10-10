@@ -54,6 +54,7 @@ model User {
   datafySentMessages DatafyMessage[] @relation("DatafySentBy")
   crmContactsCreated CrmContact[] @relation("CrmContactCreatedBy")
   crmContactsUpdated CrmContact[] @relation("CrmContactUpdatedBy")
+  datafyCampaignsCreated DatafyCampaign[] @relation("DatafyCampaignCreatedBy")
 }
 
 model Session {
@@ -654,4 +655,118 @@ model DatafyAssignmentHistory {
   conversation DatafyConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, createdAt])
+}
+
+/// Official Datafy mass campaign (separate from Baileys BroadcastLog).
+model DatafyCampaign {
+  id                 String    @id @default(cuid())
+  organizationKey    String    @default("default")
+  channelId          String    @default("datafy-official")
+  name               String
+  description        String?   @db.Text
+  /// marketing | utility | authentication | transactional | other
+  purpose            String    @default("marketing")
+  /// draft | scheduled | preparing | running | paused | completed | completed_with_errors | cancelled | failed
+  status             String    @default("draft")
+  templateName       String?
+  templateLanguage   String?
+  templateCategory   String?
+  templateComponents Json?
+  /// Variable mapping: { "body": ["{{fullName}}", "{{company}}"], "header": [...] }
+  variableMapping    Json?
+  segmentFilter      Json?
+  timezone           String    @default("America/Sao_Paulo")
+  scheduledAt        DateTime?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  pausedAt           DateTime?
+  cancelledAt        DateTime?
+  /// Milliseconds between recipient sends (rate control).
+  delayMs            Int       @default(1200)
+  batchSize          Int       @default(10)
+  /// When true, queue advances without calling Datafy send API.
+  dryRun             Boolean   @default(false)
+  requireConsent     Boolean   @default(true)
+  totalSelected      Int       @default(0)
+  totalEligible      Int       @default(0)
+  totalExcluded      Int       @default(0)
+  totalQueued        Int       @default(0)
+  totalSent          Int       @default(0)
+  totalAccepted      Int       @default(0)
+  totalDelivered     Int       @default(0)
+  totalRead          Int       @default(0)
+  totalFailed        Int       @default(0)
+  totalSkipped       Int       @default(0)
+  totalCancelled     Int       @default(0)
+  lastError          String?   @db.Text
+  /// Worker lock for single-runner safety.
+  lockedAt           DateTime?
+  lockedBy           String?
+  createdById        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  createdBy  User?                     @relation("DatafyCampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  recipients DatafyCampaignRecipient[]
+  events     DatafyCampaignEvent[]
+
+  @@index([organizationKey, status])
+  @@index([channelId, status])
+  @@index([scheduledAt])
+  @@index([createdAt])
+  @@index([status, lockedAt])
+}
+
+model DatafyCampaignRecipient {
+  id              String    @id @default(cuid())
+  campaignId      String
+  crmContactId    String?
+  waId            String
+  fullName        String?
+  company         String?
+  /// pending | skipped | queued | sending | accepted | sent | delivered | read | failed | cancelled | unknown_after_send
+  status          String    @default("pending")
+  skipReason      String?
+  attemptCount    Int       @default(0)
+  maxAttempts     Int       @default(3)
+  clientMessageId String?   @unique
+  wamid           String?
+  datafyMessageId String?
+  conversationId  String?
+  lastError       String?   @db.Text
+  errorCode       Int?
+  nextAttemptAt   DateTime?
+  sentAt          DateTime?
+  acceptedAt      DateTime?
+  deliveredAt     DateTime?
+  readAt          DateTime?
+  failedAt        DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  campaign DatafyCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, waId])
+  @@index([campaignId, status])
+  @@index([wamid])
+  @@index([crmContactId])
+  @@index([status, nextAttemptAt])
+}
+
+model DatafyCampaignEvent {
+  id         String   @id @default(cuid())
+  campaignId String
+  /// status_change | started | paused | resumed | cancelled | recipient_update | error | note
+  type       String
+  fromStatus String?
+  toStatus   String?
+  message    String?  @db.Text
+  meta       Json?
+  actorId    String?
+  createdAt  DateTime @default(now())
+
+  campaign DatafyCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, createdAt])
+  @@index([type])
 }

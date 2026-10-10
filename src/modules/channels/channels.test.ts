@@ -143,13 +143,13 @@ describe("Baileys isolation guards", () => {
         assert.equal(ok.rejected, false);
     });
 
-    it("blocks outbound Datafy campaigns in Phase 2", async () => {
+    it("Baileys broadcast route rejects Datafy channel id (use campaigns module)", async () => {
         const res = datafyOutboundNotImplementedResponse();
         assert.equal(res.status, 403);
         const body = await res.json();
-        assert.equal(body.outboundCampaignsEnabled, false);
+        assert.equal(body.outboundCampaignsEnabled, true);
         assert.equal(body.provider, "datafy");
-        assert.match(String(body.message), /fase futura|não estão|não disponível|Datafy/i);
+        assert.equal(body.error, "DATAFY_USE_CAMPAIGNS_MODULE");
     });
 });
 

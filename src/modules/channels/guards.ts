@@ -32,16 +32,19 @@ export function baileysRouteRejectedForChannel(channelId: string | null | undefi
     return { rejected: false };
 }
 
-/** Phase 2: outbound Datafy campaigns remain disabled. */
+/**
+ * Baileys broadcast routes must not accept the Datafy channel id.
+ * Official campaigns use /api/channels/datafy/campaigns instead.
+ */
 export function datafyOutboundNotImplementedResponse(): NextResponse {
     return NextResponse.json(
         {
             status: false,
             message:
-                "Disparos via canal oficial Datafy estarão disponíveis em uma fase futura. Use uma sessão Baileys para envios atuais.",
-            error: "DATAFY_OUTBOUND_NOT_ENABLED",
+                "Este endpoint é exclusivo Baileys. Para campanhas oficiais Datafy use Disparo → WhatsApp Oficial.",
+            error: "DATAFY_USE_CAMPAIGNS_MODULE",
             provider: "datafy",
-            outboundCampaignsEnabled: false,
+            outboundCampaignsEnabled: true,
         },
         { status: 403 }
     );

@@ -44,7 +44,7 @@ type IntegrationStatus = {
     webhookConfigured: boolean;
     lastVerifiedAt: string | null;
     lastError: string | null;
-    outboundCampaignsEnabled: false;
+    outboundCampaignsEnabled: boolean;
     encryptionKeySource: "datafy" | "auth_secret" | "none";
     recommendedWebhookEvents?: string[];
     docsUrl?: string;
@@ -286,7 +286,8 @@ export default function DatafyIntegrationPage() {
                     </h2>
                     <p className="mt-1 text-sm text-muted-foreground">
                         Integração oficial WhatsApp (Meta Cloud) via Datafy —
-                        canal compartilhado. Sem campanhas nesta fase.
+                        canal compartilhado. Campanhas oficiais em Disparo →
+                        Datafy.
                     </p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => void load()}>

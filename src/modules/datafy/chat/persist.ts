@@ -324,6 +324,22 @@ export async function applyOutboundStatus(opts: {
         conversationId: msg.conversationId,
         message: serializeMessage(updated),
     });
+
+    try {
+        const { syncCampaignRecipientFromWamid } = await import(
+            "@/modules/datafy/campaigns/status-sync"
+        );
+        await syncCampaignRecipientFromWamid({
+            wamid: opts.wamid,
+            status: next,
+            timestamp: opts.timestamp,
+            errorCode: opts.errorCode,
+            errorTitle: opts.errorTitle,
+        });
+    } catch {
+        /* campaign tables may be absent during partial migrate */
+    }
+
     return true;
 }
 

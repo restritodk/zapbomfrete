@@ -36,8 +36,9 @@ import {
 import { toast } from "sonner";
 import { useSession } from "@/components/dashboard/session-provider";
 import { SessionGuard } from "@/components/dashboard/session-guard";
-import { ProviderUnavailablePanel } from "@/components/dashboard/provider-unavailable";
 import { useSocket } from "@/components/chat/socket-context";
+import { DatafyCampaignsPanel } from "@/components/dashboard/datafy-campaigns-panel";
+import { DATAFY_OFFICIAL_CHANNEL_ID } from "@/modules/channels/ids";
 import {
     BroadcastProgressModal,
     type BroadcastRecipientRow,
@@ -141,7 +142,11 @@ function classifyAttachment(file: File): "image" | "document" | null {
 }
 
 export default function BroadcastPage() {
-    const { sessionId, isDatafyChannel, selectedChannel } = useSession();
+    const { sessionId, isDatafyChannel, selectedChannel, setChannelId, channels } =
+        useSession();
+    const [provider, setProvider] = useState<"datafy" | "baileys">(
+        isDatafyChannel ? "datafy" : "baileys"
+    );
     const [contacts, setContacts] = useState("");
     const [message, setMessage] = useState("");
     const [delay, setDelay] = useState([2000]);
@@ -155,6 +160,10 @@ export default function BroadcastPage() {
     const [broadcastDelayMs, setBroadcastDelayMs] = useState(2000);
     const [systemTimezone, setSystemTimezone] = useState("America/Sao_Paulo");
     const [activeTab, setActiveTab] = useState<"new" | "history">("new");
+
+    useEffect(() => {
+        if (isDatafyChannel) setProvider("datafy");
+    }, [isDatafyChannel]);
     const [cancellingBroadcast, setCancellingBroadcast] = useState(false);
     const lastProcessedJidRef = useRef<string | null>(null);
     const activeBroadcastIdRef = useRef<string | null>(null);
@@ -853,28 +862,67 @@ export default function BroadcastPage() {
         { id: "history" as const, label: "Histórico", icon: History },
     ];
 
-    if (isDatafyChannel) {
-        return (
-            <SessionGuard>
-                <ProviderUnavailablePanel
-                    feature="broadcast"
-                    channelName={selectedChannel?.name}
-                    displayPhoneNumber={selectedChannel?.displayPhoneNumber}
-                />
-            </SessionGuard>
-        );
-    }
-
     return (
         <SessionGuard>
             <div className="space-y-6">
                 <div>
                     <h2 className="text-xl sm:text-3xl font-bold tracking-tight">Disparo em massa</h2>
                     <p className="text-muted-foreground text-sm mt-1">
-                        Envie mensagens para vários números. Números sem DDI recebem +55 automaticamente.
+                        Escolha o provedor: oficial Datafy (templates) ou WhatsApp conectado Baileys.
                     </p>
                 </div>
 
+                <div className="flex flex-col sm:flex-row gap-2">
+                    <div className="flex gap-1 bg-muted/50 p-1 rounded-lg w-fit">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setProvider("datafy");
+                                setChannelId(DATAFY_OFFICIAL_CHANNEL_ID);
+                            }}
+                            className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
+                                provider === "datafy"
+                                    ? "bg-background shadow-sm text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            }`}
+                        >
+                            WhatsApp Oficial — Datafy
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setProvider("baileys");
+                                const baileys = channels.find(
+                                    (c) => c.provider === "baileys"
+                                );
+                                if (baileys) setChannelId(baileys.id);
+                            }}
+                            className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
+                                provider === "baileys"
+                                    ? "bg-background shadow-sm text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            }`}
+                        >
+                            WhatsApp conectado — Baileys
+                        </button>
+                    </div>
+                </div>
+
+                {provider === "datafy" ? (
+                    <DatafyCampaignsPanel />
+                ) : isDatafyChannel || !sessionId ? (
+                    <div className="rounded-2xl border bg-muted/20 p-8 text-sm text-muted-foreground">
+                        Selecione uma sessão Baileys no seletor de canal para usar o
+                        disparo clássico (TXT/CSV, grupos e histórico Baileys
+                        permanecem intactos).
+                        {selectedChannel?.provider === "datafy" && (
+                            <span className="block mt-2">
+                                Canal atual: {selectedChannel.name} (oficial).
+                            </span>
+                        )}
+                    </div>
+                ) : (
+                    <>
                 <div className="flex gap-1 bg-muted/50 p-1 rounded-lg w-fit">
                     {tabs.map((tab) => (
                         <button
@@ -1325,6 +1373,8 @@ export default function BroadcastPage() {
                         ) : null}
                     </DialogContent>
                 </Dialog>
+                    </>
+                )}
             </div>
         </SessionGuard>
     );

@@ -10,8 +10,8 @@ import type { DatafyPublicStatus, DatafyTemplatesResponse } from "./types";
 
 /**
  * Modular Datafy provider — fully isolated from Baileys WhatsAppInstance.
- * Phase 1: auth, account probe, templates listing, webhook readiness.
- * Outbound campaigns / broadcast migration intentionally disabled.
+ * Phase 5: template campaigns enabled via dedicated campaign module
+ * (never through Baileys BroadcastLog).
  */
 export class DatafyProvider {
     readonly name = "datafy" as const;
@@ -134,15 +134,15 @@ export class DatafyProvider {
             name: opts?.name,
             after: opts?.after,
             limit: opts?.limit ?? 50,
+            fields:
+                "name,status,category,language,id,rejected_reason,components",
         });
     }
 
-    /**
-     * Phase 2 guard — real outbound campaign sends are not enabled yet.
-     */
+    /** @deprecated Phase 5 campaigns use /api/channels/datafy/campaigns */
     assertOutboundDisabled(): never {
         throw new DatafyApiError(
-            "Envio de campanhas via Datafy desabilitado nesta fase",
+            "Use o módulo de Campanhas Oficiais Datafy em Disparo em massa",
             403
         );
     }

@@ -53,8 +53,13 @@ app.prepare().then(() => {
   waManager.setup(io);
   waManager.loadSessions();
 
-  // Start Scheduler
+  // Start Scheduler (Baileys scheduled messages)
   import("../modules/whatsapp/scheduler").then(m => m.startScheduler());
+
+  // Datafy official campaign worker (PostgreSQL-backed queue)
+  import("../modules/datafy/campaigns/worker").then((m) =>
+    m.startDatafyCampaignWorker()
+  );
 
   // Cloudflare 520 Fix: increase keep-alive timeout so Node doesn't kill idle connections that Cloudflare expects to reuse
   // See: https://github.com/vercel/next.js/issues/48962
