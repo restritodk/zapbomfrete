@@ -222,7 +222,10 @@ export async function createCrmContact(
 
     // Import/manual never auto-grants marketing consent
     let consentStatus = input.consentStatus || "unknown";
-    if (input.origin === "import" && consentStatus === "granted") {
+    if (
+        (input.origin === "import" || input.origin === "baileys") &&
+        consentStatus === "granted"
+    ) {
         consentStatus = "unknown";
     }
 
@@ -387,10 +390,14 @@ export async function importCrmPhones(opts: {
     userId: string;
     category?: string | null;
     tagNames?: string[];
+    /** import | baileys — never grants marketing consent */
+    origin?: "import" | "baileys";
 }) {
     let created = 0;
     let skipped = 0;
     let updated = 0;
+    const origin =
+        opts.origin === "baileys" ? ("baileys" as const) : ("import" as const);
 
     for (const raw of opts.phones) {
         let waId: string;
@@ -420,7 +427,7 @@ export async function importCrmPhones(opts: {
         await createCrmContact(
             {
                 waId,
-                origin: "import",
+                origin,
                 consentStatus: "unknown",
                 category: opts.category || null,
                 tagNames: opts.tagNames,

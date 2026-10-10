@@ -92,7 +92,8 @@ import {
     skipReasonLabel,
 } from "@/modules/datafy/campaigns/eligibility";
 import {
-    extractPhonesFromParticipants,
+    classifyGroupParticipants,
+    DATAFY_GROUP_IMPORT_KEY,
     formatPhoneDisplay,
     parsePhoneList,
 } from "@/lib/phone-br";
@@ -347,15 +348,17 @@ function recipientDetail(s: string, skip?: string | null, err?: string | null) {
 }
 
 export function DatafyCampaignsPanel() {
-    const { channels } = useSession();
+    const { channels, refreshChannels } = useSession();
+    const baileysSessions = useMemo(
+        () => channels.filter((c) => c.provider === "baileys"),
+        [channels]
+    );
     const baileysConnected = useMemo(
         () =>
-            channels.filter(
-                (c) =>
-                    c.provider === "baileys" &&
-                    (c.status || "").toUpperCase() === "CONNECTED"
+            baileysSessions.filter(
+                (c) => (c.status || "").toUpperCase() === "CONNECTED"
             ),
-        [channels]
+        [baileysSessions]
     );
 
     const [stats, setStats] = useState<Stats | null>(null);
@@ -435,9 +438,19 @@ export function DatafyCampaignsPanel() {
     const [groupSessionId, setGroupSessionId] = useState("");
     const [groups, setGroups] = useState<GroupItem[]>([]);
     const [groupsLoading, setGroupsLoading] = useState(false);
-    const [selectedGroupJid, setSelectedGroupJid] = useState("");
+    const [selectedGroupJids, setSelectedGroupJids] = useState<Set<string>>(
+        new Set()
+    );
+    const [groupSearch, setGroupSearch] = useState("");
     const [importingGroup, setImportingGroup] = useState(false);
+    const [savingGroupCrm, setSavingGroupCrm] = useState(false);
     const [groupPhones, setGroupPhones] = useState<string[]>([]);
+    const [groupExtractStats, setGroupExtractStats] = useState<{
+        participantCount: number;
+        uniquePhoneCount: number;
+        lidOnly: number;
+        duplicates: number;
+    } | null>(null);
 
     const [execMode, setExecMode] = useState<"now" | "schedule">("now");
     const [scheduledAt, setScheduledAt] = useState("");
@@ -715,14 +728,15 @@ export function DatafyCampaignsPanel() {
         );
     };
 
-    const fetchGroups = useCallback(async (sid: string) => {
+    const fetchGroups = useCallback(async (sid: string, sync = false) => {
         if (!sid) {
             setGroups([]);
             return;
         }
         setGroupsLoading(true);
         try {
-            const res = await fetch(`/api/groups/${sid}`);
+            const qs = sync ? "?sync=1" : "";
+            const res = await fetch(`/api/groups/${sid}${qs}`);
             if (res.ok) {
                 const data = await res.json();
                 setGroups(data?.data || []);
@@ -740,6 +754,11 @@ export function DatafyCampaignsPanel() {
 
     useEffect(() => {
         if (recipientSource !== "groups") return;
+        void refreshChannels();
+    }, [recipientSource, refreshChannels]);
+
+    useEffect(() => {
+        if (recipientSource !== "groups") return;
         if (!groupSessionId && baileysConnected[0]) {
             setGroupSessionId(baileysConnected[0].id);
         }
@@ -747,59 +766,127 @@ export function DatafyCampaignsPanel() {
 
     useEffect(() => {
         if (recipientSource === "groups" && groupSessionId) {
-            void fetchGroups(groupSessionId);
+            void fetchGroups(groupSessionId, true);
+            setSelectedGroupJids(new Set());
         }
     }, [recipientSource, groupSessionId, fetchGroups]);
 
+    // Handoff from Groups menu → Step 2
+    useEffect(() => {
+        try {
+            const raw = sessionStorage.getItem(DATAFY_GROUP_IMPORT_KEY);
+            if (!raw) return;
+            sessionStorage.removeItem(DATAFY_GROUP_IMPORT_KEY);
+            const parsed = JSON.parse(raw) as {
+                phones?: string[];
+                sessionId?: string;
+            };
+            if (!parsed.phones?.length) return;
+            setRecipientSource("groups");
+            if (parsed.sessionId) setGroupSessionId(parsed.sessionId);
+            setGroupPhones(parsed.phones);
+            setGroupExtractStats({
+                participantCount: parsed.phones.length,
+                uniquePhoneCount: parsed.phones.length,
+                lidOnly: 0,
+                duplicates: 0,
+            });
+            setWizardOpen(true);
+            setStep(2);
+            toast.success(
+                `${parsed.phones.length} número(s) importados dos grupos. Calcule a audiência para cruzar com o CRM.`
+            );
+        } catch {
+            /* ignore */
+        }
+    }, []);
+
     const handleImportGroup = async () => {
-        if (!groupSessionId || !selectedGroupJid) {
-            toast.error("Selecione sessão Baileys e um grupo");
+        if (!groupSessionId || !selectedGroupJids.size) {
+            toast.error("Selecione sessão Baileys e ao menos um grupo");
             return;
         }
         setImportingGroup(true);
         try {
-            let participants: unknown[] = [];
-            try {
-                const liveRes = await fetch(
-                    `/api/groups/${groupSessionId}/${encodeURIComponent(selectedGroupJid)}`
-                );
-                if (liveRes.ok) {
-                    const meta = await liveRes.json();
-                    participants = meta?.participants || [];
+            const allParts: unknown[] = [];
+            for (const jid of selectedGroupJids) {
+                let participants: unknown[] = [];
+                try {
+                    const liveRes = await fetch(
+                        `/api/groups/${groupSessionId}/${encodeURIComponent(jid)}`
+                    );
+                    if (liveRes.ok) {
+                        const meta = await liveRes.json();
+                        participants = meta?.participants || [];
+                    }
+                } catch {
+                    /* fallback */
                 }
-            } catch {
-                /* fallback */
+                if (!participants.length) {
+                    const group = groups.find((g) => g.jid === jid);
+                    participants = (group?.participants as unknown[]) || [];
+                }
+                allParts.push(...participants);
             }
-            if (!participants.length) {
-                const group = groups.find((g) => g.jid === selectedGroupJid);
-                participants = (group?.participants as unknown[]) || [];
-            }
-            const phones = extractPhonesFromParticipants(participants);
-            if (!phones.length) {
+            const classified = classifyGroupParticipants(allParts);
+            if (!classified.phones.length) {
                 toast.error(
-                    "Nenhum telefone extraível neste grupo (pode haver só LIDs)"
+                    "Nenhum telefone extraível (participantes podem estar só com LID)"
                 );
+                setGroupExtractStats({
+                    participantCount: classified.participantCount,
+                    uniquePhoneCount: 0,
+                    lidOnly: classified.lidOnly,
+                    duplicates: classified.duplicates,
+                });
                 return;
             }
-            setGroupPhones((prev) => {
-                const seen = new Set(prev);
-                const next = [...prev];
-                for (const p of phones) {
-                    if (!seen.has(p)) {
-                        seen.add(p);
-                        next.push(p);
-                    }
-                }
-                return next;
+            setGroupPhones(classified.phones);
+            setGroupExtractStats({
+                participantCount: classified.participantCount,
+                uniquePhoneCount: classified.uniquePhoneCount,
+                lidOnly: classified.lidOnly,
+                duplicates: classified.duplicates,
             });
             invalidateAudience();
             toast.success(
-                `${phones.length} número(s) do grupo. Participação em grupo não é consentimento de marketing.`
+                `${classified.uniquePhoneCount} número(s) únicos de ${selectedGroupJids.size} grupo(s). Participação ≠ consentimento.`
             );
         } catch {
             toast.error("Falha ao extrair números do grupo");
         } finally {
             setImportingGroup(false);
+        }
+    };
+
+    const handleSaveGroupPhonesToCrm = async () => {
+        if (!groupPhones.length) {
+            toast.error("Extraia participantes antes de salvar no CRM");
+            return;
+        }
+        setSavingGroupCrm(true);
+        try {
+            const res = await fetch("/api/crm/contacts/import", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    text: groupPhones.join("\n"),
+                    origin: "baileys",
+                }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                toast.error(json.message || "Falha ao salvar no CRM");
+                return;
+            }
+            toast.success(
+                `CRM: ${json.data?.created ?? 0} criado(s) · ${json.data?.skipped ?? 0} existente(s). Consentimento não concedido.`
+            );
+            void loadCrmAndTags();
+        } catch {
+            toast.error("Erro ao salvar contatos no CRM");
+        } finally {
+            setSavingGroupCrm(false);
         }
     };
 
@@ -982,7 +1069,9 @@ export function DatafyCampaignsPanel() {
         setImportStats(null);
         setGroupSessionId("");
         setGroups([]);
-        setSelectedGroupJid("");
+        setSelectedGroupJids(new Set());
+        setGroupSearch("");
+        setGroupExtractStats(null);
         setGroupPhones([]);
         setRequireConsent(true);
         setExecMode("now");
@@ -2528,36 +2617,46 @@ export function DatafyCampaignsPanel() {
                                     <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2.5 text-[12px] text-amber-950 leading-relaxed">
                                         <p className="font-medium flex items-center gap-1.5">
                                             <AlertTriangle className="h-3.5 w-3.5" />
-                                            Limitação da API Datafy / WhatsApp
-                                            Business Platform
+                                            Grupos via Baileys · envio via Datafy
                                         </p>
                                         <p className="mt-1">
-                                            A Datafy e a Cloud API oficial não
-                                            oferecem endpoint para listar
-                                            grupos ou participantes. Esta
-                                            opção usa apenas a sessão{" "}
-                                            <strong>Baileys</strong> já
-                                            conectada — isolada do canal
-                                            oficial. Números de grupo não são
-                                            consentimento de marketing e não
-                                            são copiados automaticamente para
-                                            campanhas.
+                                            A Cloud API / Datafy não lista
+                                            grupos. Usamos a sessão Baileys só
+                                            para identificar números; o envio
+                                            real da campanha permanece na API
+                                            oficial. Participação em grupo não
+                                            é consentimento de marketing.
                                         </p>
                                     </div>
 
                                     {!baileysConnected.length ? (
-                                        <p className="text-sm text-muted-foreground">
-                                            Nenhuma sessão Baileys CONNECTED.
-                                            Conecte uma sessão no menu Sessões
-                                            para visualizar grupos.
-                                        </p>
+                                        <div className="space-y-2 text-sm">
+                                            <p className="text-muted-foreground">
+                                                Nenhuma sessão Baileys CONNECTED
+                                                detectada
+                                                {baileysSessions.length
+                                                    ? ` (${baileysSessions.length} sessão(ões) acessível(is) offline)`
+                                                    : ""}
+                                                .
+                                            </p>
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                className="rounded-xl"
+                                                onClick={() =>
+                                                    void refreshChannels()
+                                                }
+                                            >
+                                                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                                                Atualizar status das sessões
+                                            </Button>
+                                        </div>
                                     ) : (
                                         <>
-                                            <div className="grid sm:grid-cols-2 gap-3">
-                                                <div className="space-y-1.5">
-                                                    <Label>
-                                                        Sessão Baileys
-                                                    </Label>
+                                            <div className="space-y-1.5">
+                                                <Label>Sessão Baileys</Label>
+                                                <div className="flex gap-2">
                                                     <Select
                                                         value={groupSessionId}
                                                         onValueChange={(
@@ -2566,16 +2665,17 @@ export function DatafyCampaignsPanel() {
                                                             setGroupSessionId(
                                                                 v
                                                             );
-                                                            setSelectedGroupJid(
-                                                                ""
+                                                            setSelectedGroupJids(
+                                                                new Set()
                                                             );
-                                                            setGroupPhones(
-                                                                []
+                                                            setGroupPhones([]);
+                                                            setGroupExtractStats(
+                                                                null
                                                             );
                                                             invalidateAudience();
                                                         }}
                                                     >
-                                                        <SelectTrigger>
+                                                        <SelectTrigger className="rounded-xl">
                                                             <SelectValue placeholder="Selecione" />
                                                         </SelectTrigger>
                                                         <SelectContent>
@@ -2591,104 +2691,233 @@ export function DatafyCampaignsPanel() {
                                                                     >
                                                                         {s.name}{" "}
                                                                         (
-                                                                        {s.status}
+                                                                        {
+                                                                            s.status
+                                                                        }
                                                                         )
                                                                     </SelectItem>
                                                                 )
                                                             )}
                                                         </SelectContent>
                                                     </Select>
-                                                </div>
-                                                <div className="space-y-1.5">
-                                                    <Label>Grupo</Label>
-                                                    <div className="flex gap-2">
-                                                        <Select
-                                                            value={
-                                                                selectedGroupJid
-                                                            }
-                                                            onValueChange={
-                                                                setSelectedGroupJid
-                                                            }
-                                                        >
-                                                            <SelectTrigger className="flex-1">
-                                                                <SelectValue
-                                                                    placeholder={
-                                                                        groupsLoading
-                                                                            ? "Carregando…"
-                                                                            : "Selecione um grupo"
-                                                                    }
-                                                                />
-                                                            </SelectTrigger>
-                                                            <SelectContent>
-                                                                {groups.map(
-                                                                    (g) => (
-                                                                        <SelectItem
-                                                                            key={
-                                                                                g.jid
-                                                                            }
-                                                                            value={
-                                                                                g.jid
-                                                                            }
-                                                                        >
-                                                                            {g.subject ||
-                                                                                g.jid}{" "}
-                                                                            (
-                                                                            {Array.isArray(
-                                                                                g.participants
-                                                                            )
-                                                                                ? g
-                                                                                      .participants
-                                                                                      .length
-                                                                                : 0}
-                                                                            )
-                                                                        </SelectItem>
-                                                                    )
-                                                                )}
-                                                            </SelectContent>
-                                                        </Select>
-                                                        <Button
-                                                            type="button"
-                                                            variant="secondary"
-                                                            size="icon"
-                                                            className="shrink-0 rounded-xl"
-                                                            title="Atualizar grupos"
-                                                            onClick={() =>
-                                                                groupSessionId &&
+                                                    <Button
+                                                        type="button"
+                                                        variant="secondary"
+                                                        size="icon"
+                                                        className="shrink-0 rounded-xl"
+                                                        title="Atualizar grupos"
+                                                        onClick={() => {
+                                                            void refreshChannels();
+                                                            if (groupSessionId)
                                                                 void fetchGroups(
-                                                                    groupSessionId
-                                                                )
-                                                            }
-                                                        >
-                                                            <RefreshCw
-                                                                className={cn(
-                                                                    "h-4 w-4",
-                                                                    groupsLoading &&
-                                                                        "animate-spin"
-                                                                )}
-                                                            />
-                                                        </Button>
-                                                    </div>
+                                                                    groupSessionId,
+                                                                    true
+                                                                );
+                                                        }}
+                                                    >
+                                                        <RefreshCw
+                                                            className={cn(
+                                                                "h-4 w-4",
+                                                                groupsLoading &&
+                                                                    "animate-spin"
+                                                            )}
+                                                        />
+                                                    </Button>
                                                 </div>
                                             </div>
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                className="rounded-xl"
-                                                disabled={
-                                                    !selectedGroupJid ||
-                                                    importingGroup
-                                                }
-                                                onClick={() =>
-                                                    void handleImportGroup()
-                                                }
-                                            >
-                                                {importingGroup ? (
-                                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+
+                                            <div className="space-y-1.5">
+                                                <Label>
+                                                    Grupos (
+                                                    {selectedGroupJids.size}{" "}
+                                                    selecionado
+                                                    {selectedGroupJids.size ===
+                                                    1
+                                                        ? ""
+                                                        : "s"}
+                                                    )
+                                                </Label>
+                                                <Input
+                                                    value={groupSearch}
+                                                    onChange={(e) =>
+                                                        setGroupSearch(
+                                                            e.target.value
+                                                        )
+                                                    }
+                                                    placeholder="Buscar grupo…"
+                                                    className="rounded-xl h-9"
+                                                />
+                                                {groupsLoading ? (
+                                                    <p className="text-xs text-muted-foreground flex items-center gap-1.5 py-3">
+                                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                        Carregando grupos…
+                                                    </p>
                                                 ) : (
-                                                    <Users className="h-4 w-4 mr-2" />
+                                                    <div className="max-h-48 overflow-y-auto rounded-xl border bg-white divide-y">
+                                                        {groups
+                                                            .filter(
+                                                                (g) =>
+                                                                    !groupSearch.trim() ||
+                                                                    (g.subject ||
+                                                                        "")
+                                                                        .toLowerCase()
+                                                                        .includes(
+                                                                            groupSearch.toLowerCase()
+                                                                        ) ||
+                                                                    g.jid.includes(
+                                                                        groupSearch
+                                                                    )
+                                                            )
+                                                            .map((g) => {
+                                                                const checked =
+                                                                    selectedGroupJids.has(
+                                                                        g.jid
+                                                                    );
+                                                                const pCount =
+                                                                    Array.isArray(
+                                                                        g.participants
+                                                                    )
+                                                                        ? g
+                                                                              .participants
+                                                                              .length
+                                                                        : 0;
+                                                                return (
+                                                                    <label
+                                                                        key={
+                                                                            g.jid
+                                                                        }
+                                                                        className="flex items-start gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-slate-50"
+                                                                    >
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            className="mt-1"
+                                                                            checked={
+                                                                                checked
+                                                                            }
+                                                                            onChange={() => {
+                                                                                setSelectedGroupJids(
+                                                                                    (
+                                                                                        prev
+                                                                                    ) => {
+                                                                                        const next =
+                                                                                            new Set(
+                                                                                                prev
+                                                                                            );
+                                                                                        if (
+                                                                                            next.has(
+                                                                                                g.jid
+                                                                                            )
+                                                                                        )
+                                                                                            next.delete(
+                                                                                                g.jid
+                                                                                            );
+                                                                                        else
+                                                                                            next.add(
+                                                                                                g.jid
+                                                                                            );
+                                                                                        return next;
+                                                                                    }
+                                                                                );
+                                                                            }}
+                                                                        />
+                                                                        <span className="min-w-0">
+                                                                            <span className="font-medium block truncate">
+                                                                                {g.subject ||
+                                                                                    "Sem nome"}
+                                                                            </span>
+                                                                            <span className="text-[11px] text-muted-foreground font-mono break-all">
+                                                                                {
+                                                                                    g.jid
+                                                                                }{" "}
+                                                                                ·{" "}
+                                                                                {
+                                                                                    pCount
+                                                                                }{" "}
+                                                                                part.
+                                                                            </span>
+                                                                        </span>
+                                                                    </label>
+                                                                );
+                                                            })}
+                                                        {!groups.length && (
+                                                            <p className="px-3 py-4 text-xs text-muted-foreground">
+                                                                Nenhum grupo
+                                                                nesta sessão.
+                                                            </p>
+                                                        )}
+                                                    </div>
                                                 )}
-                                                Extrair participantes
-                                            </Button>
+                                            </div>
+
+                                            <div className="flex flex-wrap gap-2">
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    className="rounded-xl"
+                                                    disabled={
+                                                        !selectedGroupJids.size ||
+                                                        importingGroup
+                                                    }
+                                                    onClick={() =>
+                                                        void handleImportGroup()
+                                                    }
+                                                >
+                                                    {importingGroup ? (
+                                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                                    ) : (
+                                                        <Users className="h-4 w-4 mr-2" />
+                                                    )}
+                                                    Extrair participantes
+                                                </Button>
+                                                <Button
+                                                    type="button"
+                                                    variant="secondary"
+                                                    className="rounded-xl"
+                                                    disabled={
+                                                        !groupPhones.length ||
+                                                        savingGroupCrm
+                                                    }
+                                                    onClick={() =>
+                                                        void handleSaveGroupPhonesToCrm()
+                                                    }
+                                                >
+                                                    {savingGroupCrm ? (
+                                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                                    ) : (
+                                                        <Contact className="h-4 w-4 mr-2" />
+                                                    )}
+                                                    Salvar no CRM
+                                                </Button>
+                                            </div>
+
+                                            {groupExtractStats && (
+                                                <div className="flex flex-wrap gap-2 text-[11px] text-slate-600">
+                                                    <span className="rounded-lg bg-white border px-2 py-1">
+                                                        {
+                                                            groupExtractStats.participantCount
+                                                        }{" "}
+                                                        participantes
+                                                    </span>
+                                                    <span className="rounded-lg bg-white border px-2 py-1">
+                                                        {
+                                                            groupExtractStats.uniquePhoneCount
+                                                        }{" "}
+                                                        válidos únicos
+                                                    </span>
+                                                    <span className="rounded-lg bg-white border px-2 py-1">
+                                                        {
+                                                            groupExtractStats.lidOnly
+                                                        }{" "}
+                                                        só LID
+                                                    </span>
+                                                    <span className="rounded-lg bg-white border px-2 py-1">
+                                                        {
+                                                            groupExtractStats.duplicates
+                                                        }{" "}
+                                                        duplicados
+                                                    </span>
+                                                </div>
+                                            )}
                                         </>
                                     )}
                                 </div>

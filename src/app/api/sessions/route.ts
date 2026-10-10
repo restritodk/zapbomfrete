@@ -13,9 +13,20 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ status: false, message: "Unauthorized", error: "Unauthorized" }, { status: 401 });
         }
 
-        // Get sessions based on user role
+        // Get sessions based on user role — merge live waManager status
         const sessions = await getAccessibleSessions(user.id, user.role);
-        return NextResponse.json({ status: true, message: "Sessions retrieved successfully", data: sessions });
+        const { resolveBaileysLiveStatus } = await import(
+            "@/modules/channels/baileys-status"
+        );
+        const withLive = sessions.map((s) => ({
+            ...s,
+            status: resolveBaileysLiveStatus(s.sessionId, s.status),
+        }));
+        return NextResponse.json({
+            status: true,
+            message: "Sessions retrieved successfully",
+            data: withLive,
+        });
     } catch (error) {
         console.error("Get sessions error:", error);
         return NextResponse.json({ status: false, message: "Failed to fetch sessions", error: "Failed to fetch sessions" }, { status: 500 });

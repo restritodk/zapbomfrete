@@ -24,11 +24,14 @@ export async function POST(request: NextRequest) {
         }
 
         const { phones, invalid, duplicates } = parsePhoneList(text);
+        const origin =
+            body?.origin === "baileys" ? ("baileys" as const) : ("import" as const);
         const result = await importCrmPhones({
             phones,
             userId: gate.user.id,
             category: body?.category || null,
             tagNames: Array.isArray(body?.tagNames) ? body.tagNames : undefined,
+            origin,
         });
 
         return NextResponse.json({

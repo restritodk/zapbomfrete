@@ -28,6 +28,10 @@ export {
 } from "./datafy-channel";
 export { listAccessibleChannels } from "./list-channels";
 export {
+    resolveBaileysLiveStatus,
+    isBaileysConnectedStatus,
+} from "./baileys-status";
+export {
     baileysRouteRejectedForChannel,
     datafyOutboundNotImplementedResponse,
 } from "./guards";

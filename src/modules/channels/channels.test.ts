@@ -16,6 +16,7 @@ import {
     baileysRouteRejectedForChannel,
     datafyOutboundNotImplementedResponse,
 } from "./guards";
+import { isBaileysConnectedStatus } from "./baileys-status";
 import { isAdmin } from "@/lib/api-auth";
 
 describe("Channel identifiers", () => {
@@ -159,5 +160,13 @@ describe("Provider routing contract", () => {
             resolveChannelProvider(DATAFY_OFFICIAL_CHANNEL_ID),
             "baileys"
         );
+    });
+});
+
+describe("Baileys live status helpers", () => {
+    it("recognizes CONNECTED case-insensitively", () => {
+        assert.equal(isBaileysConnectedStatus("CONNECTED"), true);
+        assert.equal(isBaileysConnectedStatus("connected"), true);
+        assert.equal(isBaileysConnectedStatus("DISCONNECTED"), false);
     });
 });
