@@ -103,6 +103,8 @@ function trimLine(line: string): string {
 
 /**
  * Remove rótulos redundantes do valor (evita "Frete: FRETE: R$ …" / "Janela: JANELA …").
+ * Delimitador (: / -) é obrigatório na maioria dos casos — nunca stripar
+ * prefixos que corrompem nomes (Paranaguá→naguá, TERMINAL CORREA→CORREA).
  */
 export function stripFieldLabelPrefix(
     key: keyof BulletinLoadFields,
@@ -110,37 +112,50 @@ export function stripFieldLabelPrefix(
 ): string {
     let v = value.trim();
     if (!v) return v;
+    // Delimiter required after keyword (prevents "para" matching Paranaguá)
+    const withDelim = (alts: string) =>
+        new RegExp(`^(?:${alts})\\s*[:：\\-–]\\s*`, "i");
     const patterns: Partial<Record<keyof BulletinLoadFields, RegExp[]>> = {
-        origem: [/^(?:origem|orige[mn]|de)\s*[:：\-–]?\s*/i],
-        destino: [/^(?:destino|para|até|ate)\s*[:：\-–]?\s*/i],
+        origem: [withDelim("origem|orige[mn]|de")],
+        destino: [withDelim("destino|para|at[eé]|ate")],
         terminal: [
-            /^(?:terminal|porto|descarga|local\s*de\s*descarga|armaz[eé]m)\s*[:：\-–]?\s*/i,
+            withDelim(
+                "terminal|porto|descarga|local\\s*de\\s*descarga|armaz[eé]m"
+            ),
         ],
         localCarregamento: [
-            /^(?:local\s*(?:de\s*)?carreg(?:amento)?|carregamento|fazenda|algodoeira)\s*[:：\-–]?\s*/i,
+            withDelim(
+                "local\\s*(?:de\\s*)?carreg(?:amento)?|carregamento|fazenda|algodoeira"
+            ),
         ],
         janela: [
-            /^(?:janela|carreg(?:amento)?\/?entrega|prazo|data(?:\s*de\s*carregamento)?|agendamento|tipo\s*de\s*janela)\s*[:：\-–]?\s*/i,
+            withDelim(
+                "janela|carreg(?:amento)?\\/?entrega|prazo|data(?:\\s*de\\s*carregamento)?|agendamento|tipo\\s*de\\s*janela"
+            ),
+            // "JANELA 13/10/2026" / "JANELA D+5" sem dois-pontos
+            /^(?:janela)\s+(?=\d|D\s*\+|Imediato)/i,
         ],
         veiculo: [
-            /^(?:ve[ií]culo|tipo\s*(?:de\s*)?ve[ií]culo|caminh[aã]o|equipamento)\s*[:：\-–]?\s*/i,
+            withDelim(
+                "ve[ií]culo|tipo\\s*(?:de\\s*)?ve[ií]culo|caminh[aã]o|equipamento"
+            ),
         ],
-        quantidade: [
-            /^(?:qtd|quantidade|qtde|ve[ií]culos?)\s*[:：\-–]?\s*/i,
-        ],
+        quantidade: [withDelim("qtd|quantidade|qtde|ve[ií]culos?")],
         frete: [
-            /^(?:frete|valor(?:\s*do\s*frete)?|pre[cç]o)\s*[:：\-–]?\s*/i,
+            withDelim("frete|valor(?:\\s*do\\s*frete)?|pre[cç]o"),
+            // "FRETE R$ 420" sem dois-pontos
+            /^(?:frete)\s+(?=R\$|[\d.,])/i,
         ],
-        lote: [/^(?:lote|pedido|os)\s*[:：\-–]?\s*/i],
+        lote: [withDelim("lote|pedido|os")],
         pedagio: [
-            /^(?:ped[aá]gio|tag|condi[cç][aã]o\s*(?:do\s*)?ped[aá]gio)\s*[:：\-–]?\s*/i,
+            withDelim(
+                "ped[aá]gio|tag|condi[cç][aã]o\\s*(?:do\\s*)?ped[aá]gio"
+            ),
+            // "PEDÁGIO INCLUSO…" sem delimitador
+            /^(?:ped[aá]gio)\s+(?=incluso|n[aã]o|por\s+conta|tag)/i,
         ],
-        localizacaoUrl: [
-            /^(?:localiza[cç][aã]o|maps?|link)\s*[:：\-–]?\s*/i,
-        ],
-        observacoes: [
-            /^(?:observa[cç][oõ]es?|obs\.?|notas?)\s*[:：\-–]?\s*/i,
-        ],
+        localizacaoUrl: [withDelim("localiza[cç][aã]o|maps?|link")],
+        observacoes: [withDelim("observa[cç][oõ]es?|obs\\.?|notas?")],
     };
     for (const re of patterns[key] || []) {
         v = v.replace(re, "").trim();

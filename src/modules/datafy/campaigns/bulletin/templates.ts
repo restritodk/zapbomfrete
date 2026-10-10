@@ -140,15 +140,17 @@ function fieldValue(
         case "pedagio":
             return cleanParam("pedagio", fields.pedagio);
         case "observacoes": {
-            // Never re-inject Maps URL already in localizacao slot
-            let obs = fields.observacoes || fields.detalhes || "";
-            if (fields.localizacaoUrl) {
+            // Never fall back to detalhes — that re-injects Janela/Frete into Obs.
+            let obs = fields.observacoes || "";
+            if (fields.localizacaoUrl && obs) {
                 obs = obs
                     .split(" · ")
                     .filter((p) => !p.includes(fields.localizacaoUrl!))
                     .join(" · ");
             }
-            return cleanParam("observacoes", obs);
+            return obs.trim()
+                ? cleanParam("observacoes", obs)
+                : "N/D";
         }
         case "detalhes":
             return cleanParam("detalhes" as keyof BulletinLoadFields, fields.detalhes);
@@ -300,7 +302,12 @@ export function composeReusableBulletinParts(
                     )
                     .filter((i) => i >= 0)
                     .pop();
-                if (catchIdx != null && catchIdx >= 0) {
+                const catchKey =
+                    catchIdx != null && catchIdx >= 0
+                        ? tmpl.spec.slotFields[catchIdx]
+                        : null;
+                // `detalhes` already aggregates frete/janela/veículo — never re-append
+                if (catchIdx != null && catchIdx >= 0 && catchKey === "observacoes") {
                     const extra = uncoveredFilledFields(
                         filledLoadFieldKeys(load.fields),
                         tmpl.spec.slotFields
@@ -320,7 +327,18 @@ export function composeReusableBulletinParts(
                                 localizacao: f.localizacaoUrl,
                                 pedagio: f.pedagio,
                             };
-                            return map[k] ? `${k}: ${map[k]}` : null;
+                            const val = map[k];
+                            if (!val) return null;
+                            const base =
+                                vals[catchIdx] === "N/D" ? "" : vals[catchIdx];
+                            // Skip if already present in observações text
+                            if (
+                                base &&
+                                base.toLowerCase().includes(val.toLowerCase())
+                            ) {
+                                return null;
+                            }
+                            return `${k}: ${val}`;
                         })
                         .filter(Boolean);
                     if (extra.length) {

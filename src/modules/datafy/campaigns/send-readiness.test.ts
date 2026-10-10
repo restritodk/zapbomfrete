@@ -88,6 +88,20 @@ describe("Send readiness modalities", () => {
             true
         );
         assert.equal(
+            hasApprovedTemplateContent({
+                contentKind: "bulletin",
+                messageParts: [
+                    {
+                        templateName: "boletim_1_carga",
+                        templateApprovalStatus: "APPROVED",
+                        readyForRealSend: false,
+                    },
+                ],
+            }),
+            false,
+            "APPROVED alone must not authorize incomplete/overflow parts"
+        );
+        assert.equal(
             purposeAllowsServiceWindowFreeform("marketing"),
             false
         );

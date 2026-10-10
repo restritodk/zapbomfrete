@@ -18,7 +18,7 @@ function approvedAll() {
 }
 
 describe("preview field dedupe", () => {
-    it("strips redundant FRETE/JANELA labels from values", () => {
+    it("strips redundant FRETE/JANELA labels without corrupting place names", () => {
         assert.equal(
             stripFieldLabelPrefix("frete", "FRETE: R$ 420,00"),
             "R$ 420,00"
@@ -31,11 +31,31 @@ describe("preview field dedupe", () => {
             stripFieldLabelPrefix("janela", "JANELA: D+5 ÚTEIS"),
             "D+5 ÚTEIS"
         );
+        // Must NOT strip "para" from Paranaguá
+        assert.equal(
+            stripFieldLabelPrefix("destino", "Paranaguá/PR"),
+            "Paranaguá/PR"
+        );
+        // Must NOT strip TERMINAL from place name without delimiter
+        assert.equal(
+            stripFieldLabelPrefix("terminal", "TERMINAL CORREA"),
+            "TERMINAL CORREA"
+        );
+        assert.equal(
+            stripFieldLabelPrefix("destino", "Destino: Santos/SP"),
+            "Santos/SP"
+        );
     });
 
-    it("COTTON 8 loads: no Frete:/Janela: double labels; maps not in observacoes", () => {
+    it("COTTON 8 loads: no Frete:/Janela: double labels; Obs. does not mirror slots", () => {
         const a = analyzeBulletin(COTTON_8_LOADS_RAW);
         assert.equal(a.loadCount, 8);
+        const paranagua = a.loads.find((l) =>
+            (l.fields.destino || "").includes("Paranagu")
+        );
+        assert.ok(paranagua, "expected Paranaguá load");
+        assert.match(paranagua!.fields.destino || "", /Paranaguá/i);
+
         for (const load of a.loads) {
             const f = load.fields;
             if (f.frete) {
@@ -65,7 +85,9 @@ describe("preview field dedupe", () => {
         const joined = parts.map((p) => p.bodyText).join("\n");
         assert.ok(!/Frete:\s*FRETE/i.test(joined));
         assert.ok(!/Janela:\s*JANELA/i.test(joined));
-        // Every load origem appears somewhere in prepared preview
+        assert.ok(!/Obs\.:\s*[^\n]*Janela:/i.test(joined));
+        assert.ok(!/Obs\.:\s*[^\n]*Frete:/i.test(joined));
+        assert.ok(/Paranaguá/i.test(joined), "Paranaguá must survive in preview");
         for (const load of a.loads) {
             if (load.fields.origem) {
                 assert.ok(

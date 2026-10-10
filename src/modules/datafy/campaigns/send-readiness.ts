@@ -54,12 +54,14 @@ export function hasApprovedTemplateContent(opts: {
     messageParts?: TemplatePartLite[] | null;
 }): boolean {
     if (opts.contentKind === "bulletin" && opts.messageParts?.length) {
+        // readyForRealSend must be true — APPROVED alone is not enough
+        // (incomplete_fields / body overflow keep status APPROVED with ready=false)
         return opts.messageParts.every(
             (p) =>
                 Boolean(p.templateName) &&
-                (p.readyForRealSend === true ||
-                    String(p.templateApprovalStatus || "").toUpperCase() ===
-                        "APPROVED")
+                String(p.templateApprovalStatus || "").toUpperCase() ===
+                    "APPROVED" &&
+                p.readyForRealSend === true
         );
     }
     return (
