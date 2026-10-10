@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-    DATAFY_DELIVERY_ID_HEADER,
-    DATAFY_SIGNATURE_HEADER,
-    DATAFY_TIMESTAMP_HEADER,
+    extractDatafyWebhookHeaders,
+    describeDatafyAuthPresence,
     loadDatafyConfig,
     processDatafyWebhook,
     syntheticDeliveryId,
@@ -19,17 +18,17 @@ export const dynamic = "force-dynamic";
  * Datafy -> ZapBomFrete webhook receiver.
  * HTTPS path: {BASE_URL}/api/webhooks/datafy
  *
- * - No user/session auth (signature is the auth)
- * - HMAC-SHA256 over `${timestamp}.${rawBody}`
- * - Idempotent via x-datafy-delivery-id
+ * Official contract (developers.datafyapi.com.br):
+ * - Headers: x-datafy-signature-256, x-datafy-timestamp, x-datafy-delivery-id
+ * - HMAC-SHA256 over `${timestamp}.${rawBody}` → `sha256=<hex>`
+ * - No session / API-key auth (signature is the auth)
  * - Isolated from Baileys
  */
 export async function POST(request: NextRequest) {
     const rawBody = await request.text();
 
-    const signature = request.headers.get(DATAFY_SIGNATURE_HEADER);
-    const timestamp = request.headers.get(DATAFY_TIMESTAMP_HEADER) || "";
-    const headerDeliveryId = request.headers.get(DATAFY_DELIVERY_ID_HEADER);
+    const { signature, timestamp, deliveryId: headerDeliveryId } =
+        extractDatafyWebhookHeaders(request.headers);
     const deliveryId =
         headerDeliveryId?.trim() ||
         (timestamp ? syntheticDeliveryId(timestamp, rawBody) : "");
@@ -51,6 +50,13 @@ export async function POST(request: NextRequest) {
         );
     }
 
+    const authPresence = describeDatafyAuthPresence({
+        signature,
+        timestamp,
+        secretConfigured: Boolean(cfg.webhookSecret),
+        deliveryId: headerDeliveryId,
+    });
+
     const verified = verifyDatafySignature({
         rawBody,
         signatureHeader: signature,
@@ -61,7 +67,7 @@ export async function POST(request: NextRequest) {
     if (!verified.ok) {
         logger.warn(
             "Datafy",
-            `Webhook signature rejected (${verified.reason})`
+            `Webhook signature rejected (${verified.reason}) [${authPresence}]`
         );
         return new NextResponse(null, { status: 401 });
     }

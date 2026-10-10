@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+import { isPublicApiPath } from "@/lib/public-api-routes";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
@@ -28,8 +29,8 @@ export async function proxy(request: NextRequest) {
 
     // API routes: Check for API key or session
     if (pathname.startsWith("/api/")) {
-        // Skip auth endpoints
-        if (pathname.startsWith("/api/auth") || pathname.startsWith("/api/test")) {
+        // Public webhooks / auth — handler-level auth (e.g. Datafy HMAC)
+        if (isPublicApiPath(pathname)) {
             return NextResponse.next();
         }
 

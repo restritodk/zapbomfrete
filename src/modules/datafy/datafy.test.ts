@@ -4,8 +4,14 @@ import {
     verifyDatafySignature,
     signDatafyPayload,
     syntheticDeliveryId,
+    extractDatafyWebhookHeaders,
+    describeDatafyAuthPresence,
+    DATAFY_SIGNATURE_HEADER,
+    DATAFY_TIMESTAMP_HEADER,
+    DATAFY_DELIVERY_ID_HEADER,
     DATAFY_TIMESTAMP_TOLERANCE_SEC,
 } from "./hmac";
+import { isPublicApiPath } from "@/lib/public-api-routes";
 import { DatafyApiError, DatafyClient } from "./client";
 import {
     maskSecret,
@@ -104,14 +110,144 @@ describe("Datafy HMAC signature (official contract)", () => {
         assert.equal(result.ok, false);
     });
 
-    it("rejects missing headers", () => {
+    it("rejects missing signature with granular reason", () => {
         const result = verifyDatafySignature({
             rawBody: SAMPLE_BODY,
             signatureHeader: null,
+            timestampHeader: String(Math.floor(Date.now() / 1000)),
+            secret,
+        });
+        assert.equal(result.ok, false);
+        if (!result.ok) assert.equal(result.reason, "missing_signature");
+    });
+
+    it("rejects missing timestamp with granular reason", () => {
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = signDatafyPayload(secret, ts, SAMPLE_BODY);
+        const result = verifyDatafySignature({
+            rawBody: SAMPLE_BODY,
+            signatureHeader: sig,
             timestampHeader: null,
             secret,
         });
         assert.equal(result.ok, false);
+        if (!result.ok) assert.equal(result.reason, "missing_timestamp");
+    });
+
+    it("rejects missing secret with granular reason", () => {
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = signDatafyPayload(secret, ts, SAMPLE_BODY);
+        const result = verifyDatafySignature({
+            rawBody: SAMPLE_BODY,
+            signatureHeader: sig,
+            timestampHeader: ts,
+            secret: "",
+        });
+        assert.equal(result.ok, false);
+        if (!result.ok) assert.equal(result.reason, "missing_secret");
+    });
+
+    it("accepts bare hex signature (sha256= prefix optional)", () => {
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = signDatafyPayload(secret, ts, SAMPLE_BODY);
+        const bare = sig.slice("sha256=".length);
+        const result = verifyDatafySignature({
+            rawBody: SAMPLE_BODY,
+            signatureHeader: bare,
+            timestampHeader: ts,
+            secret,
+        });
+        assert.equal(result.ok, true);
+    });
+
+    it("rejects invalid signature format", () => {
+        const result = verifyDatafySignature({
+            rawBody: SAMPLE_BODY,
+            signatureHeader: "not-a-signature",
+            timestampHeader: String(Math.floor(Date.now() / 1000)),
+            secret,
+        });
+        assert.equal(result.ok, false);
+        if (!result.ok) assert.equal(result.reason, "invalid_signature_format");
+    });
+
+    it("extracts official Datafy headers case-insensitively", () => {
+        const headers = new Headers({
+            "X-Datafy-Signature-256": "sha256=abcd",
+            "X-Datafy-Timestamp": "1700000000",
+            "X-Datafy-Delivery-Id": "deliv-1",
+        });
+        const extracted = extractDatafyWebhookHeaders(headers);
+        assert.equal(extracted.signature, "sha256=abcd");
+        assert.equal(extracted.timestamp, "1700000000");
+        assert.equal(extracted.deliveryId, "deliv-1");
+        assert.equal(DATAFY_SIGNATURE_HEADER, "x-datafy-signature-256");
+        assert.equal(DATAFY_TIMESTAMP_HEADER, "x-datafy-timestamp");
+        assert.equal(DATAFY_DELIVERY_ID_HEADER, "x-datafy-delivery-id");
+    });
+
+    it("describeDatafyAuthPresence never leaks values", () => {
+        const desc = describeDatafyAuthPresence({
+            signature: "sha256=supersecret",
+            timestamp: "1700000000",
+            secretConfigured: true,
+            deliveryId: "uuid-secret",
+        });
+        assert.ok(desc.includes("sig=present"));
+        assert.ok(desc.includes("ts=present"));
+        assert.ok(!desc.includes("supersecret"));
+        assert.ok(!desc.includes("uuid-secret"));
+    });
+
+    it("verifies a realistic Meta-shaped messages payload", () => {
+        const body = JSON.stringify({
+            object: "whatsapp_business_account",
+            entry: [
+                {
+                    id: "WABA_ID",
+                    changes: [
+                        {
+                            field: "messages",
+                            value: {
+                                messaging_product: "whatsapp",
+                                metadata: {
+                                    display_phone_number: "5511988887777",
+                                    phone_number_id: "1234567890123456",
+                                },
+                                contacts: [
+                                    {
+                                        profile: { name: "Maria Souza" },
+                                        wa_id: "5511999999999",
+                                    },
+                                ],
+                                messages: [
+                                    {
+                                        from: "5511999999999",
+                                        id: "wamid.HBgNNTUxMTk5OTk5OTk5ORUCABIYFjNFQjA=",
+                                        timestamp: "1789529684",
+                                        type: "text",
+                                        text: { body: "Bom dia" },
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                },
+            ],
+        });
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = signDatafyPayload(secret, ts, body);
+        const result = verifyDatafySignature({
+            rawBody: body,
+            signatureHeader: sig,
+            timestampHeader: ts,
+            secret,
+        });
+        assert.equal(result.ok, true);
+        const delivery = syntheticDeliveryId(ts, body);
+        assert.equal(delivery.length, 64);
+        // Same payload + timestamp → same synthetic id (idempotency fallback)
+        assert.equal(syntheticDeliveryId(ts, body), delivery);
     });
 
     it("synthetic delivery id is stable for same timestamp+body", () => {
@@ -121,6 +257,19 @@ describe("Datafy HMAC signature (official contract)", () => {
         assert.equal(a, b);
         assert.notEqual(a, c);
         assert.equal(a.length, 64);
+    });
+});
+
+describe("Public API paths (edge proxy)", () => {
+    it("allows Datafy webhook without session", () => {
+        assert.equal(isPublicApiPath("/api/webhooks/datafy"), true);
+        assert.equal(isPublicApiPath("/api/webhooks/datafy/"), true);
+    });
+
+    it("still protects other API routes", () => {
+        assert.equal(isPublicApiPath("/api/integrations/datafy"), false);
+        assert.equal(isPublicApiPath("/api/channels/datafy/campaigns"), false);
+        assert.equal(isPublicApiPath("/api/webhooks/session-1"), false);
     });
 });
 
