@@ -151,8 +151,117 @@ export class DatafyClient {
         );
     }
 
-    /** GET /v1/{waba_id}/phone_numbers — connection/quality/limits (prepared). */
-    getPhoneNumbers(wabaId: string): Promise<unknown> {
-        return this.request("GET", `/v1/${encodeURIComponent(wabaId)}/phone_numbers`);
+    /** GET /v1/{waba_id}/phone_numbers — connection/quality/limits. */
+    getPhoneNumbers(
+        wabaId: string,
+        fields =
+            "id,display_phone_number,verified_name,quality_rating,status,whatsapp_business_manager_messaging_limit,throughput,platform_type"
+    ): Promise<{
+        data?: Array<{
+            id?: string;
+            display_phone_number?: string;
+            verified_name?: string;
+            quality_rating?: string;
+            status?: string;
+        }>;
+    }> {
+        return this.request("GET", `/v1/${encodeURIComponent(wabaId)}/phone_numbers`, {
+            query: { fields },
+        });
+    }
+
+    /** POST /v1/{phone_number_id}/messages — text (24h window). */
+    sendText(
+        phoneNumberId: string,
+        body: {
+            to: string;
+            text: string;
+            previewUrl?: boolean;
+            contextMessageId?: string;
+        }
+    ): Promise<DatafySendMessageResponse> {
+        return this.request<DatafySendMessageResponse>(
+            "POST",
+            `/v1/${encodeURIComponent(phoneNumberId)}/messages`,
+            {
+                body: {
+                    messaging_product: "whatsapp",
+                    recipient_type: "individual",
+                    to: body.to,
+                    type: "text",
+                    text: {
+                        preview_url: Boolean(body.previewUrl),
+                        body: body.text,
+                    },
+                    ...(body.contextMessageId
+                        ? { context: { message_id: body.contextMessageId } }
+                        : {}),
+                },
+            }
+        );
+    }
+
+    /** POST /v1/{phone_number_id}/messages — approved template. */
+    sendTemplate(
+        phoneNumberId: string,
+        body: {
+            to: string;
+            name: string;
+            languageCode: string;
+            components?: unknown[];
+        }
+    ): Promise<DatafySendMessageResponse> {
+        return this.request<DatafySendMessageResponse>(
+            "POST",
+            `/v1/${encodeURIComponent(phoneNumberId)}/messages`,
+            {
+                body: {
+                    messaging_product: "whatsapp",
+                    recipient_type: "individual",
+                    to: body.to,
+                    type: "template",
+                    template: {
+                        name: body.name,
+                        language: { code: body.languageCode },
+                        ...(body.components?.length
+                            ? { components: body.components }
+                            : {}),
+                    },
+                },
+            }
+        );
+    }
+
+    /**
+     * POST /v1/{phone_number_id}/messages — mark inbound message as read.
+     * Meta Cloud API shape.
+     */
+    markAsRead(phoneNumberId: string, wamid: string): Promise<unknown> {
+        return this.request(
+            "POST",
+            `/v1/${encodeURIComponent(phoneNumberId)}/messages`,
+            {
+                body: {
+                    messaging_product: "whatsapp",
+                    status: "read",
+                    message_id: wamid,
+                },
+            }
+        );
+    }
+
+    /** GET /media/{id} — Datafy helper: durable download URL for inbound media. */
+    getInboundMedia(mediaId: string): Promise<{
+        url?: string;
+        mime_type?: string;
+        size?: number;
+    }> {
+        return this.request("GET", `/media/${encodeURIComponent(mediaId)}`);
     }
 }
+
+export type DatafySendMessageResponse = {
+    messaging_product?: string;
+    contacts?: Array<{ input?: string; wa_id?: string }>;
+    messages?: Array<{ id?: string; message_status?: string }>;
+};

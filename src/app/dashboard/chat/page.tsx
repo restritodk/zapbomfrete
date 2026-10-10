@@ -6,7 +6,7 @@ import { canAccessSession, canAccessChannel } from "@/lib/api-auth";
 import { SessionGuard } from "@/components/dashboard/session-guard";
 import { isDatafyChannelId } from "@/modules/channels/ids";
 import { getAccessibleDatafyChannel } from "@/modules/channels/datafy-channel";
-import { DatafyChatPlaceholder } from "@/components/dashboard/datafy-chat-placeholder";
+import { DatafyChatLayout } from "@/components/dashboard/datafy-chat/datafy-chat-layout";
 
 export default async function ChatPage() {
     const session = await auth();
@@ -34,13 +34,9 @@ export default async function ChatPage() {
             session.user.role
         );
         return (
-            <div className="h-[calc(100vh-6.5rem)] sm:h-[calc(100vh-6rem)] rounded-2xl border bg-card">
-                <DatafyChatPlaceholder
-                    channelName={channel?.name}
-                    displayPhoneNumber={channel?.displayPhoneNumber}
-                    status={channel?.status}
-                />
-            </div>
+            <DatafyChatLayout
+                displayPhoneNumber={channel?.displayPhoneNumber}
+            />
         );
     }
 

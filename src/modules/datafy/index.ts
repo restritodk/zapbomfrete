@@ -29,3 +29,26 @@ export {
 } from "./crypto-secrets";
 export type * from "./types";
 export { DATAFY_WEBHOOK_EVENTS } from "./types";
+export {
+    listDatafyConversations,
+    getDatafyConversation,
+    listDatafyMessages,
+    markConversationRead,
+    claimConversation,
+    transferConversation,
+    getDatafyDashboardStats,
+    resolveInboundMediaUrl,
+} from "./chat/service";
+export {
+    sendDatafyText,
+    sendDatafyTemplate,
+    conversationWindowInfo,
+} from "./chat/send";
+export {
+    isWithinServiceWindow,
+    serviceWindowExpiresAt,
+    normalizeWaId,
+    DATAFY_SERVICE_WINDOW_MS,
+} from "./chat/window";
+export { DATAFY_SOCKET_ROOM, emitDatafyEvent } from "./chat/realtime";
+export type { DatafySendMessageResponse } from "./client";

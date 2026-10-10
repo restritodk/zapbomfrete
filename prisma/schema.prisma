@@ -50,6 +50,8 @@ model User {
   notifications Notification[]
   sessionAccesses SessionAccess[]
   datafyChannelAccesses DatafyChannelAccess[]
+  datafyAssignedConversations DatafyConversation[] @relation("DatafyAssignedTo")
+  datafySentMessages DatafyMessage[] @relation("DatafySentBy")
 }
 
 model Session {
@@ -485,4 +487,92 @@ model DatafyMessageStatus {
   @@index([wamid])
   @@index([status])
   @@index([recipientId])
+}
+
+/// Official Datafy chat conversation (shared channel — not Baileys Session).
+model DatafyConversation {
+  id                    String    @id @default(cuid())
+  channelId             String    @default("datafy-official")
+  /// Customer WhatsApp id (digits), used as `to` when sending.
+  waId                  String
+  contactName           String?
+  /// Alternate Meta user id (BSUID), when present.
+  contactUserId         String?
+  phoneNumberId         String?
+  lastMessagePreview    String?   @db.Text
+  lastMessageAt         DateTime?
+  /// Last inbound customer message — drives the 24h service window.
+  lastCustomerMessageAt DateTime?
+  unreadCount           Int       @default(0)
+  /// open | pending | closed
+  status                String    @default("open")
+  assignedToId          String?
+  assignedAt            DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  assignedTo  User?                     @relation("DatafyAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages    DatafyMessage[]
+  assignments DatafyAssignmentHistory[]
+
+  @@unique([channelId, waId])
+  @@index([lastMessageAt])
+  @@index([assignedToId])
+  @@index([unreadCount])
+  @@index([status])
+}
+
+model DatafyMessage {
+  id                String    @id @default(cuid())
+  conversationId    String
+  /// Provider message id (wamid). Unique when present.
+  wamid             String?   @unique
+  /// Client-generated idempotency key for outbound sends.
+  clientMessageId   String?   @unique
+  /// inbound | outbound
+  direction         String
+  /// text | image | audio | video | document | sticker | location | template | interactive | reaction | unknown
+  type              String
+  body              String?   @db.Text
+  mediaId           String?
+  mediaUrl          String?   @db.Text
+  mediaMimeType     String?
+  mediaFilename     String?
+  mediaSize         Int?
+  caption           String?   @db.Text
+  /// pending | accepted | sent | delivered | read | failed
+  status            String    @default("pending")
+  errorCode         Int?
+  errorMessage      String?   @db.Text
+  sentByUserId      String?
+  providerTimestamp DateTime?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  failedAt          DateTime?
+  metadata          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  conversation DatafyConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentBy       User?              @relation("DatafySentBy", fields: [sentByUserId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([status])
+  @@index([direction])
+}
+
+model DatafyAssignmentHistory {
+  id             String   @id @default(cuid())
+  conversationId String
+  fromUserId     String?
+  toUserId       String?
+  /// claim | transfer | release
+  action         String
+  createdById    String?
+  note           String?
+  createdAt      DateTime @default(now())
+
+  conversation DatafyConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
 }

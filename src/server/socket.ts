@@ -1,5 +1,6 @@
 import { Server } from "socket.io";
 import { logger } from "../lib/logger";
+import { DATAFY_SOCKET_ROOM } from "../modules/datafy/chat/realtime";
 
 export function setupSocket(io: Server) {
   io.on("connection", (socket) => {
@@ -19,6 +20,15 @@ export function setupSocket(io: Server) {
     socket.on("join-user-room", (userId: string) => {
         socket.join(`user:${userId}`);
         logger.debug("Socket", `Socket ${socket.id} joined user room: user:${userId}`);
+    });
+
+    // Official Datafy shared channel room (authorization enforced by HTTP APIs)
+    socket.on("join-datafy-channel", () => {
+        socket.join(DATAFY_SOCKET_ROOM);
+        logger.debug(
+            "Socket",
+            `Socket ${socket.id} joined Datafy room: ${DATAFY_SOCKET_ROOM}`
+        );
     });
   });
 }

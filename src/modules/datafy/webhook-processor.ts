@@ -5,6 +5,10 @@ import type {
     DatafyWebhookEnvelope,
     DatafyWebhookValue,
 } from "./types";
+import {
+    applyOutboundStatus,
+    persistInboundFromWebhookValue,
+} from "./chat/persist";
 
 export type ProcessWebhookResult = {
     duplicate: boolean;
@@ -12,6 +16,7 @@ export type ProcessWebhookResult = {
     fields: string[];
     statusesSaved: number;
     messagesReceived: number;
+    chatMessagesPersisted: number;
 };
 
 /**
@@ -93,7 +98,11 @@ async function upsertStatus(opts: {
 
 async function processValue(
     value: DatafyWebhookValue,
-    counters: { statusesSaved: number; messagesReceived: number }
+    counters: {
+        statusesSaved: number;
+        messagesReceived: number;
+        chatMessagesPersisted: number;
+    }
 ) {
     const phoneNumberId = value.metadata?.phone_number_id || null;
 
@@ -104,12 +113,13 @@ async function processValue(
             if (!["sent", "delivered", "read", "failed"].includes(status)) continue;
 
             const err = st.errors?.[0];
+            const timestamp = parseTs(st.timestamp);
             await upsertStatus({
                 wamid: st.id,
                 status,
                 recipientId: st.recipient_id || null,
                 phoneNumberId,
-                timestamp: parseTs(st.timestamp),
+                timestamp,
                 errorCode: err?.code ?? null,
                 errorTitle: err?.title || err?.message || null,
                 errorDetails: err?.error_data?.details || null,
@@ -117,10 +127,19 @@ async function processValue(
                 pricingCategory: st.pricing?.category || st.conversation?.origin?.type || null,
             });
             counters.statusesSaved++;
+
+            await applyOutboundStatus({
+                wamid: st.id,
+                status,
+                timestamp,
+                errorCode: err?.code ?? null,
+                errorTitle: err?.title || err?.message || null,
+                errorDetails: err?.error_data?.details || null,
+            });
         }
     }
 
-    if (Array.isArray(value.messages)) {
+    if (Array.isArray(value.messages) && value.messages.length > 0) {
         for (const msg of value.messages) {
             if (!msg?.id) continue;
             await upsertStatus({
@@ -132,20 +151,27 @@ async function processValue(
             });
             counters.messagesReceived++;
         }
+
+        const persisted = await persistInboundFromWebhookValue(value);
+        counters.chatMessagesPersisted += persisted.messagesCreated;
     }
 }
 
 /**
  * Process a verified Datafy webhook payload.
  * Safe to call after HTTP 200 was already sent to the client.
- * Does NOT send WhatsApp messages or touch Baileys.
+ * Does NOT touch Baileys.
  */
 export async function processDatafyWebhook(opts: {
     deliveryId: string;
     envelope: DatafyWebhookEnvelope;
 }): Promise<ProcessWebhookResult> {
     const fields: string[] = [];
-    const counters = { statusesSaved: 0, messagesReceived: 0 };
+    const counters = {
+        statusesSaved: 0,
+        messagesReceived: 0,
+        chatMessagesPersisted: 0,
+    };
 
     const firstField =
         opts.envelope.entry?.[0]?.changes?.[0]?.field || null;
@@ -162,6 +188,7 @@ export async function processDatafyWebhook(opts: {
             fields: [],
             statusesSaved: 0,
             messagesReceived: 0,
+            chatMessagesPersisted: 0,
         };
     }
 
@@ -176,7 +203,7 @@ export async function processDatafyWebhook(opts: {
 
     logger.info(
         "Datafy",
-        `Webhook processed delivery=${opts.deliveryId.slice(0, 8)}… fields=${fields.join(",") || "-"} statuses=${counters.statusesSaved} inbound=${counters.messagesReceived}`
+        `Webhook processed delivery=${opts.deliveryId.slice(0, 8)}… fields=${fields.join(",") || "-"} statuses=${counters.statusesSaved} inbound=${counters.messagesReceived} chat=${counters.chatMessagesPersisted}`
     );
 
     return {

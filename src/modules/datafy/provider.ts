@@ -55,11 +55,29 @@ export class DatafyProvider {
             const client = await this.createClient();
             const me = await client.getMe();
 
+            let displayPhoneNumber: string | null | undefined;
+            const wabaId = me.waba_id || null;
+            const phoneNumberId = me.phone_number_id || null;
+            if (wabaId) {
+                try {
+                    const phones = await client.getPhoneNumbers(wabaId);
+                    const match =
+                        phones.data?.find((p) => p.id === phoneNumberId) ||
+                        phones.data?.[0];
+                    displayPhoneNumber = match?.display_phone_number || null;
+                } catch {
+                    displayPhoneNumber = undefined;
+                }
+            }
+
             await saveDatafyConfig({
-                phoneNumberId: me.phone_number_id || null,
-                wabaId: me.waba_id || null,
+                phoneNumberId,
+                wabaId,
                 businessId: me.business_id || null,
                 clienteId: me.cliente_id || null,
+                ...(displayPhoneNumber !== undefined
+                    ? { displayPhoneNumber }
+                    : {}),
                 lastVerifiedAt: new Date(),
                 lastError: null,
             });

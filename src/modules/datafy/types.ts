@@ -60,13 +60,26 @@ export interface DatafyWebhookValue {
         display_phone_number?: string;
         phone_number_id?: string;
     };
-    contacts?: Array<{ profile?: { name?: string }; wa_id?: string }>;
+    contacts?: Array<{
+        profile?: { name?: string };
+        wa_id?: string;
+        user_id?: string;
+    }>;
     messages?: Array<{
         from?: string;
+        from_user_id?: string;
         id?: string;
         timestamp?: string;
         type?: string;
         text?: { body?: string };
+        image?: Record<string, unknown>;
+        audio?: Record<string, unknown>;
+        video?: Record<string, unknown>;
+        document?: Record<string, unknown>;
+        sticker?: Record<string, unknown>;
+        location?: Record<string, unknown>;
+        interactive?: Record<string, unknown>;
+        reaction?: Record<string, unknown>;
         [key: string]: unknown;
     }>;
     statuses?: Array<{
