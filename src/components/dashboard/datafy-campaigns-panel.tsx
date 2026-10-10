@@ -39,10 +39,13 @@ import {
     analyzeBulletin,
     composeReusableBulletinParts,
     estimateMessageTotal,
+    hydrateClientLibrary,
     libraryApprovalChecklist,
     META_TEMPLATE_BODY_MAX,
     type BulletinAnalysis,
+    type BulletinTemplateSpec,
     type CampaignMessagePart,
+    type ClientLibrarySpec,
 } from "@/modules/datafy/campaigns/bulletin";
 import {
     assessRealSendReadiness,
@@ -391,6 +394,9 @@ export function DatafyCampaignsPanel() {
         "existing"
     );
     const [templates, setTemplates] = useState<Template[]>([]);
+    const [bulletinLibrary, setBulletinLibrary] = useState<
+        BulletinTemplateSpec[] | null
+    >(null);
     const [templateKey, setTemplateKey] = useState("");
     const [bodyVars, setBodyVars] = useState<string[]>(["fullName"]);
     const [headerImageUrl, setHeaderImageUrl] = useState<string | null>(null);
@@ -599,11 +605,22 @@ export function DatafyCampaignsPanel() {
     }, [progressOpen, progressCampaignId, pollProgress]);
 
     const loadTemplates = async () => {
-        const res = await fetch(
-            "/api/integrations/datafy/templates?status=APPROVED&limit=80"
-        );
+        const [res, libRes] = await Promise.all([
+            fetch(
+                "/api/integrations/datafy/templates?status=APPROVED&limit=80"
+            ),
+            fetch("/api/integrations/datafy/bulletin-templates"),
+        ]);
         const json = await res.json().catch(() => ({}));
         if (res.ok) setTemplates(json.data?.data || json.data || []);
+        const libJson = await libRes.json().catch(() => ({}));
+        if (libRes.ok && Array.isArray(libJson.data?.composeLibrary)) {
+            setBulletinLibrary(
+                hydrateClientLibrary(
+                    libJson.data.composeLibrary as ClientLibrarySpec[]
+                )
+            );
+        }
     };
 
     const loadCrmAndTags = async () => {
@@ -1553,13 +1570,24 @@ export function DatafyCampaignsPanel() {
                 category: t.category,
                 components: t.components,
             })),
-            { purpose }
+            {
+                purpose,
+                ...(bulletinLibrary?.length
+                    ? { library: bulletinLibrary }
+                    : {}),
+            }
         );
         setBulletinParts(parts);
         setPreviewPartIndex((idx) =>
             Math.min(idx, Math.max(0, parts.length - 1))
         );
-    }, [contentKind, deferredBulletinText, templates, purpose]);
+    }, [
+        contentKind,
+        deferredBulletinText,
+        templates,
+        purpose,
+        bulletinLibrary,
+    ]);
 
     const activePreviewText = useMemo(() => {
         if (contentKind === "bulletin" && bulletinParts.length) {

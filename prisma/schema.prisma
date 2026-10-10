@@ -56,6 +56,7 @@ model User {
   crmContactsUpdated CrmContact[] @relation("CrmContactUpdatedBy")
   datafyCampaignsCreated DatafyCampaign[] @relation("DatafyCampaignCreatedBy")
   datafyBulletinDraftsCreated DatafyBulletinDraft[] @relation("DatafyBulletinDraftCreatedBy")
+  datafyManagedTemplatesCreated DatafyManagedTemplate[] @relation("DatafyManagedTemplateCreatedBy")
 }
 
 model Session {
@@ -821,4 +822,44 @@ model DatafyBulletinDraft {
   @@index([organizationKey, status])
   @@index([createdAt])
   @@index([campaignId])
+}
+
+/// Managed bulletin template library (builtins overrides + custom templates).
+/// Hiding a builtin persists across deploys. Meta is never changed by local delete.
+model DatafyManagedTemplate {
+  id                   String    @id @default(cuid())
+  organizationKey      String    @default("default")
+  /// builtin | custom
+  kind                 String
+  /// Library id for builtins (e.g. boletim_v2_1_carga). Null for custom.
+  builtinId            String?
+  /// Soft-hide from local library (builtins). Survives restart/deploy.
+  hidden               Boolean   @default(false)
+  deletedAt            DateTime?
+  technicalName        String
+  displayName          String
+  category             String    @default("MARKETING")
+  language             String    @default("pt_BR")
+  headerText           String?   @db.Text
+  bodyText             String    @db.Text
+  footerText           String?   @db.Text
+  /// Ordered field keys for {{1}}..{{n}} (origem, destino, frete, …)
+  fieldMappings        Json
+  exampleRow           Json
+  loadsPerMessage      Int       @default(1)
+  description          String?
+  remoteStatus         String?
+  remoteTemplateId     String?
+  remoteRejectedReason String?
+  lastSubmittedAt      DateTime?
+  createdById          String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  createdBy User? @relation("DatafyManagedTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationKey, technicalName])
+  @@index([organizationKey, kind, hidden])
+  @@index([organizationKey, builtinId])
+  @@index([deletedAt])
 }

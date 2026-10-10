@@ -5,25 +5,60 @@ import { canAccessDatafyChannel } from "@/modules/channels/access";
 import { datafyProvider, DatafyApiError } from "@/modules/datafy";
 import { redactSecrets } from "@/modules/datafy/crypto-secrets";
 import { loadDatafyConfig } from "@/modules/datafy/config";
+import { buildBulletinTemplateSubmission } from "@/modules/datafy/campaigns/bulletin/library";
 import {
-    BULLETIN_TEMPLATE_LIBRARY,
-    buildBulletinTemplateSubmission,
-    findBulletinSpecByName,
-} from "@/modules/datafy/campaigns/bulletin/library";
+    createCustomTemplate,
+    findManagedByTechnicalName,
+    listEffectiveManagedTemplates,
+    managedToClientLibrary,
+    managedToSpecs,
+    markSubmitted,
+    syncRemoteStatuses,
+} from "@/modules/datafy/campaigns/bulletin/managed-registry";
+import { validateTemplateDraft } from "@/modules/datafy/campaigns/bulletin/template-validation";
+import { FIELD_MAP_OPTIONS } from "@/modules/datafy/campaigns/bulletin/field-map";
 
 export const dynamic = "force-dynamic";
 
-const postSchema = z.object({
-    /** Preferred name e.g. boletim_1_carga */
+const createSchema = z.object({
+    action: z.literal("create"),
+    technicalName: z.string().min(3).max(64),
+    displayName: z.string().min(1).max(120),
+    category: z.enum(["MARKETING", "UTILITY", "AUTHENTICATION"]),
+    headerText: z.string().max(120).optional().nullable(),
+    bodyText: z.string().min(1).max(2000),
+    footerText: z.string().max(120).optional().nullable(),
+    fieldMappings: z.array(z.string()).min(1).max(60),
+    exampleRow: z.array(z.string()).max(60),
+    loadsPerMessage: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+    description: z.string().max(500).optional().nullable(),
+});
+
+const submitSchema = z.object({
+    action: z.literal("submit"),
     name: z.string().min(3).max(64),
-    /**
-     * Explicit confirmation — never auto-submit.
-     * Must be true to call Datafy/Meta.
-     */
     confirmSubmit: z.literal(true),
 });
 
-async function requireDatafyTemplateAccess(request: NextRequest) {
+const refreshSchema = z.object({
+    action: z.literal("refresh"),
+});
+
+const validateSchema = z.object({
+    action: z.literal("validate"),
+    technicalName: z.string(),
+    displayName: z.string(),
+    category: z.enum(["MARKETING", "UTILITY", "AUTHENTICATION"]),
+    headerText: z.string().optional().nullable(),
+    bodyText: z.string(),
+    footerText: z.string().optional().nullable(),
+    fieldMappings: z.array(z.string()),
+    exampleRow: z.array(z.string()),
+    loadsPerMessage: z.number().optional(),
+    description: z.string().optional().nullable(),
+});
+
+async function requireAccess(request: NextRequest, write: boolean) {
     const user = await getAuthenticatedUser(request);
     if (!user) {
         return {
@@ -33,32 +68,36 @@ async function requireDatafyTemplateAccess(request: NextRequest) {
             ),
         };
     }
-    const allowed =
-        isAdmin(user.role) ||
-        (await canAccessDatafyChannel(user.id, user.role));
-    if (!allowed) {
-        return {
-            error: NextResponse.json(
-                { status: false, message: "Forbidden" },
-                { status: 403 }
-            ),
-        };
+    if (write) {
+        if (!isAdmin(user.role)) {
+            return {
+                error: NextResponse.json(
+                    {
+                        status: false,
+                        message:
+                            "Apenas SUPERADMIN pode gerenciar/submeter templates",
+                    },
+                    { status: 403 }
+                ),
+            };
+        }
+    } else {
+        const allowed =
+            isAdmin(user.role) ||
+            (await canAccessDatafyChannel(user.id, user.role));
+        if (!allowed) {
+            return {
+                error: NextResponse.json(
+                    { status: false, message: "Forbidden" },
+                    { status: 403 }
+                ),
+            };
+        }
     }
     return { user };
 }
 
-/**
- * GET — library specs + remote Meta status (via Datafy) for the 3 bulletin templates.
- * Does not submit anything.
- */
-export async function GET(request: NextRequest) {
-    const gate = await requireDatafyTemplateAccess(request);
-    if (gate.error) return gate.error;
-
-    const library = BULLETIN_TEMPLATE_LIBRARY.map((spec) =>
-        buildBulletinTemplateSubmission(spec)
-    );
-
+async function fetchRemoteMap() {
     const remoteByName: Record<
         string,
         {
@@ -70,14 +109,15 @@ export async function GET(request: NextRequest) {
             rejected_reason?: string | null;
         }
     > = {};
-
     let remoteError: string | null = null;
     try {
+        const library = await listEffectiveManagedTemplates();
+        const names = new Set(library.map((t) => t.technicalName.toLowerCase()));
         const statuses = ["APPROVED", "PENDING", "REJECTED"] as const;
         const pages = await Promise.all(
             statuses.map((status) =>
                 datafyProvider
-                    .listTemplates({ status, limit: 80 })
+                    .listTemplates({ status, limit: 100 })
                     .catch(() => ({ data: [] as unknown[] }))
             )
         );
@@ -92,13 +132,11 @@ export async function GET(request: NextRequest) {
                     language?: string;
                     rejected_reason?: string | null;
                 };
-                if (!t.name) continue;
-                const spec = findBulletinSpecByName(t.name);
-                if (!spec) continue;
+                if (!t.name || !names.has(t.name.toLowerCase())) continue;
                 const lang = String(t.language || "pt_BR");
                 if (lang !== "pt_BR" && lang !== "pt_br") continue;
-                // Prefer APPROVED over PENDING/REJECTED when duplicates
-                const prev = remoteByName[spec.preferredName];
+                const key = t.name;
+                const prev = remoteByName[key];
                 const rank = (s: string) =>
                     s === "APPROVED" ? 3 : s === "PENDING" ? 2 : 1;
                 if (
@@ -106,7 +144,7 @@ export async function GET(request: NextRequest) {
                     rank(String(t.status || "").toUpperCase()) >
                         rank(String(prev.status || "").toUpperCase())
                 ) {
-                    remoteByName[spec.preferredName] = {
+                    remoteByName[key] = {
                         id: t.id,
                         name: t.name,
                         status: String(t.status || "UNKNOWN").toUpperCase(),
@@ -117,6 +155,7 @@ export async function GET(request: NextRequest) {
                 }
             }
         }
+        await syncRemoteStatuses(remoteByName);
     } catch (e) {
         remoteError =
             e instanceof DatafyApiError
@@ -125,130 +164,242 @@ export async function GET(request: NextRequest) {
                   ? e.message
                   : "Falha ao consultar templates remotos";
     }
+    return { remoteByName, remoteError };
+}
+
+export async function GET(request: NextRequest) {
+    const gate = await requireAccess(request, false);
+    if (gate.error) return gate.error;
+
+    const library = await listEffectiveManagedTemplates();
+    const { remoteByName, remoteError } = await fetchRemoteMap();
+
+    // Merge cached remote onto views
+    const items = library.map((item) => {
+        const remote =
+            remoteByName[item.technicalName] ||
+            (item.remoteStatus
+                ? {
+                      id: item.remoteTemplateId || undefined,
+                      name: item.technicalName,
+                      status: item.remoteStatus,
+                      rejected_reason: item.remoteRejectedReason,
+                  }
+                : null);
+        return {
+            ...item,
+            remoteStatus: remote?.status || item.remoteStatus || "NÃO ENVIADO",
+            remoteTemplateId: remote?.id || item.remoteTemplateId,
+            remoteRejectedReason:
+                remote?.rejected_reason ?? item.remoteRejectedReason,
+        };
+    });
 
     return NextResponse.json({
         status: true,
         data: {
             language: "pt_BR",
-            category: "MARKETING",
+            fieldMapOptions: FIELD_MAP_OPTIONS,
             submissionChannel: "datafy_api",
             metaNote:
-                "A Datafy encaminha POST message_templates à Meta. Aprovação final é da Meta (PENDING → APPROVED/REJECTED).",
-            library,
+                "A Datafy encaminha POST message_templates à Meta. Exclusão local não remove templates da Meta.",
+            library: items,
+            composeLibrary: managedToClientLibrary(library),
             remote: remoteByName,
             remoteError: remoteError ? redactSecrets(remoteError) : null,
+            specs: managedToSpecs(library).map((s) =>
+                buildBulletinTemplateSubmission(s)
+            ),
         },
     });
 }
 
-/**
- * POST — manually submit ONE library template for Meta approval via Datafy.
- * Requires confirmSubmit: true. Never called automatically.
- * SUPERADMIN only (credential-bearing mutation).
- */
 export async function POST(request: NextRequest) {
-    const user = await getAuthenticatedUser(request);
-    if (!user) {
-        return NextResponse.json(
-            { status: false, message: "Unauthorized" },
-            { status: 401 }
-        );
-    }
-    if (!isAdmin(user.role)) {
-        return NextResponse.json(
-            {
-                status: false,
-                message:
-                    "Apenas SUPERADMIN pode submeter templates oficiais à Meta via Datafy",
-            },
-            { status: 403 }
-        );
-    }
-
     const body = await request.json().catch(() => null);
-    const parsed = postSchema.safeParse(body);
-    if (!parsed.success) {
-        return NextResponse.json(
-            {
-                status: false,
-                message:
-                    "Informe name + confirmSubmit: true para submeter manualmente",
-            },
-            { status: 400 }
-        );
-    }
+    const action = body?.action;
 
-    const spec = findBulletinSpecByName(parsed.data.name);
-    if (!spec) {
-        return NextResponse.json(
-            { status: false, message: "Modelo de boletim desconhecido" },
-            { status: 400 }
-        );
-    }
-
-    const submission = buildBulletinTemplateSubmission(spec);
-    if (!submission.checks.readyForManualSubmit) {
-        return NextResponse.json(
-            {
-                status: false,
-                message: "Modelo não está pronto para submissão",
-                data: { checks: submission.checks },
-            },
-            { status: 400 }
-        );
-    }
-
-    try {
-        const cfg = await loadDatafyConfig();
-        let wabaId = cfg.wabaId;
-        if (!wabaId) {
-            const verified = await datafyProvider.verifyConnection();
-            wabaId = verified.me?.waba_id || null;
-        }
-        if (!wabaId) {
+    if (action === "validate") {
+        const gate = await requireAccess(request, false);
+        if (gate.error) return gate.error;
+        const parsed = validateSchema.safeParse(body);
+        if (!parsed.success) {
             return NextResponse.json(
-                { status: false, message: "waba_id indisponível — verifique a integração" },
+                { status: false, message: "Payload inválido" },
+                { status: 400 }
+            );
+        }
+        const result = validateTemplateDraft(parsed.data);
+        return NextResponse.json({ status: true, data: result });
+    }
+
+    if (action === "refresh") {
+        const gate = await requireAccess(request, false);
+        if (gate.error) return gate.error;
+        refreshSchema.parse(body);
+        const { remoteByName, remoteError } = await fetchRemoteMap();
+        return NextResponse.json({
+            status: true,
+            data: {
+                remote: remoteByName,
+                remoteError: remoteError ? redactSecrets(remoteError) : null,
+            },
+        });
+    }
+
+    if (action === "create") {
+        const gate = await requireAccess(request, true);
+        if (gate.error) return gate.error;
+        const parsed = createSchema.safeParse(body);
+        if (!parsed.success) {
+            return NextResponse.json(
+                { status: false, message: "Payload inválido", details: parsed.error.flatten() },
+                { status: 400 }
+            );
+        }
+        try {
+            const row = await createCustomTemplate(parsed.data, gate.user!.id);
+            return NextResponse.json({ status: true, data: { id: row.id } });
+        } catch (e) {
+            const validation = (e as { validation?: unknown }).validation;
+            return NextResponse.json(
+                {
+                    status: false,
+                    message: e instanceof Error ? e.message : "Falha ao criar",
+                    data: validation ? { validation } : undefined,
+                },
+                { status: 400 }
+            );
+        }
+    }
+
+    if (action === "submit") {
+        const gate = await requireAccess(request, true);
+        if (gate.error) return gate.error;
+        const parsed = submitSchema.safeParse(body);
+        if (!parsed.success) {
+            return NextResponse.json(
+                {
+                    status: false,
+                    message: "Informe name + confirmSubmit: true + action:submit",
+                },
                 { status: 400 }
             );
         }
 
-        const client = await datafyProvider.createClient();
-        const created = await client.createTemplate(wabaId, {
-            name: submission.name,
-            language: submission.language,
-            category: submission.category,
-            parameter_format: submission.parameter_format,
-            components: [
+        const managed = await findManagedByTechnicalName(parsed.data.name);
+        if (!managed) {
+            return NextResponse.json(
+                { status: false, message: "Template não encontrado na biblioteca" },
+                { status: 404 }
+            );
+        }
+        if (!managed.readyForManualSubmit) {
+            return NextResponse.json(
                 {
-                    type: "BODY",
-                    text: submission.bodyText,
-                    example: { body_text: [submission.exampleRow] },
+                    status: false,
+                    message: "Modelo inválido para submissão",
+                    data: { notes: managed.notes },
                 },
-            ],
-        });
+                { status: 400 }
+            );
+        }
 
-        return NextResponse.json({
-            status: true,
-            data: {
-                templateName: submission.name,
-                templateId: created.id || null,
-                approvalStatus: String(created.status || "PENDING").toUpperCase(),
-                category: created.category || submission.category,
-                language: submission.language,
-                message:
-                    "Template enviado à Meta via Datafy. Acompanhe o status (PENDING/APPROVED/REJECTED). Campanhas reais só com APPROVED.",
-            },
-        });
-    } catch (e) {
-        const message =
-            e instanceof DatafyApiError
-                ? e.message
-                : e instanceof Error
-                  ? e.message
-                  : "Falha ao submeter template";
-        return NextResponse.json(
-            { status: false, message: redactSecrets(message) },
-            { status: e instanceof DatafyApiError ? e.statusCode : 500 }
+        try {
+            const cfg = await loadDatafyConfig();
+            let wabaId = cfg.wabaId;
+            if (!wabaId) {
+                const verified = await datafyProvider.verifyConnection();
+                wabaId = verified.me?.waba_id || null;
+            }
+            if (!wabaId) {
+                return NextResponse.json(
+                    {
+                        status: false,
+                        message: "waba_id indisponível — verifique a integração",
+                    },
+                    { status: 400 }
+                );
+            }
+
+            const components: Array<Record<string, unknown>> = [];
+            if (managed.headerText?.trim()) {
+                components.push({
+                    type: "HEADER",
+                    format: "TEXT",
+                    text: managed.headerText.trim(),
+                });
+            }
+            components.push({
+                type: "BODY",
+                text: managed.bodyText,
+                example: { body_text: [managed.exampleRow] },
+            });
+            if (managed.footerText?.trim()) {
+                components.push({
+                    type: "FOOTER",
+                    text: managed.footerText.trim(),
+                });
+            }
+
+            const client = await datafyProvider.createClient();
+            const created = await client.createTemplate(wabaId, {
+                name: managed.technicalName,
+                language: "pt_BR",
+                category: managed.category as "MARKETING",
+                parameter_format: "POSITIONAL",
+                components,
+            });
+
+            await markSubmitted(managed.technicalName, {
+                id: created.id,
+                status: created.status || "PENDING",
+            });
+
+            return NextResponse.json({
+                status: true,
+                data: {
+                    templateName: managed.technicalName,
+                    templateId: created.id || null,
+                    approvalStatus: String(
+                        created.status || "PENDING"
+                    ).toUpperCase(),
+                    category: created.category || managed.category,
+                    language: "pt_BR",
+                    message:
+                        "Template enviado à Meta via Datafy. Campanhas reais só com APPROVED.",
+                },
+            });
+        } catch (e) {
+            const message =
+                e instanceof DatafyApiError
+                    ? e.message
+                    : e instanceof Error
+                      ? e.message
+                      : "Falha ao submeter template";
+            return NextResponse.json(
+                { status: false, message: redactSecrets(message) },
+                { status: e instanceof DatafyApiError ? e.statusCode : 500 }
+            );
+        }
+    }
+
+    // Backward-compat: old clients sent { name, confirmSubmit: true }
+    if (body?.confirmSubmit === true && body?.name && !action) {
+        return POST(
+            new NextRequest(request.url, {
+                method: "POST",
+                headers: request.headers,
+                body: JSON.stringify({
+                    action: "submit",
+                    name: body.name,
+                    confirmSubmit: true,
+                }),
+            })
         );
     }
+
+    return NextResponse.json(
+        { status: false, message: "action inválida" },
+        { status: 400 }
+    );
 }

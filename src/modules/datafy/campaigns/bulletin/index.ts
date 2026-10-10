@@ -3,6 +3,7 @@ export * from "./analyze";
 export * from "./library";
 export * from "./templates";
 export * from "./constants";
+export * from "./field-map";
 export {
     analyzeBulletinSafe,
     createBulletinDraft,
@@ -11,3 +12,8 @@ export {
     listBulletinDrafts,
     draftToHandoff,
 } from "./draft-service";
+export {
+    hydrateClientLibrary,
+    managedToClientLibrary,
+    type ClientLibrarySpec,
+} from "./managed-registry";

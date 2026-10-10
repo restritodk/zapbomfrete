@@ -13,6 +13,11 @@ import {
     type BulletinTemplateSpec,
     type LoadSlotField,
 } from "./library";
+import {
+    filledLoadFieldKeys,
+    hasCatchAll,
+    uncoveredFilledFields,
+} from "./field-map";
 
 export type { BulletinTemplateSpec };
 
@@ -29,24 +34,29 @@ type MatchedTemplate = ApprovedTemplateLite & {
 };
 
 /**
- * Map APPROVED Datafy templates to library specs (v1 + v2).
- * Prefer richer (v2) and larger packs when sorting.
+ * Map APPROVED Datafy templates to library specs.
+ * Matching uses name + explicit field mappings — not variable count alone.
  */
 export function resolveReusableBulletinTemplates(
-    templates: ApprovedTemplateLite[]
+    templates: ApprovedTemplateLite[],
+    library: BulletinTemplateSpec[] = BULLETIN_TEMPLATE_LIBRARY
 ): MatchedTemplate[] {
     const approved = templates.filter(
         (t) => String(t.status || "").toUpperCase() === "APPROVED"
     );
     const matched: MatchedTemplate[] = [];
     for (const t of approved) {
-        const spec = matchLibrarySpec(t);
+        const spec = matchLibrarySpec(t, library);
         if (!spec) continue;
         matched.push({ ...t, spec });
     }
     matched.sort((a, b) => {
         if (b.spec.loadsPerMessage !== a.spec.loadsPerMessage) {
             return b.spec.loadsPerMessage - a.spec.loadsPerMessage;
+        }
+        // Prefer more mapped fields (richer coverage), then generation
+        if (b.spec.slotFields.length !== a.spec.slotFields.length) {
+            return b.spec.slotFields.length - a.spec.slotFields.length;
         }
         return b.spec.generation - a.spec.generation;
     });
@@ -56,26 +66,34 @@ export function resolveReusableBulletinTemplates(
 function pickTemplateForCapacity(
     matched: MatchedTemplate[],
     capacity: number,
-    preferredCategory?: string
+    preferredCategory: string | undefined,
+    slice: BulletinLoad[]
 ): MatchedTemplate | null {
     const pool = matched.filter((m) => m.spec.loadsPerMessage === capacity);
     if (!pool.length) return null;
-    // Prefer v2 (richer) then category
-    const sorted = [...pool].sort(
-        (a, b) => b.spec.generation - a.spec.generation
-    );
-    if (preferredCategory) {
-        const pref = sorted.find(
-            (m) =>
-                String(m.category || "").toUpperCase() ===
-                preferredCategory.toUpperCase()
-        );
-        if (pref) return pref;
-    }
-    const marketing = sorted.find(
-        (m) => String(m.category || "").toUpperCase() === "MARKETING"
-    );
-    return marketing || sorted[0];
+    const scored = pool.map((m) => {
+        const cov = coverageForSlice(slice, m.spec.slotFields);
+        return {
+            m,
+            ok: cov.ok,
+            uncovered: cov.uncovered.length,
+            fields: m.spec.slotFields.length,
+            gen: m.spec.generation,
+            cat: String(m.category || "").toUpperCase(),
+        };
+    });
+    scored.sort((a, b) => {
+        if (a.ok !== b.ok) return a.ok ? -1 : 1;
+        if (a.uncovered !== b.uncovered) return a.uncovered - b.uncovered;
+        if (preferredCategory) {
+            const ap = a.cat === preferredCategory.toUpperCase() ? 1 : 0;
+            const bp = b.cat === preferredCategory.toUpperCase() ? 1 : 0;
+            if (ap !== bp) return bp - ap;
+        }
+        if (a.fields !== b.fields) return b.fields - a.fields;
+        return b.gen - a.gen;
+    });
+    return scored[0]?.m || null;
 }
 
 function fieldValue(
@@ -140,17 +158,37 @@ function bodyTextOf(t: ApprovedTemplateLite): string | null {
  * Pack loads into 1/2/3-load messages using available reusable templates,
  * fill positional variables, and mark compatibility.
  */
+function coverageForSlice(
+    slice: BulletinLoad[],
+    mappings: LoadSlotField[]
+): { ok: boolean; uncovered: LoadSlotField[]; usesCatchAll: boolean } {
+    const filled = new Set<LoadSlotField>();
+    for (const load of slice) {
+        for (const k of filledLoadFieldKeys(load.fields)) filled.add(k);
+    }
+    const uncovered = uncoveredFilledFields([...filled], mappings);
+    const catchAll = hasCatchAll(mappings);
+    return {
+        ok: uncovered.length === 0 || catchAll,
+        uncovered,
+        usesCatchAll: catchAll && uncovered.length > 0,
+    };
+}
+
 export function composeReusableBulletinParts(
     analysis: BulletinAnalysis,
     templates: ApprovedTemplateLite[],
-    opts?: { purpose?: string }
+    opts?: { purpose?: string; library?: BulletinTemplateSpec[] }
 ): CampaignMessagePart[] {
     const loads = analysis.loads;
     if (!loads.length) {
         return [];
     }
 
-    const matched = resolveReusableBulletinTemplates(templates);
+    const library = opts?.library?.length
+        ? opts.library
+        : BULLETIN_TEMPLATE_LIBRARY;
+    const matched = resolveReusableBulletinTemplates(templates, library);
     const availableCaps = ([3, 2, 1] as const).filter((c) =>
         matched.some((m) => m.spec.loadsPerMessage === c)
     );
@@ -169,7 +207,7 @@ export function composeReusableBulletinParts(
                 readyForRealSend: false,
                 compatibility: "missing_template",
                 blockReason:
-                    "Nenhum template APPROVED da biblioteca de boletins (v1 boletim_* ou v2 boletim_v2_*). Aprove os modelos em Integrações → Datafy.",
+                    "Nenhum template APPROVED compatível na biblioteca gerenciada. Crie/aprove modelos em Integrações → Datafy com mapeamento de campos.",
                 policyWarning:
                     "Divulgação de cargas costuma ser MARKETING na Meta — não force UTILITY só para facilitar aprovação.",
             },
@@ -189,7 +227,8 @@ export function composeReusableBulletinParts(
         const tmpl = pickTemplateForCapacity(
             matched,
             capacity,
-            preferredCategory
+            preferredCategory,
+            slice
         );
 
         if (!tmpl) {
@@ -208,9 +247,50 @@ export function composeReusableBulletinParts(
             continue;
         }
 
-        const bodyValues = slice.flatMap((load) =>
-            valuesForLoad(load, tmpl.spec.slotFields)
-        );
+        const coverage = coverageForSlice(slice, tmpl.spec.slotFields);
+        const bodyValues = slice.flatMap((load) => {
+            const vals = valuesForLoad(load, tmpl.spec.slotFields);
+            if (coverage.usesCatchAll) {
+                // Append uncovered filled fields into catch-all slot (last observacoes/detalhes)
+                const catchIdx = [...tmpl.spec.slotFields]
+                    .map((k, i) =>
+                        k === "observacoes" || k === "detalhes" ? i : -1
+                    )
+                    .filter((i) => i >= 0)
+                    .pop();
+                if (catchIdx != null && catchIdx >= 0) {
+                    const extra = uncoveredFilledFields(
+                        filledLoadFieldKeys(load.fields),
+                        tmpl.spec.slotFields
+                    )
+                        .map((k) => {
+                            const f = load.fields;
+                            const map: Record<string, string | undefined> = {
+                                origem: f.origem,
+                                localCarregamento: f.localCarregamento,
+                                destino: f.destino,
+                                terminal: f.terminal,
+                                janela: f.janela,
+                                veiculo: f.veiculo,
+                                quantidade: f.quantidade,
+                                frete: f.frete,
+                                lote: f.lote,
+                                localizacao: f.localizacaoUrl,
+                                pedagio: f.pedagio,
+                            };
+                            return map[k] ? `${k}: ${map[k]}` : null;
+                        })
+                        .filter(Boolean);
+                    if (extra.length) {
+                        const base = vals[catchIdx] === "N/D" ? "" : vals[catchIdx];
+                        vals[catchIdx] = sanitizeTemplateParam(
+                            [base, ...extra].filter(Boolean).join(" · ")
+                        );
+                    }
+                }
+            }
+            return vals;
+        });
         while (bodyValues.length < tmpl.spec.variableCount) {
             bodyValues.push("N/D");
         }
@@ -230,10 +310,10 @@ export function composeReusableBulletinParts(
             policyWarning =
                 "Template UTILITY selecionado para divulgação de cargas — revise a classificação Meta (geralmente MARKETING).";
         }
-        if (tmpl.spec.generation === 1) {
+        if (coverage.usesCatchAll) {
             policyWarning = [
                 policyWarning,
-                "Usando template v1 (7 campos). Campos ricos (frete/janela/veículo) vão em Detalhes até aprovar boletim_v2_*.",
+                `Campos sem slot dedicado (${coverage.uncovered.join(", ")}) foram anexados em observações/detalhes — revise a prévia.`,
             ]
                 .filter(Boolean)
                 .join(" ");
@@ -247,6 +327,7 @@ export function composeReusableBulletinParts(
                 ? `${analysis.title} — PARTE ${partIndex + 1}`
                 : analysis.title;
 
+        const blockedCoverage = !coverage.ok;
         parts.push({
             index: partIndex,
             label,
@@ -260,11 +341,17 @@ export function composeReusableBulletinParts(
             templateComponents: tmpl.components || null,
             variableMapping: { body: trimmed },
             libraryTemplateId: tmpl.spec.id,
-            readyForRealSend: !overflow,
-            compatibility: overflow ? "param_overflow" : "ready",
-            blockReason: overflow
-                ? "Um ou mais campos excedem o limite de 1024 caracteres da variável Meta (valor truncado na prévia — revise o boletim)."
-                : null,
+            readyForRealSend: !overflow && !blockedCoverage,
+            compatibility: blockedCoverage
+                ? "incomplete_fields"
+                : overflow
+                  ? "param_overflow"
+                  : "ready",
+            blockReason: blockedCoverage
+                ? `Template incompatível: campos preenchidos sem mapeamento (${coverage.uncovered.join(", ")}). Ajuste o template ou os dados — nada foi descartado.`
+                : overflow
+                  ? "Um ou mais campos excedem o limite de 1024 caracteres da variável Meta (valor truncado na prévia — revise o boletim)."
+                  : null,
             policyWarning,
         });
 

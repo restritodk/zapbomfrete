@@ -116,7 +116,10 @@ describe("Reusable bulletin templates (6G)", () => {
         const parts = composeReusableBulletinParts(a, []);
         assert.equal(parts[0].readyForRealSend, false);
         assert.equal(parts[0].compatibility, "missing_template");
-        assert.match(parts[0].blockReason || "", /boletim_/);
+        assert.match(
+            parts[0].blockReason || "",
+            /biblioteca gerenciada|boletim_/i
+        );
     });
 
     it("does not require re-approval when only variable values change", () => {

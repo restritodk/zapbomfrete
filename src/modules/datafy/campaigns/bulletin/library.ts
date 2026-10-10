@@ -283,15 +283,24 @@ export function sanitizeTemplateParam(value: string | null | undefined): string 
     return flat.slice(0, META_TEMPLATE_PARAM_MAX - 1) + "…";
 }
 
-export function matchLibrarySpec(template: {
-    name: string;
-    components?: unknown[];
-}): BulletinTemplateSpec | null {
-    for (const spec of BULLETIN_TEMPLATE_LIBRARY) {
+export function matchLibrarySpec(
+    template: {
+        name: string;
+        components?: unknown[];
+    },
+    library: BulletinTemplateSpec[] = BULLETIN_TEMPLATE_LIBRARY
+): BulletinTemplateSpec | null {
+    for (const spec of library) {
         if (spec.namePatterns.some((re) => re.test(template.name))) {
             return spec;
         }
     }
+    // Name equality fallback (custom templates)
+    const byName = library.find(
+        (s) => s.preferredName.toLowerCase() === template.name.toLowerCase()
+    );
+    if (byName) return byName;
+
     if (Array.isArray(template.components)) {
         for (const c of template.components) {
             const comp = c as { type?: string; text?: string };
@@ -300,10 +309,10 @@ export function matchLibrarySpec(template: {
                 comp.text
             ) {
                 const n = countPositionalVars(comp.text);
-                const byCount = BULLETIN_TEMPLATE_LIBRARY.find(
-                    (s) => s.variableCount === n
-                );
-                if (byCount) return byCount;
+                // Prefer exact variable count + same loadsPerMessage when multiple
+                const candidates = library.filter((s) => s.variableCount === n);
+                if (candidates.length === 1) return candidates[0];
+                // Do not guess among multiple custom templates by count alone
             }
         }
     }

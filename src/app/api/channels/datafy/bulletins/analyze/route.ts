@@ -7,6 +7,10 @@ import {
     analysisToEditableDraft,
     composeReusableBulletinParts,
 } from "@/modules/datafy/campaigns/bulletin";
+import {
+    listEffectiveManagedTemplates,
+    managedToSpecs,
+} from "@/modules/datafy/campaigns/bulletin/managed-registry";
 import { datafyProvider } from "@/modules/datafy";
 import { BULLETIN_IMPORT_MAX_CHARS } from "@/modules/datafy/campaigns/bulletin/types";
 
@@ -47,6 +51,9 @@ export async function POST(request: NextRequest) {
 
     let partsPreview = null;
     if (parsed.data.includePartsPreview) {
+        const managedLib = managedToSpecs(
+            await listEffectiveManagedTemplates()
+        );
         try {
             const templates = await datafyProvider.listTemplates({
                 status: "APPROVED",
@@ -61,11 +68,12 @@ export async function POST(request: NextRequest) {
                     category: t.category,
                     components: t.components,
                 })),
-                { purpose: "marketing" }
+                { purpose: "marketing", library: managedLib }
             );
         } catch {
             partsPreview = composeReusableBulletinParts(analysis, [], {
                 purpose: "marketing",
+                library: managedLib,
             });
         }
     }
