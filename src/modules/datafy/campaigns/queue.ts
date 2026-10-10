@@ -16,7 +16,12 @@ import {
     CAMPAIGN_ORG_DEFAULT,
     canTransition,
 } from "./constants";
-import { appendEvent, setStatus } from "./service";
+import {
+    appendEvent,
+    assertCampaignRealSendAllowed,
+    CampaignError,
+    setStatus,
+} from "./service";
 import { buildTemplateComponents } from "./variables";
 import { evaluateEligibility } from "./eligibility";
 import { partClientMessageId, resolveCampaignParts } from "./parts";
@@ -709,6 +714,27 @@ export async function tickDatafyCampaigns() {
 
     for (const c of due) {
         try {
+            const camp = await prisma.datafyCampaign.findUnique({
+                where: { id: c.id },
+                select: { dryRun: true },
+            });
+            if (camp && !camp.dryRun) {
+                try {
+                    await assertCampaignRealSendAllowed(c.id);
+                } catch (e) {
+                    const msg =
+                        e instanceof CampaignError
+                            ? e.message
+                            : "Agendamento bloqueado: sem autorização técnica";
+                    await setStatus(
+                        c.id,
+                        "paused",
+                        null,
+                        `Agendamento pausado — ${msg}`
+                    );
+                    continue;
+                }
+            }
             await setStatus(c.id, "preparing", null, "Agendamento disparado");
         } catch {
             /* race */

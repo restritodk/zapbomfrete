@@ -1389,11 +1389,13 @@ export function DatafyCampaignsPanel() {
               audience.eligibleCount;
         const msgTotal = estimateMessageTotal(recipientN, partN);
 
-        if (!isSchedule) {
+        {
             const ok = window.confirm(
                 effectiveDryRun
                     ? `Simulação: ${recipientN} destinatário(s) × ${partN} parte(s) ≈ ${msgTotal} mensagens (sem envio real). Continuar?`
-                    : `Envio real: ${recipientN} destinatário(s) tecnicamente autorizados × ${partN} parte(s) = ${msgTotal} mensagens previstas.\n\nConsentimento elegível: ${audience.eligibleCount}. Aceite pela API ≠ entrega. Continuar?`
+                    : isSchedule
+                      ? `Agendar disparo real para ${new Date(scheduledAt).toLocaleString("pt-BR")}: ${recipientN} destinatário(s) × ${partN} parte(s) ≈ ${msgTotal} msgs.\n\nO worker Datafy executará no horário. Continuar?`
+                      : `Envio real: ${recipientN} destinatário(s) tecnicamente autorizados × ${partN} parte(s) = ${msgTotal} mensagens previstas.\n\nConsentimento elegível: ${audience.eligibleCount}. Aceite pela API ≠ entrega. Continuar?`
             );
             if (!ok) return;
         }
