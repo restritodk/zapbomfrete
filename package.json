@@ -12,6 +12,7 @@
     "test:broadcast-cancel": "tsx --test src/lib/broadcast-cancel.test.ts",
     "test:broadcast": "tsx --test src/lib/broadcast-delay.test.ts src/lib/broadcast-cancel.test.ts",
     "test:wa-connection": "tsx --test src/modules/whatsapp/connection-lifecycle.test.ts",
+    "test:datafy": "tsx --test src/modules/datafy/datafy.test.ts",
     "db:push": "prisma db push && prisma generate",
     "db:studio": "prisma studio",
     "make-admin": "node scripts/setup-admin.js",

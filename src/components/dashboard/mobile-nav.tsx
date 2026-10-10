@@ -26,6 +26,7 @@ import {
     Tag,
     MessageCircleReply,
     UserPlus,
+    Plug,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -86,6 +87,7 @@ const navGroups: NavGroup[] = [
             { href: "/dashboard/sessions/access", label: "Acesso às sessões", icon: UserPlus },
             { href: "/dashboard/users", label: "Usuários", icon: Users },
             { href: "/dashboard/settings", label: "Configurações", icon: Settings },
+            { href: "/dashboard/settings/integrations/datafy", label: "Integrações · Datafy", icon: Plug },
             { href: "/dashboard/system-monitor", label: "Monitor do sistema", icon: Activity, superadminOnly: true },
             { href: "/dashboard/notifications", label: "Notificações", icon: Bell, superadminOnly: true },
         ],

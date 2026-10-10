@@ -415,3 +415,57 @@ model BroadcastRecipient {
 
   @@index([broadcastLogId])
 }
+
+// ─── Datafy API (Meta Cloud WhatsApp) — Phase 1 integration ───
+// Additive only. Does not alter Baileys AuthState or sessions.
+
+model DatafyIntegration {
+  id                 String    @id @default("default")
+  enabled            Boolean   @default(false)
+  /// AES-GCM encrypted channel token (sk_live_...). Never returned in full to the client.
+  channelTokenEnc    String?   @db.Text
+  /// AES-GCM encrypted webhook secret (whsec_...). Never returned in full to the client.
+  webhookSecretEnc   String?   @db.Text
+  phoneNumberId      String?
+  wabaId             String?
+  businessId         String?
+  displayPhoneNumber String?
+  clienteId          String?
+  webhookConfigured  Boolean   @default(false)
+  lastVerifiedAt     DateTime?
+  lastError          String?   @db.Text
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+/// Idempotency store for Datafy webhook deliveries (x-datafy-delivery-id).
+model DatafyWebhookDelivery {
+  id          String   @id @default(cuid())
+  deliveryId  String   @unique
+  field       String?
+  acceptedAt  DateTime @default(now())
+
+  @@index([acceptedAt])
+}
+
+/// Persisted outbound/inbound message status from Datafy/Meta webhooks.
+model DatafyMessageStatus {
+  id           String   @id @default(cuid())
+  wamid        String
+  status       String   // received | sent | delivered | read | failed
+  recipientId  String?
+  phoneNumberId String?
+  timestamp    DateTime
+  errorCode    Int?
+  errorTitle   String?
+  errorDetails String?  @db.Text
+  conversationId String?
+  pricingCategory String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([wamid, status, timestamp])
+  @@index([wamid])
+  @@index([status])
+  @@index([recipientId])
+}

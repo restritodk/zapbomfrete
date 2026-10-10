@@ -1,0 +1,376 @@
+import assert from "node:assert/strict";
+import { describe, it, beforeEach, afterEach } from "node:test";
+import {
+    verifyDatafySignature,
+    signDatafyPayload,
+    syntheticDeliveryId,
+    DATAFY_TIMESTAMP_TOLERANCE_SEC,
+} from "./hmac";
+import { DatafyApiError, DatafyClient } from "./client";
+import {
+    maskSecret,
+    encryptSecret,
+    decryptSecret,
+    redactSecrets,
+    resolveEncryptionKeys,
+} from "./crypto-secrets";
+import {
+    assertWebhookUrlSafeForEnvironment,
+    isWebhookUrlHttps,
+    toPublicStatus,
+    type DatafyResolvedConfig,
+} from "./config";
+import { isDatafyProvider, DatafyProvider } from "./provider";
+
+const SAMPLE_BODY = JSON.stringify({
+    object: "whatsapp_business_account",
+    entry: [
+        {
+            id: "1",
+            changes: [{ field: "messages", value: { statuses: [] } }],
+        },
+    ],
+});
+
+describe("Datafy HMAC signature (official contract)", () => {
+    const secret = "whsec_test_secret_value";
+
+    it("accepts a valid signature within tolerance", () => {
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = signDatafyPayload(secret, ts, SAMPLE_BODY);
+        const result = verifyDatafySignature({
+            rawBody: SAMPLE_BODY,
+            signatureHeader: sig,
+            timestampHeader: ts,
+            secret,
+        });
+        assert.equal(result.ok, true);
+    });
+
+    it("accepts uppercase hex in sha256= header (constant-time digest compare)", () => {
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = signDatafyPayload(secret, ts, SAMPLE_BODY).replace(
+            "sha256=",
+            "sha256="
+        );
+        const upper =
+            "sha256=" + sig.slice("sha256=".length).toUpperCase();
+        const result = verifyDatafySignature({
+            rawBody: SAMPLE_BODY,
+            signatureHeader: upper,
+            timestampHeader: ts,
+            secret,
+        });
+        assert.equal(result.ok, true);
+    });
+
+    it("rejects tampered body (raw body required)", () => {
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = signDatafyPayload(secret, ts, SAMPLE_BODY);
+        const result = verifyDatafySignature({
+            rawBody: SAMPLE_BODY + " ",
+            signatureHeader: sig,
+            timestampHeader: ts,
+            secret,
+        });
+        assert.equal(result.ok, false);
+        if (!result.ok) assert.equal(result.reason, "signature_mismatch");
+    });
+
+    it("rejects expired timestamp (replay window)", () => {
+        const ts = String(
+            Math.floor(Date.now() / 1000) - DATAFY_TIMESTAMP_TOLERANCE_SEC - 10
+        );
+        const sig = signDatafyPayload(secret, ts, SAMPLE_BODY);
+        const result = verifyDatafySignature({
+            rawBody: SAMPLE_BODY,
+            signatureHeader: sig,
+            timestampHeader: ts,
+            secret,
+        });
+        assert.equal(result.ok, false);
+        if (!result.ok) assert.equal(result.reason, "timestamp_out_of_tolerance");
+    });
+
+    it("rejects far-future timestamp", () => {
+        const ts = String(Math.floor(Date.now() / 1000) + 600);
+        const sig = signDatafyPayload(secret, ts, SAMPLE_BODY);
+        const result = verifyDatafySignature({
+            rawBody: SAMPLE_BODY,
+            signatureHeader: sig,
+            timestampHeader: ts,
+            secret,
+        });
+        assert.equal(result.ok, false);
+    });
+
+    it("rejects missing headers", () => {
+        const result = verifyDatafySignature({
+            rawBody: SAMPLE_BODY,
+            signatureHeader: null,
+            timestampHeader: null,
+            secret,
+        });
+        assert.equal(result.ok, false);
+    });
+
+    it("synthetic delivery id is stable for same timestamp+body", () => {
+        const a = syntheticDeliveryId("1700000000", SAMPLE_BODY);
+        const b = syntheticDeliveryId("1700000000", SAMPLE_BODY);
+        const c = syntheticDeliveryId("1700000001", SAMPLE_BODY);
+        assert.equal(a, b);
+        assert.notEqual(a, c);
+        assert.equal(a.length, 64);
+    });
+});
+
+describe("Datafy HTTP client auth & errors", () => {
+    it("sends Bearer token and parses /me (real probe path)", async () => {
+        const calls: Array<{ url: string; auth?: string | null }> = [];
+        const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+            calls.push({
+                url,
+                auth: (init?.headers as Record<string, string>)?.Authorization,
+            });
+            return new Response(
+                JSON.stringify({
+                    phone_number_id: "111",
+                    waba_id: "222",
+                    business_id: "333",
+                    cliente_id: "cli_1",
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+            );
+        }) as typeof fetch;
+
+        const client = new DatafyClient({
+            channelToken: "sk_live_test_token",
+            fetchImpl,
+        });
+        const me = await client.getMe();
+        assert.equal(me.waba_id, "222");
+        assert.equal(calls[0].auth, "Bearer sk_live_test_token");
+        assert.ok(calls[0].url.endsWith("/me"));
+    });
+
+    it("maps 401 / 402 / 429 errors without exposing token", async () => {
+        const make = (status: number, message: string) =>
+            new DatafyClient({
+                channelToken: "sk_live_secret_should_not_appear",
+                fetchImpl: (async () =>
+                    new Response(JSON.stringify({ statusCode: status, message }), {
+                        status,
+                    })) as typeof fetch,
+            });
+
+        await assert.rejects(
+            () => make(401, "Token inválido").getMe(),
+            (e: unknown) =>
+                e instanceof DatafyApiError &&
+                e.statusCode === 401 &&
+                !String(e.message).includes("sk_live_secret")
+        );
+        await assert.rejects(
+            () => make(402, "Assinatura inativa").getMe(),
+            (e: unknown) => e instanceof DatafyApiError && e.statusCode === 402
+        );
+        await assert.rejects(
+            () =>
+                make(
+                    429,
+                    "Rate limit excedido (60 req/min). Tente novamente em 12s."
+                ).getMe(),
+            (e: unknown) =>
+                e instanceof DatafyApiError &&
+                e.statusCode === 429 &&
+                e.retryAfterSec === 12
+        );
+    });
+
+    it("times out safely", async () => {
+        const client = new DatafyClient({
+            channelToken: "sk_live_x",
+            timeoutMs: 20,
+            fetchImpl: (async (_u, init) => {
+                await new Promise((resolve, reject) => {
+                    const t = setTimeout(resolve, 500);
+                    init?.signal?.addEventListener("abort", () => {
+                        clearTimeout(t);
+                        reject(
+                            Object.assign(new Error("Aborted"), {
+                                name: "AbortError",
+                            })
+                        );
+                    });
+                });
+                return new Response("{}", { status: 200 });
+            }) as typeof fetch,
+        });
+        await assert.rejects(
+            () => client.getMe(),
+            (e: unknown) => e instanceof DatafyApiError && e.statusCode === 408
+        );
+    });
+});
+
+describe("Datafy secrets masking / crypto / rotation", () => {
+    const prev = {
+        AUTH_SECRET: process.env.AUTH_SECRET,
+        DATAFY_ENCRYPTION_KEY: process.env.DATAFY_ENCRYPTION_KEY,
+        NEXTAUTH_SECRET: process.env.NEXTAUTH_SECRET,
+    };
+
+    beforeEach(() => {
+        process.env.AUTH_SECRET = "test-auth-secret-32chars-minimum!!";
+        delete process.env.DATAFY_ENCRYPTION_KEY;
+    });
+
+    afterEach(() => {
+        process.env.AUTH_SECRET = prev.AUTH_SECRET;
+        process.env.DATAFY_ENCRYPTION_KEY = prev.DATAFY_ENCRYPTION_KEY;
+        process.env.NEXTAUTH_SECRET = prev.NEXTAUTH_SECRET;
+    });
+
+    it("masks tokens for UI", () => {
+        assert.equal(maskSecret("sk_live_abcdefghij"), "sk_live_••••ghij");
+        assert.equal(maskSecret("whsec_abcdefghij"), "whsec_••••ghij");
+        assert.equal(maskSecret(null), null);
+    });
+
+    it("redacts secrets from error strings", () => {
+        const raw =
+            "fail Bearer sk_live_ABCDEFG123 and whsec_ZZZZYYYYXXXX Authorization: sk_live_ABCDEFG123";
+        const clean = redactSecrets(raw);
+        assert.ok(!clean.includes("ABCDEFG123"));
+        assert.ok(!clean.includes("ZZZZYYYYXXXX"));
+        assert.ok(clean.includes("whsec_••••"));
+        assert.ok(clean.includes("Bearer ••••"));
+        assert.ok(clean.includes("Authorization: ••••"));
+    });
+
+    it("encrypts with AUTH_SECRET when DEK absent (legacy compatible)", () => {
+        const plain = "sk_live_roundtrip_value";
+        const enc = encryptSecret(plain);
+        assert.ok(enc.startsWith("auth."));
+        assert.equal(decryptSecret(enc), plain);
+    });
+
+    it("prefers DATAFY_ENCRYPTION_KEY for new ciphertext", () => {
+        process.env.DATAFY_ENCRYPTION_KEY = "datafy-dedicated-key-32chars-min!";
+        const slots = resolveEncryptionKeys();
+        assert.equal(slots[0].label, "dek");
+        const enc = encryptSecret("sk_live_with_dek");
+        assert.ok(enc.startsWith("dek."));
+        assert.equal(decryptSecret(enc), "sk_live_with_dek");
+    });
+
+    it("still decrypts AUTH_SECRET ciphertext after introducing DATAFY_ENCRYPTION_KEY", () => {
+        delete process.env.DATAFY_ENCRYPTION_KEY;
+        const legacy = encryptSecret("sk_live_legacy_token");
+        assert.ok(legacy.startsWith("auth."));
+
+        process.env.DATAFY_ENCRYPTION_KEY = "datafy-dedicated-key-32chars-min!";
+        // New writes use DEK
+        const newer = encryptSecret("sk_live_new_token");
+        assert.ok(newer.startsWith("dek."));
+        // Legacy still readable
+        assert.equal(decryptSecret(legacy), "sk_live_legacy_token");
+        assert.equal(decryptSecret(newer), "sk_live_new_token");
+    });
+
+    it("decrypts unprefixed legacy iv.tag.data format with AUTH_SECRET", () => {
+        // Build legacy 3-part payload manually using auth key path:
+        // encrypt then strip the label prefix
+        const labeled = encryptSecret("sk_live_unprefixed");
+        const legacy = labeled.replace(/^auth\./, "");
+        assert.equal(legacy.split(".").length, 3);
+        assert.equal(decryptSecret(legacy), "sk_live_unprefixed");
+    });
+});
+
+describe("Public status never exposes full secrets", () => {
+    it("toPublicStatus only returns masked credentials", () => {
+        const cfg: DatafyResolvedConfig = {
+            enabled: true,
+            baseUrl: "https://cloud.datafyapi.com.br",
+            channelToken: "sk_live_SUPERSECRETTOKENVALUE",
+            webhookSecret: "whsec_SUPERSECRETWEBHOOKVAL",
+            phoneNumberId: "123",
+            wabaId: "456",
+            businessId: "789",
+            displayPhoneNumber: "5511999999999",
+            clienteId: "cli",
+            webhookConfigured: true,
+            lastVerifiedAt: null,
+            lastError: "Token sk_live_SUPERSECRETTOKENVALUE invalid",
+            tokenSource: "env",
+            secretSource: "env",
+        };
+        const prevBase = process.env.BASE_URL;
+        process.env.BASE_URL = "https://app.example.com";
+        const pub = toPublicStatus(cfg);
+        process.env.BASE_URL = prevBase;
+
+        const json = JSON.stringify(pub);
+        assert.ok(!json.includes("SUPERSECRETTOKENVALUE"));
+        assert.ok(!json.includes("SUPERSECRETWEBHOOKVAL"));
+        assert.ok(pub.channelTokenMasked?.includes("••••"));
+        assert.ok(pub.webhookSecretMasked?.includes("••••"));
+        assert.ok(pub.lastError?.includes("sk_live_••••"));
+        assert.equal(pub.webhookUrlIsHttps, true);
+        assert.equal(pub.outboundCampaignsEnabled, false);
+        assert.equal(pub.webhookUrl, "https://app.example.com/api/webhooks/datafy");
+    });
+});
+
+describe("Webhook URL HTTPS policy", () => {
+    it("detects https", () => {
+        assert.equal(isWebhookUrlHttps("https://x.com/api/webhooks/datafy"), true);
+        assert.equal(isWebhookUrlHttps("http://localhost:3000/api/webhooks/datafy"), false);
+    });
+
+    it("requires https in production", () => {
+        const prev = process.env.NODE_ENV;
+        process.env.NODE_ENV = "production";
+        assert.equal(
+            assertWebhookUrlSafeForEnvironment(
+                "http://example.com/api/webhooks/datafy"
+            ).ok,
+            false
+        );
+        assert.equal(
+            assertWebhookUrlSafeForEnvironment(
+                "https://example.com/api/webhooks/datafy"
+            ).ok,
+            true
+        );
+        process.env.NODE_ENV = prev;
+    });
+});
+
+describe("Provider isolation", () => {
+    it("identifies datafy provider without touching baileys", () => {
+        assert.equal(isDatafyProvider("datafy"), true);
+        assert.equal(isDatafyProvider("baileys"), false);
+        const p = new DatafyProvider();
+        assert.equal(p.name, "datafy");
+        assert.throws(() => p.assertOutboundDisabled(), (e: unknown) => {
+            return e instanceof DatafyApiError && e.statusCode === 403;
+        });
+    });
+});
+
+describe("Duplicate delivery claim (unit semantics)", () => {
+    it("models first-vs-duplicate with a Set (same contract as DB unique)", () => {
+        const seen = new Set<string>();
+        const claim = (id: string) => {
+            if (seen.has(id)) return false;
+            seen.add(id);
+            return true;
+        };
+        assert.equal(claim("del-1"), true);
+        assert.equal(claim("del-1"), false);
+        assert.equal(claim("del-2"), true);
+    });
+});
