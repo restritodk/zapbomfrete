@@ -9,7 +9,9 @@ import {
     Copy,
     Loader2,
     Plus,
+    RefreshCw,
     Save,
+    Send,
     Sparkles,
     Trash2,
     Wand2,
@@ -38,6 +40,11 @@ import type {
     BulletinEditableDraft,
     BulletinLoadFields,
 } from "@/modules/datafy/campaigns/bulletin/types";
+import { META_TEMPLATE_BODY_MAX } from "@/modules/datafy/campaigns/bulletin/types";
+import type {
+    LibraryProposalCard,
+    MetaApprovalProposal,
+} from "@/modules/datafy/campaigns/bulletin/meta-approval";
 import {
     duplicateLoad,
     emptyLoad,
@@ -45,6 +52,39 @@ import {
     serializeBulletinDraft,
 } from "@/modules/datafy/campaigns/bulletin/analyze";
 import { DATAFY_BULLETIN_IMPORT_KEY } from "@/modules/datafy/campaigns/bulletin/constants";
+
+function statusBadge(ui: string) {
+    switch (ui) {
+        case "approved":
+            return "border-emerald-300 bg-emerald-50 text-emerald-900";
+        case "pending":
+        case "submitting":
+            return "border-amber-300 bg-amber-50 text-amber-950";
+        case "rejected":
+            return "border-red-300 bg-red-50 text-red-900";
+        case "ready_to_submit":
+            return "border-sky-300 bg-sky-50 text-sky-900";
+        case "paused":
+        case "disabled":
+            return "border-slate-300 bg-slate-100 text-slate-700";
+        default:
+            return "border-slate-200 bg-white text-slate-600";
+    }
+}
+
+function statusLabel(ui: string) {
+    const map: Record<string, string> = {
+        draft: "Rascunho",
+        ready_to_submit: "Pronto para submissão",
+        submitting: "Enviando",
+        pending: "Pendente de aprovação",
+        approved: "Aprovado",
+        rejected: "Rejeitado",
+        paused: "Pausado",
+        disabled: "Desabilitado",
+    };
+    return map[ui] || ui;
+}
 
 type FieldDef = {
     key: keyof BulletinLoadFields;
@@ -87,6 +127,11 @@ export function BulletinCreatorPanel() {
     const [editIndex, setEditIndex] = useState<number | null>(null);
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [previewOpen, setPreviewOpen] = useState(false);
+    const [proposal, setProposal] = useState<MetaApprovalProposal | null>(null);
+    const [proposalLoading, setProposalLoading] = useState(false);
+    const [submitTarget, setSubmitTarget] =
+        useState<LibraryProposalCard | null>(null);
+    const [submittingMeta, setSubmittingMeta] = useState(false);
     const [, startTransition] = useTransition();
 
     const editLoad = editIndex != null ? draft?.loads[editIndex] : null;
@@ -95,6 +140,82 @@ export function BulletinCreatorPanel() {
         if (!draft) return 0;
         return draft.loads.filter((l) => l.completeness < 0.35).length;
     }, [draft]);
+
+    const loadMetaProposal = useCallback(async (d: BulletinEditableDraft) => {
+        setProposalLoading(true);
+        try {
+            const res = await fetch(
+                "/api/channels/datafy/bulletins/meta-approval",
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "propose", draft: d }),
+                }
+            );
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(json.message || "Falha ao gerar proposta");
+            }
+            setProposal(json.data.proposal as MetaApprovalProposal);
+        } catch (e) {
+            toast.error(
+                e instanceof Error ? e.message : "Erro na proposta Meta"
+            );
+        } finally {
+            setProposalLoading(false);
+        }
+    }, []);
+
+    const refreshMetaStatuses = useCallback(async () => {
+        if (!draft) return;
+        setProposalLoading(true);
+        try {
+            await fetch("/api/channels/datafy/bulletins/meta-approval", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "refresh" }),
+            });
+            await loadMetaProposal(draft);
+            toast.success("Status sincronizado com a Datafy/Meta");
+        } catch {
+            toast.error("Falha ao sincronizar status");
+        } finally {
+            setProposalLoading(false);
+        }
+    }, [draft, loadMetaProposal]);
+
+    const submitToMeta = useCallback(async () => {
+        if (!submitTarget) return;
+        setSubmittingMeta(true);
+        try {
+            const res = await fetch(
+                "/api/channels/datafy/bulletins/meta-approval",
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "submit",
+                        technicalName: submitTarget.technicalName,
+                        confirmSubmit: true,
+                    }),
+                }
+            );
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(json.message || "Falha na submissão");
+            }
+            toast.success(
+                json.data?.message ||
+                    "Enviado para análise da Meta (PENDING ≠ APPROVED)"
+            );
+            setSubmitTarget(null);
+            if (draft) await loadMetaProposal(draft);
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Erro ao submeter");
+        } finally {
+            setSubmittingMeta(false);
+        }
+    }, [submitTarget, draft, loadMetaProposal]);
 
     const analyze = useCallback(async () => {
         if (!rawText.trim()) {
@@ -121,12 +242,13 @@ export function BulletinCreatorPanel() {
             toast.success(
                 `${data.analysis.loadCount} carga(s) identificada(s)`
             );
+            void loadMetaProposal(data.draft);
         } catch (e) {
             toast.error(e instanceof Error ? e.message : "Erro na análise");
         } finally {
             setAnalyzing(false);
         }
-    }, [rawText]);
+    }, [rawText, loadMetaProposal]);
 
     const updateGeneral = (key: string, value: string) => {
         if (!draft) return;
@@ -585,14 +707,190 @@ export function BulletinCreatorPanel() {
                         </div>
                     </div>
 
+                    <Card className="border-slate-200/80 shadow-sm overflow-hidden">
+                        <CardHeader className="pb-3">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <CardTitle className="text-lg">
+                                        4. Aprovação Meta
+                                    </CardTitle>
+                                    <CardDescription>
+                                        Submeta templates oficiais via Datafy.
+                                        HTTP 200 da criação = PENDING, não
+                                        APPROVED.
+                                    </CardDescription>
+                                </div>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="rounded-xl"
+                                    disabled={proposalLoading || !draft}
+                                    onClick={() => void refreshMetaStatuses()}
+                                >
+                                    {proposalLoading ? (
+                                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                        <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                                    )}
+                                    Atualizar status
+                                </Button>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            {proposalLoading && !proposal ? (
+                                <p className="text-sm text-slate-500 inline-flex items-center gap-2">
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    Gerando proposta de template…
+                                </p>
+                            ) : null}
+                            {proposal && (
+                                <>
+                                    <div
+                                        className={cn(
+                                            "rounded-xl border px-3 py-2.5 text-sm space-y-1.5",
+                                            proposal.singleBalloon
+                                                .possibleAsSingleTemplate
+                                                ? "border-emerald-200 bg-emerald-50/70 text-emerald-950"
+                                                : "border-amber-200 bg-amber-50/80 text-amber-950"
+                                        )}
+                                    >
+                                        <p className="font-medium">
+                                            {proposal.summary}
+                                        </p>
+                                        <p className="text-xs tabular-nums opacity-90">
+                                            {proposal.fullTextCharCount}/
+                                            {META_TEMPLATE_BODY_MAX} chars no
+                                            texto integral ·{" "}
+                                            {proposal.loadCount} carga(s) ·
+                                            categoria proposta{" "}
+                                            {proposal.recommendedCategory}
+                                        </p>
+                                        {!proposal.singleBalloon
+                                            .possibleAsSingleTemplate &&
+                                            proposal.singleBalloon.blockReasons.map(
+                                                (r) => (
+                                                    <p
+                                                        key={r}
+                                                        className="text-xs flex gap-1.5"
+                                                    >
+                                                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                                                        {r}
+                                                    </p>
+                                                )
+                                            )}
+                                        {proposal.singleBalloon.explanations
+                                            .slice(0, 2)
+                                            .map((e) => (
+                                                <p
+                                                    key={e}
+                                                    className="text-[11px] opacity-80"
+                                                >
+                                                    {e}
+                                                </p>
+                                            ))}
+                                    </div>
+                                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                        {proposal.libraryProposals.map((p) => (
+                                            <div
+                                                key={p.technicalName}
+                                                className={cn(
+                                                    "rounded-2xl border bg-white p-3.5 space-y-2.5 transition-shadow",
+                                                    p.uiStatus === "approved"
+                                                        ? "border-emerald-200 shadow-sm"
+                                                        : "border-slate-200/90"
+                                                )}
+                                            >
+                                                <div className="flex items-start justify-between gap-2">
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-slate-900">
+                                                            {p.technicalName}
+                                                        </p>
+                                                        <p className="text-[11px] text-slate-500">
+                                                            {p.loadsPerMessage}{" "}
+                                                            carga(s)/msg ·{" "}
+                                                            {p.bodyCharCount}{" "}
+                                                            chars ·{" "}
+                                                            {p.category}
+                                                        </p>
+                                                    </div>
+                                                    <Badge
+                                                        variant="outline"
+                                                        className={cn(
+                                                            "rounded-lg text-[10px]",
+                                                            statusBadge(
+                                                                p.uiStatus
+                                                            )
+                                                        )}
+                                                    >
+                                                        {statusLabel(
+                                                            p.uiStatus
+                                                        )}
+                                                    </Badge>
+                                                </div>
+                                                {p.lastSubmittedAt && (
+                                                    <p className="text-[10px] text-slate-400">
+                                                        Submetido:{" "}
+                                                        {new Date(
+                                                            p.lastSubmittedAt
+                                                        ).toLocaleString(
+                                                            "pt-BR"
+                                                        )}
+                                                    </p>
+                                                )}
+                                                {p.remoteRejectedReason && (
+                                                    <p className="text-[11px] text-red-800">
+                                                        Motivo:{" "}
+                                                        {p.remoteRejectedReason}
+                                                    </p>
+                                                )}
+                                                {p.submitBlockReason &&
+                                                    !p.canSubmit && (
+                                                        <p className="text-[11px] text-slate-500">
+                                                            {p.submitBlockReason}
+                                                        </p>
+                                                    )}
+                                                <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    className="w-full rounded-xl"
+                                                    disabled={!p.canSubmit}
+                                                    onClick={() =>
+                                                        setSubmitTarget(p)
+                                                    }
+                                                >
+                                                    <Send className="mr-1.5 h-3.5 w-3.5" />
+                                                    Enviar para aprovação da
+                                                    Meta
+                                                </Button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                            {!proposal && !proposalLoading && (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="rounded-xl"
+                                    onClick={() =>
+                                        draft && void loadMetaProposal(draft)
+                                    }
+                                >
+                                    Gerar proposta de aprovação
+                                </Button>
+                            )}
+                        </CardContent>
+                    </Card>
+
                     <Card className="border-slate-200/80 shadow-sm">
                         <CardHeader className="pb-3">
                             <CardTitle className="text-lg">
-                                4. Prévia e preparação
+                                5. Prévia e preparação
                             </CardTitle>
                             <CardDescription>
-                                Templates APPROVED são validados no wizard de
-                                campanhas. Este passo não dispara mensagens.
+                                Templates APPROVED entram no Disparo em massa.
+                                Este passo não dispara mensagens.
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="flex flex-wrap gap-2">
@@ -728,7 +1026,7 @@ export function BulletinCreatorPanel() {
                         Você revisou {draft?.loads.length || 0} carga(s). O
                         sistema abrirá o disparo em massa com o boletim
                         preparado. Nenhum envio real acontece sem autorização
-                        explícita na Etapa 5.
+                        explícita na revisão final da campanha.
                     </p>
                     {incompleteCount > 0 && (
                         <p className="text-sm text-amber-800">
@@ -755,6 +1053,103 @@ export function BulletinCreatorPanel() {
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             ) : null}
                             Confirmar
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog
+                open={Boolean(submitTarget)}
+                onOpenChange={(o) => !o && setSubmitTarget(null)}
+            >
+                <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto sm:max-w-xl">
+                    <DialogHeader>
+                        <DialogTitle>
+                            Enviar para aprovação da Meta
+                        </DialogTitle>
+                    </DialogHeader>
+                    {submitTarget && (
+                        <div className="space-y-3 text-sm">
+                            <div className="grid gap-1.5 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5">
+                                <p>
+                                    <span className="text-slate-400 text-xs uppercase tracking-wide">
+                                        Nome técnico
+                                    </span>
+                                    <br />
+                                    <code className="font-mono text-slate-900">
+                                        {submitTarget.technicalName}
+                                    </code>
+                                </p>
+                                <p>
+                                    Idioma:{" "}
+                                    <strong>{submitTarget.language}</strong>
+                                    {" · "}
+                                    Categoria:{" "}
+                                    <strong>{submitTarget.category}</strong>
+                                    {" · "}
+                                    {submitTarget.bodyCharCount}/
+                                    {META_TEMPLATE_BODY_MAX} chars
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                    {submitTarget.variableCount} variável(is) ·{" "}
+                                    {submitTarget.loadsPerMessage} carga(s) por
+                                    mensagem
+                                </p>
+                            </div>
+                            <div>
+                                <p className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-1">
+                                    Conteúdo do BODY
+                                </p>
+                                <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-xl border bg-white p-3 text-xs text-slate-700">
+                                    {submitTarget.bodyText}
+                                </pre>
+                            </div>
+                            <div>
+                                <p className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-1">
+                                    Prévia com exemplos
+                                </p>
+                                <pre className="max-h-36 overflow-auto whitespace-pre-wrap rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 text-xs text-slate-800">
+                                    {submitTarget.previewFilled}
+                                </pre>
+                            </div>
+                            <ul className="space-y-1 text-[11px] text-amber-900">
+                                <li>
+                                    A Datafy encaminha POST
+                                    /v1/{"{waba_id}"}/message_templates — sucesso
+                                    HTTP cria PENDING.
+                                </li>
+                                <li>
+                                    Só use em campanha real após status
+                                    APPROVED (webhook ou sincronização).
+                                </li>
+                                <li>
+                                    Boletins comerciais usam MARKETING — não
+                                    marcamos Utility para burlar a Meta.
+                                </li>
+                            </ul>
+                        </div>
+                    )}
+                    <DialogFooter className="gap-2">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-xl"
+                            onClick={() => setSubmitTarget(null)}
+                        >
+                            Cancelar
+                        </Button>
+                        <Button
+                            type="button"
+                            className="rounded-xl"
+                            disabled={submittingMeta || !submitTarget?.canSubmit}
+                            onClick={() => void submitToMeta()}
+                        >
+                            {submittingMeta ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                                <Send className="mr-2 h-4 w-4" />
+                            )}
+                            Confirmar submissão
                         </Button>
                     </DialogFooter>
                 </DialogContent>

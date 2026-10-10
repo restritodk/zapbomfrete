@@ -82,6 +82,12 @@ export interface DatafyWebhookValue {
         reaction?: Record<string, unknown>;
         [key: string]: unknown;
     }>;
+    /** message_template_status_update (Meta shape, mirrored by Datafy) */
+    event?: string;
+    message_template_id?: string | number;
+    message_template_name?: string;
+    message_template_language?: string;
+    reason?: string;
     statuses?: Array<{
         id?: string;
         status?: string;

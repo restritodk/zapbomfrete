@@ -23,3 +23,12 @@ export {
     managedToClientLibrary,
     type ClientLibrarySpec,
 } from "./managed-registry";
+export {
+    assessSingleBalloonTemplate,
+    buildMetaApprovalProposal,
+    mapRemoteToUiStatus,
+    normalizeMetaTemplateEvent,
+    type MetaApprovalProposal,
+    type LibraryProposalCard,
+    type MetaApprovalUiStatus,
+} from "./meta-approval";

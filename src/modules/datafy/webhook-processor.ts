@@ -17,6 +17,7 @@ export type ProcessWebhookResult = {
     statusesSaved: number;
     messagesReceived: number;
     chatMessagesPersisted: number;
+    templateStatusUpdates: number;
 };
 
 /**
@@ -96,14 +97,48 @@ async function upsertStatus(opts: {
     });
 }
 
+async function processTemplateStatusUpdate(value: DatafyWebhookValue) {
+    const { normalizeMetaTemplateEvent } = await import(
+        "./campaigns/bulletin/meta-approval"
+    );
+    const { markSubmitted } = await import(
+        "./campaigns/bulletin/managed-registry"
+    );
+    const parsed = normalizeMetaTemplateEvent({
+        event: value.event,
+        message_template_id: value.message_template_id,
+        message_template_name: value.message_template_name,
+        message_template_language: value.message_template_language,
+        reason: value.reason,
+    });
+    if (!parsed.name || !parsed.status) return false;
+    await markSubmitted(parsed.name, {
+        id: parsed.templateId,
+        status: parsed.status,
+        rejected_reason: parsed.rejectedReason,
+    });
+    return true;
+}
+
 async function processValue(
     value: DatafyWebhookValue,
     counters: {
         statusesSaved: number;
         messagesReceived: number;
         chatMessagesPersisted: number;
-    }
+        templateStatusUpdates: number;
+    },
+    field?: string | null
 ) {
+    if (
+        field === "message_template_status_update" ||
+        (value.event && value.message_template_name)
+    ) {
+        const ok = await processTemplateStatusUpdate(value);
+        if (ok) counters.templateStatusUpdates++;
+        return;
+    }
+
     const phoneNumberId = value.metadata?.phone_number_id || null;
 
     if (Array.isArray(value.statuses)) {
@@ -171,6 +206,7 @@ export async function processDatafyWebhook(opts: {
         statusesSaved: 0,
         messagesReceived: 0,
         chatMessagesPersisted: 0,
+        templateStatusUpdates: 0,
     };
 
     const firstField =
@@ -189,6 +225,7 @@ export async function processDatafyWebhook(opts: {
             statusesSaved: 0,
             messagesReceived: 0,
             chatMessagesPersisted: 0,
+            templateStatusUpdates: 0,
         };
     }
 
@@ -196,14 +233,14 @@ export async function processDatafyWebhook(opts: {
         for (const change of entry.changes || []) {
             if (change.field) fields.push(change.field);
             if (change.value) {
-                await processValue(change.value, counters);
+                await processValue(change.value, counters, change.field);
             }
         }
     }
 
     logger.info(
         "Datafy",
-        `Webhook processed delivery=${opts.deliveryId.slice(0, 8)}… fields=${fields.join(",") || "-"} statuses=${counters.statusesSaved} inbound=${counters.messagesReceived} chat=${counters.chatMessagesPersisted}`
+        `Webhook processed delivery=${opts.deliveryId.slice(0, 8)}… fields=${fields.join(",") || "-"} statuses=${counters.statusesSaved} inbound=${counters.messagesReceived} chat=${counters.chatMessagesPersisted} templates=${counters.templateStatusUpdates}`
     );
 
     return {
