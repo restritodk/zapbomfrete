@@ -68,10 +68,14 @@ function loadBlock(startVar: number, cargaLabel: string): string {
     ].join("\n");
 }
 
+/**
+ * Meta example values: no newlines, no leading/trailing spaces,
+ * ≤ 1024 chars. URL samples are allowed in MARKETING body params.
+ */
 const EXAMPLE_LOAD = [
-    "Rondonópolis/MT",
-    "Paranaguá/PR",
-    "Terminal XXX",
+    "Rondonopolis/MT",
+    "Paranagua/PR",
+    "Terminal Exemplo",
     "Lote 123",
     "https://maps.app.goo.gl/exemplo",
     "Tag OK",
@@ -202,4 +206,105 @@ export function fillTemplatePreview(
         const idx = Number(num) - 1;
         return values[idx] ?? "N/D";
     });
+}
+
+export type BulletinTemplateSubmission = {
+    name: string;
+    language: "pt_BR";
+    category: "MARKETING";
+    parameter_format: "POSITIONAL";
+    bodyText: string;
+    exampleRow: string[];
+    variableCount: number;
+    bodyCharCount: number;
+    loadsPerMessage: 1 | 2 | 3;
+    description: string;
+    previewFilled: string;
+    checks: {
+        bodyWithinLimit: boolean;
+        examplesMatchVars: boolean;
+        categoryMarketing: boolean;
+        languagePtBr: boolean;
+        readyForManualSubmit: boolean;
+        notes: string[];
+    };
+};
+
+/** Payload + validation for one-time Meta approval via Datafy API. */
+export function buildBulletinTemplateSubmission(
+    spec: BulletinTemplateSpec
+): BulletinTemplateSubmission {
+    const bodyText = spec.bodyTextForApproval;
+    const variableCount = countPositionalVars(bodyText);
+    const exampleRow = spec.exampleRow.map((v) =>
+        sanitizeTemplateParam(v).replace(/…$/, "").slice(0, META_TEMPLATE_PARAM_MAX)
+    );
+    const notes: string[] = [];
+    const bodyWithinLimit = bodyText.length <= 1024;
+    if (!bodyWithinLimit) {
+        notes.push(`BODY excede 1024 caracteres (${bodyText.length}).`);
+    }
+    const examplesMatchVars = exampleRow.length === variableCount;
+    if (!examplesMatchVars) {
+        notes.push(
+            `Exemplos (${exampleRow.length}) ≠ variáveis (${variableCount}).`
+        );
+    }
+    if (variableCount !== spec.variableCount) {
+        notes.push(
+            `Contagem de {{n}} (${variableCount}) diverge do spec (${spec.variableCount}).`
+        );
+    }
+    const categoryMarketing = spec.recommendedCategory === "MARKETING";
+    if (!categoryMarketing) {
+        notes.push("Categoria recomendada deveria ser MARKETING para divulgação.");
+    }
+    notes.push(
+        "Submissão via Datafy POST /v1/{waba_id}/message_templates — Meta analisa e retorna PENDING."
+    );
+    notes.push(
+        "Não usar em campanha real até status APPROVED na listagem oficial."
+    );
+
+    return {
+        name: spec.preferredName,
+        language: "pt_BR",
+        category: "MARKETING",
+        parameter_format: "POSITIONAL",
+        bodyText,
+        exampleRow,
+        variableCount,
+        bodyCharCount: bodyText.length,
+        loadsPerMessage: spec.loadsPerMessage,
+        description: spec.description,
+        previewFilled: fillTemplatePreview(bodyText, exampleRow),
+        checks: {
+            bodyWithinLimit,
+            examplesMatchVars,
+            categoryMarketing,
+            languagePtBr: true,
+            readyForManualSubmit:
+                bodyWithinLimit &&
+                examplesMatchVars &&
+                categoryMarketing &&
+                variableCount === spec.variableCount,
+            notes,
+        },
+    };
+}
+
+export function buildAllBulletinTemplateSubmissions(): BulletinTemplateSubmission[] {
+    return BULLETIN_TEMPLATE_LIBRARY.map(buildBulletinTemplateSubmission);
+}
+
+export function findBulletinSpecByName(
+    name: string
+): BulletinTemplateSpec | null {
+    const n = String(name || "").trim();
+    if (!n) return null;
+    return (
+        BULLETIN_TEMPLATE_LIBRARY.find((s) =>
+            s.namePatterns.some((re) => re.test(n))
+        ) || null
+    );
 }

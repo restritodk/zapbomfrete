@@ -5,6 +5,7 @@ import { datafyProvider, DatafyApiError } from "@/modules/datafy";
 import { loadDatafyConfig } from "@/modules/datafy/config";
 import { redactSecrets } from "@/modules/datafy/crypto-secrets";
 import { prepareTemplateBodyFromCopy } from "@/modules/datafy/campaigns/variables";
+import { countPositionalVars } from "@/modules/datafy/campaigns/bulletin/library";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,8 @@ const schema = z.object({
     category: z.enum(["MARKETING", "UTILITY", "AUTHENTICATION"]),
     bodyText: z.string().min(1).max(1024),
     headerImageHandle: z.string().nullable().optional(),
+    /** Optional Meta BODY examples (positional). Required when body has {{n}}. */
+    exampleRow: z.array(z.string().max(1024)).optional(),
 });
 
 function toTemplateName(raw: string) {
@@ -62,6 +65,26 @@ export async function POST(request: NextRequest) {
             toTemplateName(parsed.data.name) ||
             `campanha_${Date.now().toString(36)}`;
 
+        const varCount = countPositionalVars(prepared.bodyText);
+        let exampleRow = prepared.exampleRow.length
+            ? prepared.exampleRow
+            : parsed.data.exampleRow || [];
+        if (varCount > 0 && exampleRow.length !== varCount) {
+            if (parsed.data.exampleRow?.length === varCount) {
+                exampleRow = parsed.data.exampleRow;
+            } else if (exampleRow.length < varCount) {
+                exampleRow = [
+                    ...exampleRow,
+                    ...Array.from(
+                        { length: varCount - exampleRow.length },
+                        (_, i) => `Exemplo ${exampleRow.length + i + 1}`
+                    ),
+                ];
+            } else {
+                exampleRow = exampleRow.slice(0, varCount);
+            }
+        }
+
         const components: unknown[] = [];
         if (parsed.data.headerImageHandle) {
             components.push({
@@ -75,8 +98,8 @@ export async function POST(request: NextRequest) {
         components.push({
             type: "BODY",
             text: prepared.bodyText,
-            ...(prepared.exampleRow.length
-                ? { example: { body_text: [prepared.exampleRow] } }
+            ...(varCount > 0 && exampleRow.length === varCount
+                ? { example: { body_text: [exampleRow] } }
                 : {}),
         });
 
@@ -85,6 +108,7 @@ export async function POST(request: NextRequest) {
             name: templateName,
             language: parsed.data.language || "pt_BR",
             category: parsed.data.category,
+            parameter_format: "POSITIONAL",
             components,
         });
 

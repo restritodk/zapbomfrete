@@ -11,10 +11,12 @@ import {
     ExternalLink,
     Eye,
     EyeOff,
+    FileText,
     Loader2,
     Plug,
     RefreshCw,
     Save,
+    Send,
     Shield,
     Webhook,
     XCircle,
@@ -58,6 +60,32 @@ type TemplateRow = {
     category?: string;
 };
 
+type BulletinLibraryItem = {
+    name: string;
+    language: string;
+    category: string;
+    bodyText: string;
+    exampleRow: string[];
+    variableCount: number;
+    bodyCharCount: number;
+    loadsPerMessage: number;
+    description: string;
+    previewFilled: string;
+    checks: {
+        readyForManualSubmit: boolean;
+        notes: string[];
+    };
+};
+
+type BulletinRemote = {
+    id?: string;
+    name: string;
+    status: string;
+    category?: string;
+    language?: string;
+    rejected_reason?: string | null;
+};
+
 export default function DatafyIntegrationPage() {
     const { data: authSession, status: authStatus } = useSession();
     // Credential management is SUPERADMIN-only (matches API isAdmin).
@@ -67,8 +95,24 @@ export default function DatafyIntegrationPage() {
     const [saving, setSaving] = useState(false);
     const [verifying, setVerifying] = useState(false);
     const [loadingTemplates, setLoadingTemplates] = useState(false);
+    const [loadingBulletinLib, setLoadingBulletinLib] = useState(false);
+    const [submittingBulletin, setSubmittingBulletin] = useState<string | null>(
+        null
+    );
     const [status, setStatus] = useState<IntegrationStatus | null>(null);
     const [templates, setTemplates] = useState<TemplateRow[]>([]);
+    const [bulletinLibrary, setBulletinLibrary] = useState<
+        BulletinLibraryItem[]
+    >([]);
+    const [bulletinRemote, setBulletinRemote] = useState<
+        Record<string, BulletinRemote>
+    >({});
+    const [bulletinMetaNote, setBulletinMetaNote] = useState<string | null>(
+        null
+    );
+    const [expandedBulletin, setExpandedBulletin] = useState<string | null>(
+        null
+    );
     const [enabled, setEnabled] = useState(false);
     const [webhookConfigured, setWebhookConfigured] = useState(false);
     const [channelToken, setChannelToken] = useState("");
@@ -220,11 +264,79 @@ export default function DatafyIntegrationPage() {
                 return;
             }
             setTemplates(Array.isArray(data.data?.data) ? data.data.data : []);
-            toast.success("Templates carregados");
+            toast.success("Templates APPROVED carregados da Datafy/Meta");
         } catch {
             toast.error("Erro ao carregar templates");
         } finally {
             setLoadingTemplates(false);
+        }
+    };
+
+    const handleLoadBulletinLibrary = async () => {
+        setLoadingBulletinLib(true);
+        try {
+            const res = await fetch(
+                "/api/integrations/datafy/bulletin-templates"
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                toast.error(data.message || "Falha ao carregar biblioteca");
+                return;
+            }
+            setBulletinLibrary(
+                Array.isArray(data.data?.library) ? data.data.library : []
+            );
+            setBulletinRemote(
+                data.data?.remote && typeof data.data.remote === "object"
+                    ? data.data.remote
+                    : {}
+            );
+            setBulletinMetaNote(data.data?.metaNote || null);
+            if (data.data?.remoteError) {
+                toast.message(
+                    `Biblioteca local ok · remoto: ${data.data.remoteError}`
+                );
+            } else {
+                toast.success("Biblioteca de boletins e status remoto atualizados");
+            }
+        } catch {
+            toast.error("Erro ao carregar biblioteca de boletins");
+        } finally {
+            setLoadingBulletinLib(false);
+        }
+    };
+
+    const handleSubmitBulletinTemplate = async (name: string) => {
+        const ok = window.confirm(
+            `Enviar "${name}" para aprovação da Meta via API Datafy?\n\n` +
+                `Categoria MARKETING · idioma pt_BR.\n` +
+                `Isto NÃO dispara mensagens. O status inicial será PENDING.\n` +
+                `Confirme apenas se as credenciais Datafy estiverem corretas.`
+        );
+        if (!ok) return;
+        setSubmittingBulletin(name);
+        try {
+            const res = await fetch(
+                "/api/integrations/datafy/bulletin-templates",
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name, confirmSubmit: true }),
+                }
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                toast.error(data.message || "Falha na submissão");
+                return;
+            }
+            toast.success(
+                `${name} → ${data.data?.approvalStatus || "PENDING"}. Acompanhe a aprovação da Meta.`
+            );
+            void handleLoadBulletinLibrary();
+        } catch {
+            toast.error("Erro ao submeter template");
+        } finally {
+            setSubmittingBulletin(null);
         }
     };
 
@@ -650,7 +762,7 @@ export default function DatafyIntegrationPage() {
                         />
                         <InfoRow
                             label="Campanhas Datafy"
-                            value="Desabilitadas (Fase 1)"
+                            value="Habilitadas (Disparo → Datafy)"
                         />
                     </dl>
                 </CardContent>
@@ -659,9 +771,194 @@ export default function DatafyIntegrationPage() {
             <Card className="border-slate-200/80 shadow-sm">
                 <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
                     <div>
+                        <CardTitle className="text-lg flex items-center gap-2">
+                            <FileText className="h-5 w-5" />
+                            Templates de boletim (reutilizáveis)
+                        </CardTitle>
+                        <CardDescription>
+                            Três modelos MARKETING · pt_BR para aprovar uma vez e
+                            reutilizar diariamente. Submissão manual via Datafy →
+                            Meta (não automática).
+                        </CardDescription>
+                    </div>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleLoadBulletinLibrary()}
+                        disabled={
+                            loadingBulletinLib || !status?.hasChannelToken
+                        }
+                    >
+                        {loadingBulletinLib ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                        )}
+                        Carregar biblioteca
+                    </Button>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    {bulletinMetaNote && (
+                        <p className="text-xs text-slate-600 rounded-xl border bg-slate-50 px-3 py-2">
+                            {bulletinMetaNote}
+                        </p>
+                    )}
+                    {bulletinLibrary.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                            Clique em &quot;Carregar biblioteca&quot; para ver
+                            prévias, exemplos e status remoto (PENDING /
+                            APPROVED / REJECTED).
+                        </p>
+                    ) : (
+                        <div className="space-y-3">
+                            {bulletinLibrary.map((item) => {
+                                const remote = bulletinRemote[item.name];
+                                const remoteStatus = (
+                                    remote?.status || "NÃO ENVIADO"
+                                ).toUpperCase();
+                                const canUseReal = remoteStatus === "APPROVED";
+                                const expanded = expandedBulletin === item.name;
+                                return (
+                                    <div
+                                        key={item.name}
+                                        className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3"
+                                    >
+                                        <div className="flex flex-wrap items-start justify-between gap-2">
+                                            <div>
+                                                <p className="font-semibold font-mono text-sm">
+                                                    {item.name}
+                                                </p>
+                                                <p className="text-xs text-muted-foreground mt-0.5">
+                                                    {item.description} ·{" "}
+                                                    {item.variableCount} vars ·{" "}
+                                                    {item.bodyCharCount}/1024
+                                                    chars · {item.category} ·{" "}
+                                                    {item.language}
+                                                </p>
+                                            </div>
+                                            <span
+                                                className={cn(
+                                                    "text-[11px] font-medium rounded-lg border px-2 py-1",
+                                                    canUseReal
+                                                        ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                                                        : remoteStatus ===
+                                                            "PENDING"
+                                                          ? "border-amber-300 bg-amber-50 text-amber-900"
+                                                          : remoteStatus ===
+                                                              "REJECTED"
+                                                            ? "border-red-300 bg-red-50 text-red-800"
+                                                            : "border-slate-200 bg-slate-50 text-slate-600"
+                                                )}
+                                            >
+                                                {remoteStatus}
+                                            </span>
+                                        </div>
+                                        {remote?.rejected_reason && (
+                                            <p className="text-xs text-red-700">
+                                                Motivo rejeição:{" "}
+                                                {remote.rejected_reason}
+                                            </p>
+                                        )}
+                                        <p className="text-xs text-slate-600">
+                                            {canUseReal
+                                                ? "Pronto para campanhas reais de boletim."
+                                                : "Campanhas reais bloqueadas até APPROVED."}
+                                        </p>
+                                        <div className="flex flex-wrap gap-2">
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                className="rounded-xl"
+                                                onClick={() =>
+                                                    setExpandedBulletin(
+                                                        expanded
+                                                            ? null
+                                                            : item.name
+                                                    )
+                                                }
+                                            >
+                                                {expanded
+                                                    ? "Ocultar prévia"
+                                                    : "Ver prévia e exemplos"}
+                                            </Button>
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                className="rounded-xl"
+                                                disabled={
+                                                    !item.checks
+                                                        .readyForManualSubmit ||
+                                                    submittingBulletin ===
+                                                        item.name ||
+                                                    canUseReal ||
+                                                    remoteStatus === "PENDING"
+                                                }
+                                                onClick={() =>
+                                                    void handleSubmitBulletinTemplate(
+                                                        item.name
+                                                    )
+                                                }
+                                                title={
+                                                    canUseReal
+                                                        ? "Já APPROVED"
+                                                        : remoteStatus ===
+                                                            "PENDING"
+                                                          ? "Aguardando Meta"
+                                                          : "Enviar via Datafy para a Meta"
+                                                }
+                                            >
+                                                {submittingBulletin ===
+                                                item.name ? (
+                                                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                                                ) : (
+                                                    <Send className="mr-1.5 h-3.5 w-3.5" />
+                                                )}
+                                                Enviar para aprovação Meta
+                                            </Button>
+                                        </div>
+                                        {expanded && (
+                                            <div className="space-y-2 pt-1">
+                                                <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-xl border bg-slate-50 p-3 text-[12px] leading-relaxed font-sans">
+                                                    {item.previewFilled}
+                                                </pre>
+                                                <details className="text-xs text-slate-500">
+                                                    <summary className="cursor-pointer">
+                                                        Corpo com variáveis{" "}
+                                                        {"{{n}}"}
+                                                    </summary>
+                                                    <pre className="mt-1.5 whitespace-pre-wrap rounded-lg border bg-white p-2.5 font-mono text-[11px]">
+                                                        {item.bodyText}
+                                                    </pre>
+                                                </details>
+                                                <p className="text-[11px] text-slate-500">
+                                                    Exemplos (
+                                                    {item.exampleRow.length}):{" "}
+                                                    {item.exampleRow
+                                                        .slice(0, 4)
+                                                        .join(" · ")}
+                                                    {item.exampleRow.length > 4
+                                                        ? " …"
+                                                        : ""}
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            <Card className="border-slate-200/80 shadow-sm">
+                <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
+                    <div>
                         <CardTitle className="text-lg">Templates Meta</CardTitle>
                         <CardDescription>
-                            Consulta somente leitura dos templates aprovados.
+                            Lista oficial APPROVED via Datafy (fonte Meta).
+                            PENDING/REJECTED não entram nesta lista e não são
+                            usados em envio real.
                         </CardDescription>
                     </div>
                     <Button
@@ -681,7 +978,7 @@ export default function DatafyIntegrationPage() {
                 <CardContent>
                     {templates.length === 0 ? (
                         <p className="text-sm text-muted-foreground">
-                            Nenhum template carregado ainda.
+                            Nenhum template APPROVED carregado ainda.
                         </p>
                     ) : (
                         <div className="overflow-hidden rounded-xl border">
@@ -706,7 +1003,9 @@ export default function DatafyIntegrationPage() {
                                             <td className="px-3 py-2 font-mono text-xs">
                                                 {t.language}
                                             </td>
-                                            <td className="px-3 py-2">{t.status}</td>
+                                            <td className="px-3 py-2">
+                                                {t.status}
+                                            </td>
                                             <td className="px-3 py-2">
                                                 {t.category || "—"}
                                             </td>
@@ -730,7 +1029,9 @@ export default function DatafyIntegrationPage() {
                     <ExternalLink className="h-3.5 w-3.5" />
                 </a>
                 <span className="text-slate-300">|</span>
-                <span>Fase 1 — sem disparos reais via Meta Cloud</span>
+                <span>
+                    Submissão de templates: Datafy API → análise Meta
+                </span>
             </div>
         </div>
     );
