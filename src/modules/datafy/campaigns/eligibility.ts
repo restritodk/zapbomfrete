@@ -90,6 +90,8 @@ export function skipReasonLabel(reason: string | null | undefined): string {
             return "Número não encontrado no CRM";
         case "duplicate":
             return "Número duplicado na campanha";
+        case "no_service_window":
+            return "Janela de atendimento fechada (precisa de template)";
         default:
             return reason || "Excluído";
     }

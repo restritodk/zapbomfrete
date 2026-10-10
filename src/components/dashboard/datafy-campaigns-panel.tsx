@@ -44,6 +44,10 @@ import {
     type BulletinAnalysis,
     type CampaignMessagePart,
 } from "@/modules/datafy/campaigns/bulletin";
+import {
+    assessRealSendReadiness,
+    hasApprovedTemplateContent,
+} from "@/modules/datafy/campaigns/send-readiness";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -100,6 +104,8 @@ type AudienceResult = {
     excludedCount: number;
     exclusionBreakdown?: Record<string, number>;
     simulationEligibleCount?: number;
+    openWindowCount?: number;
+    needsTemplateCount?: number;
     excludedPreview?: Array<{
         contactId: string;
         waId: string;
@@ -107,6 +113,8 @@ type AudienceResult = {
         reason: string;
     }>;
 };
+
+type LaunchAction = "real_now" | "real_schedule" | "simulation";
 
 type RecipientSource = "import" | "crm" | "groups";
 type GroupItem = {
@@ -433,7 +441,7 @@ export function DatafyCampaignsPanel() {
 
     const [execMode, setExecMode] = useState<"now" | "schedule">("now");
     const [scheduledAt, setScheduledAt] = useState("");
-    const [dryRun, setDryRun] = useState(true);
+    const [dryRun, setDryRun] = useState(false);
     const [delayMs, setDelayMs] = useState(1200);
     const [submittedTemplate, setSubmittedTemplate] = useState<{
         templateName: string;
@@ -979,7 +987,7 @@ export function DatafyCampaignsPanel() {
         setRequireConsent(true);
         setExecMode("now");
         setScheduledAt("");
-        setDryRun(true);
+        setDryRun(false);
         setSubmittedTemplate(null);
         setWizardOpen(true);
         void loadTemplates();
@@ -1099,7 +1107,45 @@ export function DatafyCampaignsPanel() {
         setProgressOpen(true);
     };
 
-    const createCampaign = async () => {
+    const sendReadiness = useMemo(() => {
+        const hasTemplate = hasApprovedTemplateContent({
+            contentKind,
+            templateName:
+                contentKind === "bulletin"
+                    ? bulletinParts[0]?.templateName
+                    : contentMode === "custom"
+                      ? submittedTemplate?.templateName
+                      : selectedTemplate?.name,
+            templateApprovalStatus:
+                contentKind === "bulletin"
+                    ? bulletinParts[0]?.templateApprovalStatus
+                    : contentMode === "custom"
+                      ? submittedTemplate?.approvalStatus
+                      : selectedTemplate?.status,
+            messageParts: contentKind === "bulletin" ? bulletinParts : null,
+        });
+        return assessRealSendReadiness({
+            purpose,
+            consentEligibleCount: audience?.eligibleCount ?? 0,
+            openWindowCount: audience?.openWindowCount ?? 0,
+            hasApprovedTemplate: hasTemplate,
+            hasFreeformBody: Boolean(messageBody.trim()),
+        });
+    }, [
+        audience?.eligibleCount,
+        audience?.openWindowCount,
+        bulletinParts,
+        contentKind,
+        contentMode,
+        messageBody,
+        purpose,
+        selectedTemplate?.name,
+        selectedTemplate?.status,
+        submittedTemplate?.approvalStatus,
+        submittedTemplate?.templateName,
+    ]);
+
+    const createCampaign = async (action: LaunchAction) => {
         if (!name.trim()) {
             toast.error("Informe o nome");
             return;
@@ -1108,19 +1154,37 @@ export function DatafyCampaignsPanel() {
             toast.error("Calcule a audiência antes de continuar");
             return;
         }
+
+        const isSimulation = action === "simulation";
+        const isSchedule = action === "real_schedule";
+        const effectiveDryRun = isSimulation || simulationOnlyAudience;
+
+        if (simulationOnlyAudience && !isSimulation) {
+            toast.error(
+                "Esta audiência só permite simulação (sem consentimento elegível para envio real)."
+            );
+            return;
+        }
+
         const simOk =
-            simulationOnlyAudience &&
-            dryRun &&
-            (audience.simulationEligibleCount || 0) > 0;
+            effectiveDryRun && (audience.simulationEligibleCount || 0) > 0;
         if (audience.eligibleCount <= 0 && !simOk) {
             toast.error(
                 "Nenhum destinatário está autorizado para esta campanha. Verifique os consentimentos no CRM."
             );
             return;
         }
-        if (!dryRun && audience.eligibleCount <= 0) {
+        if (!effectiveDryRun && audience.eligibleCount <= 0) {
             toast.error(
                 "Envio real bloqueado: nenhum destinatário com consentimento válido."
+            );
+            return;
+        }
+
+        if (!effectiveDryRun && !sendReadiness.realSendReady) {
+            toast.error(
+                sendReadiness.blockReason ||
+                    "Envio real indisponível — use simulação ou aprove um template."
             );
             return;
         }
@@ -1128,7 +1192,7 @@ export function DatafyCampaignsPanel() {
         let templateName = selectedTemplate?.name || null;
         let templateLanguage = selectedTemplate?.language || "pt_BR";
         let templateCategory = selectedTemplate?.category || null;
-        let templateApprovalStatus = selectedTemplate?.status || "APPROVED";
+        let templateApprovalStatus = selectedTemplate?.status || null;
         let contentSource = "existing_template";
         let vars = bodyVars;
 
@@ -1138,18 +1202,17 @@ export function DatafyCampaignsPanel() {
                 return;
             }
             const first = bulletinParts[0];
-            templateName = first.templateName || `boletim_${Date.now()}`;
+            templateName = first.templateName || null;
             templateLanguage = first.templateLanguage || "pt_BR";
             templateCategory =
                 first.templateCategory ||
                 (purpose === "utility" ? "UTILITY" : "MARKETING");
             templateApprovalStatus =
-                first.templateApprovalStatus || "PENDING";
+                first.templateApprovalStatus || null;
             contentSource = "bulletin_parts";
             vars = [];
             if (
-                !dryRun &&
-                !simulationOnlyAudience &&
+                !effectiveDryRun &&
                 bulletinParts.some((p) => !p.readyForRealSend)
             ) {
                 toast.error(
@@ -1158,42 +1221,61 @@ export function DatafyCampaignsPanel() {
                 return;
             }
         } else if (contentMode === "custom") {
-            const custom =
-                submittedTemplate || (await submitCustomTemplate());
-            if (!custom?.templateName) {
-                toast.error(
-                    "Submeta o template personalizado antes de continuar"
-                );
-                return;
+            if (
+                !effectiveDryRun &&
+                sendReadiness.modality === "service_window"
+            ) {
+                // Modalidade B — texto livre na janela; template opcional
+                templateName = submittedTemplate?.templateName || null;
+                templateApprovalStatus =
+                    submittedTemplate?.approvalStatus || null;
+                contentSource = "freeform_window";
+                vars = bodyVars;
+            } else {
+                const custom =
+                    submittedTemplate || (await submitCustomTemplate());
+                if (!custom?.templateName) {
+                    toast.error(
+                        "Submeta o template personalizado antes de continuar"
+                    );
+                    return;
+                }
+                templateName = custom.templateName;
+                templateLanguage = "pt_BR";
+                templateCategory =
+                    purpose === "utility" ? "UTILITY" : "MARKETING";
+                templateApprovalStatus = custom.approvalStatus || "PENDING";
+                contentSource = "custom_submitted";
+                vars = custom.bodyTokens.length
+                    ? custom.bodyTokens
+                    : bodyVars;
             }
-            templateName = custom.templateName;
-            templateLanguage = "pt_BR";
-            templateCategory =
-                purpose === "utility" ? "UTILITY" : "MARKETING";
-            templateApprovalStatus = custom.approvalStatus || "PENDING";
-            contentSource = "custom_submitted";
-            vars = custom.bodyTokens.length ? custom.bodyTokens : bodyVars;
         } else if (
-            !selectedTemplate ||
-            selectedTemplate.status !== "APPROVED"
+            selectedTemplate &&
+            selectedTemplate.status === "APPROVED"
         ) {
+            templateName = selectedTemplate.name;
+            templateLanguage = selectedTemplate.language || "pt_BR";
+            templateCategory = selectedTemplate.category || null;
+            templateApprovalStatus = "APPROVED";
+            contentSource = "existing_template";
+        } else if (
+            !effectiveDryRun &&
+            sendReadiness.modality === "service_window"
+        ) {
+            templateName = null;
+            templateApprovalStatus = null;
+            contentSource = "freeform_window";
+        } else if (!effectiveDryRun) {
             toast.error("Selecione um template APPROVED");
             return;
-        }
-
-        if (
-            execMode === "now" &&
-            !dryRun &&
-            templateApprovalStatus !== "APPROVED"
-        ) {
-            toast.error(
-                "Envio real bloqueado: template ainda não aprovado. Use simulação ou agende após aprovação."
-            );
+        } else if (!selectedTemplate && !messageBody.trim()) {
+            toast.error("Informe um template ou texto para simular");
             return;
         }
 
-        if (execMode === "schedule" && !scheduledAt) {
-            toast.error("Informe data e horário");
+        if (isSchedule && !scheduledAt) {
+            toast.error("Informe data e horário na Etapa 4");
             return;
         }
 
@@ -1206,28 +1288,29 @@ export function DatafyCampaignsPanel() {
         }
         const consentForced =
             purpose === "marketing" ? true : requireConsent;
-        const effectiveDryRun = simulationOnlyAudience ? true : dryRun;
         const partN =
             contentKind === "bulletin"
                 ? Math.max(1, bulletinParts.length)
                 : 1;
-        const msgTotal = estimateMessageTotal(
-            audience.eligibleCount > 0
+        const recipientN = effectiveDryRun
+            ? audience.eligibleCount > 0
                 ? audience.eligibleCount
-                : audience.simulationEligibleCount || 0,
-            partN
-        );
+                : audience.simulationEligibleCount || 0
+            : sendReadiness.technicallySendableCount ||
+              audience.eligibleCount;
+        const msgTotal = estimateMessageTotal(recipientN, partN);
 
-        if (execMode === "now") {
+        if (!isSchedule) {
             const ok = window.confirm(
                 effectiveDryRun
-                    ? `Simulação: ${audience.eligibleCount || audience.simulationEligibleCount || 0} destinatário(s) × ${partN} parte(s) ≈ ${msgTotal} mensagens (sem envio real). Continuar?`
-                    : `Envio real: ${audience.eligibleCount} destinatário(s) × ${partN} parte(s) = ${msgTotal} mensagens previstas.\n\nAceite pela API ≠ entrega. Continuar?`
+                    ? `Simulação: ${recipientN} destinatário(s) × ${partN} parte(s) ≈ ${msgTotal} mensagens (sem envio real). Continuar?`
+                    : `Envio real: ${recipientN} destinatário(s) tecnicamente autorizados × ${partN} parte(s) = ${msgTotal} mensagens previstas.\n\nConsentimento elegível: ${audience.eligibleCount}. Aceite pela API ≠ entrega. Continuar?`
             );
             if (!ok) return;
         }
 
         setSaving(true);
+        setDryRun(effectiveDryRun);
         try {
             const res = await fetch("/api/channels/datafy/campaigns", {
                 method: "POST",
@@ -1250,7 +1333,7 @@ export function DatafyCampaignsPanel() {
                             ? {
                                   title: bulletinAnalysis.title,
                                   loadCount: bulletinAnalysis.loadCount,
-                                  partCount: bulletinAnalysis.partCount,
+                                  partCount: bulletinParts.length,
                                   warnings: bulletinAnalysis.warnings,
                               }
                             : null,
@@ -1258,8 +1341,7 @@ export function DatafyCampaignsPanel() {
                     headerImageHandle,
                     variableMapping: { body: vars },
                     segmentFilter: finalFilter,
-                    scheduledAt:
-                        execMode === "schedule" ? scheduledAt : null,
+                    scheduledAt: isSchedule ? scheduledAt : null,
                     dryRun: effectiveDryRun,
                     requireConsent: consentForced,
                     delayMs,
@@ -1273,21 +1355,23 @@ export function DatafyCampaignsPanel() {
             const camp = json.data.campaign as Campaign;
             setWizardOpen(false);
 
-            if (execMode === "schedule") {
+            if (isSchedule) {
                 toast.success(
-                    `Campanha agendada para ${new Date(scheduledAt).toLocaleString("pt-BR")}`
+                    `Disparo real agendado para ${new Date(scheduledAt).toLocaleString("pt-BR")}`
                 );
                 void load();
                 return;
             }
 
-            // Disparar agora — confirmação implícita na etapa 5 + start
             const startRes = await fetch(
                 `/api/channels/datafy/campaigns/${camp.id}/start`,
                 {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ confirm: true, dryRun }),
+                    body: JSON.stringify({
+                        confirm: true,
+                        dryRun: effectiveDryRun,
+                    }),
                 }
             );
             const startJson = await startRes.json().catch(() => ({}));
@@ -1297,7 +1381,9 @@ export function DatafyCampaignsPanel() {
                 return;
             }
             toast.success(
-                dryRun ? "Simulação iniciada" : "Campanha iniciada"
+                effectiveDryRun
+                    ? "Simulação iniciada"
+                    : "Disparo real iniciado"
             );
             openProgress(camp.id, camp.name);
             void load();
@@ -1326,12 +1412,6 @@ export function DatafyCampaignsPanel() {
         }
         void load();
     };
-
-    const finalButtonLabel = dryRun
-        ? "Executar simulação"
-        : execMode === "schedule"
-          ? "Salvar agendamento"
-          : "Disparar agora";
 
     // Re-analyze bulletin and map to reusable APPROVED templates (6G)
     useEffect(() => {
@@ -3163,6 +3243,11 @@ export function DatafyCampaignsPanel() {
 
                     {step === 4 && (
                         <div className="space-y-4 max-w-3xl">
+                            <p className="text-sm text-slate-600">
+                                Escolha quando o disparo real deve ocorrer. A
+                                simulação é uma ação separada na revisão final —
+                                não substitui o envio oficial.
+                            </p>
                             <div className="flex flex-wrap gap-2">
                                 <Button
                                     type="button"
@@ -3174,7 +3259,7 @@ export function DatafyCampaignsPanel() {
                                     className="rounded-xl"
                                     onClick={() => setExecMode("now")}
                                 >
-                                    Disparar agora
+                                    Execução imediata
                                 </Button>
                                 <Button
                                     type="button"
@@ -3186,7 +3271,7 @@ export function DatafyCampaignsPanel() {
                                     className="rounded-xl"
                                     onClick={() => setExecMode("schedule")}
                                 >
-                                    Agendar
+                                    Programar horário
                                 </Button>
                             </div>
                             {execMode === "schedule" && (
@@ -3217,27 +3302,13 @@ export function DatafyCampaignsPanel() {
                                     }
                                 />
                             </div>
-                            <label className="flex items-center gap-2 text-sm rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-                                <input
-                                    type="checkbox"
-                                    checked={
-                                        simulationOnlyAudience
-                                            ? true
-                                            : dryRun
-                                    }
-                                    disabled={simulationOnlyAudience}
-                                    onChange={(e) =>
-                                        setDryRun(e.target.checked)
-                                    }
-                                />
-                                <span>
+                            {simulationOnlyAudience && (
+                                <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-sm text-amber-950">
                                     <FlaskConical className="inline h-3.5 w-3.5 mr-1" />
-                                    Modo simulação — não envia mensagens reais
-                                    {simulationOnlyAudience
-                                        ? " (obrigatório nesta audiência)"
-                                        : ""}
-                                </span>
-                            </label>
+                                    Audiência só com simulação — sem
+                                    consentimento elegível para disparo real.
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -3256,64 +3327,96 @@ export function DatafyCampaignsPanel() {
                                     </p>
                                     <p>
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
-                                            Destinatários
+                                            Consentimento elegível
                                         </span>
-                                        {audience?.eligibleCount ?? 0} aptos ·{" "}
-                                        {audience?.excludedCount ?? 0} excluídos
+                                        {audience?.eligibleCount ?? 0} no CRM
+                                        (não implica envio técnico)
+                                    </p>
+                                    <p>
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Janela 24h aberta
+                                        </span>
+                                        {audience?.openWindowCount ?? 0}{" "}
+                                        destinatário(s)
+                                    </p>
+                                    <p>
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Precisam de template
+                                        </span>
+                                        {audience?.needsTemplateCount ??
+                                            audience?.eligibleCount ??
+                                            0}{" "}
+                                        sem janela aberta
                                     </p>
                                     <p className="sm:col-span-2">
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
-                                            Conteúdo
+                                            Template aprovado
                                         </span>
                                         {contentKind === "bulletin"
-                                            ? `Boletim · ${bulletinAnalysis?.loadCount ?? 0} carga(s) · ${bulletinParts.length} parte(s) · ${estimateMessageTotal(audience?.eligibleCount ?? 0, bulletinParts.length || 1)} msgs previstas`
+                                            ? bulletinParts
+                                                  .map(
+                                                      (p) =>
+                                                          `P${p.index + 1}: ${p.templateName || "—"} (${p.templateApprovalStatus || "—"})`
+                                                  )
+                                                  .join(" · ") || "—"
                                             : contentMode === "existing"
-                                              ? `Template ${selectedTemplate?.name || "—"} (${selectedTemplate?.language || ""})`
-                                              : `Personalizado → ${submittedTemplate?.templateName || "(submeter na etapa 3)"}`}
+                                              ? `${selectedTemplate?.name || "—"} · ${selectedTemplate?.status || "—"}`
+                                              : `${submittedTemplate?.templateName || "texto livre / pendente"} · ${submittedTemplate?.approvalStatus || "—"}`}
                                     </p>
-                                    {contentKind === "bulletin" && (
-                                        <p className="sm:col-span-2">
-                                            <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
-                                                Templates / aprovação
-                                            </span>
-                                            {bulletinParts
-                                                .map(
-                                                    (p) =>
-                                                        `P${p.index + 1}: ${p.templateApprovalStatus || "—"}`
-                                                )
-                                                .join(" · ")}
-                                        </p>
-                                    )}
-                                    <p className="sm:col-span-2">
+                                    <p>
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
-                                            Execução
+                                            Mensagens previstas
+                                        </span>
+                                        {estimateMessageTotal(
+                                            sendReadiness.realSendReady
+                                                ? sendReadiness.technicallySendableCount
+                                                : audience?.eligibleCount ?? 0,
+                                            contentKind === "bulletin"
+                                                ? Math.max(
+                                                      1,
+                                                      bulletinParts.length
+                                                  )
+                                                : 1
+                                        )}
+                                        {contentKind === "bulletin"
+                                            ? ` (${bulletinAnalysis?.loadCount ?? 0} cargas · ${bulletinParts.length} partes)`
+                                            : ""}
+                                    </p>
+                                    <p>
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Tipo de execução
                                         </span>
                                         {execMode === "schedule"
-                                            ? `Agendada (${scheduledAt || "—"}) — sem animação de disparo`
+                                            ? `Programada (${scheduledAt || "—"}) — sem animação`
                                             : "Imediata — com animação de disparo"}
                                     </p>
                                 </div>
                                 <div
                                     className={cn(
                                         "rounded-xl px-3.5 py-2.5 text-sm font-medium",
-                                        dryRun
-                                            ? "bg-amber-50 text-amber-900 border border-amber-200/80"
-                                            : "bg-red-50 text-red-800 border border-red-200/80"
+                                        sendReadiness.realSendReady &&
+                                            !simulationOnlyAudience
+                                            ? "bg-emerald-50 text-emerald-900 border border-emerald-200/80"
+                                            : "bg-amber-50 text-amber-950 border border-amber-200/80"
                                     )}
                                 >
-                                    {dryRun
-                                        ? "SIMULAÇÃO — nenhum envio real"
-                                        : "ENVIO REAL via API Datafy"}
+                                    Situação do envio real:{" "}
+                                    {simulationOnlyAudience
+                                        ? "Indisponível nesta audiência (somente simulação)"
+                                        : sendReadiness.statusLabel}
                                 </div>
-                                {!dryRun &&
-                                    contentMode === "custom" &&
-                                    submittedTemplate?.approvalStatus !==
-                                        "APPROVED" && (
-                                        <p className="text-red-700 text-sm">
-                                            Aviso: template ainda não APPROVED —
-                                            o início real será bloqueado.
+                                {sendReadiness.blockReason &&
+                                    !simulationOnlyAudience && (
+                                        <p className="text-sm text-amber-900">
+                                            {sendReadiness.blockReason}
                                         </p>
                                     )}
+                                <p className="text-xs text-slate-500">
+                                    “Apto” por consentimento ≠ autorizado a
+                                    receber agora. Envio real exige Modalidade A
+                                    (template APPROVED) ou, fora de marketing,
+                                    Modalidade B (janela 24h).
+                                </p>
                             </div>
                         </div>
                     )}
@@ -3436,22 +3539,77 @@ export function DatafyCampaignsPanel() {
                                     Próximo
                                 </Button>
                             ) : (
-                                <Button
-                                    disabled={saving}
-                                    onClick={() => void createCampaign()}
-                                    className={cn(
-                                        "rounded-xl min-w-[140px]",
-                                        !dryRun &&
-                                            execMode === "now" &&
-                                            "bg-emerald-600 hover:bg-emerald-700"
-                                    )}
-                                >
-                                    {saving ? (
-                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                <div className="flex flex-wrap justify-end gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        disabled={saving}
+                                        className="rounded-xl"
+                                        onClick={() =>
+                                            void createCampaign("simulation")
+                                        }
+                                        title="Teste opcional sem envio real"
+                                    >
+                                        {saving ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <>
+                                                <FlaskConical className="h-3.5 w-3.5 mr-1.5" />
+                                                Executar simulação
+                                            </>
+                                        )}
+                                    </Button>
+                                    {execMode === "schedule" ? (
+                                        <Button
+                                            type="button"
+                                            disabled={
+                                                saving ||
+                                                simulationOnlyAudience ||
+                                                !sendReadiness.realSendReady ||
+                                                !scheduledAt
+                                            }
+                                            className="rounded-xl min-w-[150px] bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50"
+                                            onClick={() =>
+                                                void createCampaign(
+                                                    "real_schedule"
+                                                )
+                                            }
+                                            title={
+                                                sendReadiness.blockReason ||
+                                                "Agendar disparo real na fila Datafy"
+                                            }
+                                        >
+                                            {saving ? (
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                                "Agendar disparo"
+                                            )}
+                                        </Button>
                                     ) : (
-                                        finalButtonLabel
+                                        <Button
+                                            type="button"
+                                            disabled={
+                                                saving ||
+                                                simulationOnlyAudience ||
+                                                !sendReadiness.realSendReady
+                                            }
+                                            className="rounded-xl min-w-[150px] bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50"
+                                            onClick={() =>
+                                                void createCampaign("real_now")
+                                            }
+                                            title={
+                                                sendReadiness.blockReason ||
+                                                "Iniciar disparo real via API Datafy"
+                                            }
+                                        >
+                                            {saving ? (
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                                "Iniciar disparo"
+                                            )}
+                                        </Button>
                                     )}
-                                </Button>
+                                </div>
                             )}
                         </div>
                     </DialogFooter>

@@ -21,6 +21,11 @@ import {
     serializeEvent,
     serializeRecipient,
 } from "./serialize";
+import {
+    assessRealSendReadiness,
+    countOpenServiceWindows,
+    hasApprovedTemplateContent,
+} from "./send-readiness";
 
 export class CampaignError extends Error {
     statusCode: number;
@@ -507,12 +512,17 @@ export async function previewCampaignAudience(
 ) {
     const contacts = await resolveSegmentContacts(filter);
     const preview = previewRecipients(contacts, opts);
+    const windows = await countOpenServiceWindows(
+        preview.eligibleAll.map((c) => c.waId)
+    );
     return {
         selected: preview.selected,
         eligibleCount: preview.eligibleCount,
         excludedCount: preview.excludedCount,
         exclusionBreakdown: preview.exclusionBreakdown,
         simulationEligibleCount: preview.simulationEligibleCount,
+        openWindowCount: windows.openWindowCount,
+        needsTemplateCount: windows.needsTemplateCount,
         eligiblePreview: preview.eligible.map((c) => ({
             id: c.id,
             waId: c.waId,
@@ -639,42 +649,59 @@ export async function startCampaign(
           }>)
         : [];
 
-    if (c.contentKind === "bulletin" && parts.length) {
-        if (!isDry) {
-            const blocked = parts.filter(
-                (p) =>
-                    !p.readyForRealSend ||
-                    !p.templateName ||
-                    String(p.templateApprovalStatus || "").toUpperCase() !==
-                        "APPROVED"
-            );
-            if (blocked.length) {
-                throw new CampaignError(
-                    `Envio real bloqueado: ${blocked.length} parte(s) sem template APPROVED. ${blocked[0]?.blockReason || ""}`.trim(),
-                    400
-                );
-            }
-        }
-    } else {
-        if (!c.templateName) {
+    if (!isDry) {
+        const hasTemplate = hasApprovedTemplateContent({
+            contentKind: c.contentKind,
+            templateName: c.templateName,
+            templateApprovalStatus: c.templateApprovalStatus,
+            messageParts: parts,
+        });
+        const recipients = await prisma.datafyCampaignRecipient.findMany({
+            where: {
+                campaignId: id,
+                status: { in: ["pending", "queued"] },
+            },
+            select: { waId: true },
+            take: 20_000,
+        });
+        const windows = await countOpenServiceWindows(
+            recipients.map((r) => r.waId)
+        );
+        const assessment = assessRealSendReadiness({
+            purpose: c.purpose,
+            consentEligibleCount: Math.max(
+                c.totalEligible,
+                recipients.length
+            ),
+            openWindowCount: windows.openWindowCount,
+            hasApprovedTemplate: hasTemplate,
+            hasFreeformBody: Boolean(c.messageBody?.trim()),
+        });
+        if (!assessment.realSendReady) {
             throw new CampaignError(
-                "Selecione ou submeta um template aprovado",
+                assessment.blockReason ||
+                    "Envio real bloqueado: sem template APPROVED nem janela de atendimento válida.",
                 400
             );
         }
-        if (
-            !isDry &&
-            c.templateApprovalStatus &&
-            c.templateApprovalStatus !== "APPROVED"
-        ) {
-            throw new CampaignError(
-                `Template ainda não aprovado pela Meta (status: ${c.templateApprovalStatus}). Aguarde a aprovação antes do envio real.`,
-                400
-            );
-        }
+    } else if (
+        c.contentKind !== "bulletin" &&
+        !c.templateName &&
+        !c.messageBody?.trim()
+    ) {
+        throw new CampaignError(
+            "Informe um template ou texto da mensagem para simular",
+            400
+        );
     }
-    if (c.totalEligible <= 0) {
+    if (c.totalEligible <= 0 && !isDry) {
         throw new CampaignError("Nenhum destinatário elegível", 400);
+    }
+    if (c.totalEligible <= 0 && isDry) {
+        throw new CampaignError(
+            "Nenhum destinatário para simulação",
+            400
+        );
     }
     if (opts.dryRun !== undefined) {
         await prisma.datafyCampaign.update({
@@ -723,11 +750,51 @@ export async function scheduleCampaign(
     if (!["draft", "scheduled"].includes(c.status)) {
         throw new CampaignError("Campanha não pode ser agendada neste estado", 409);
     }
-    if (!c.templateName || c.totalEligible <= 0) {
-        throw new CampaignError(
-            "Template e destinatários elegíveis são obrigatórios",
-            400
+    if (c.totalEligible <= 0) {
+        throw new CampaignError("Nenhum destinatário elegível", 400);
+    }
+    if (!c.dryRun) {
+        const parts = Array.isArray(c.messageParts)
+            ? (c.messageParts as Array<{
+                  templateName?: string | null;
+                  templateApprovalStatus?: string | null;
+                  readyForRealSend?: boolean;
+              }>)
+            : [];
+        const hasTemplate = hasApprovedTemplateContent({
+            contentKind: c.contentKind,
+            templateName: c.templateName,
+            templateApprovalStatus: c.templateApprovalStatus,
+            messageParts: parts,
+        });
+        const recipients = await prisma.datafyCampaignRecipient.findMany({
+            where: {
+                campaignId: id,
+                status: { in: ["pending", "queued"] },
+            },
+            select: { waId: true },
+            take: 20_000,
+        });
+        const windows = await countOpenServiceWindows(
+            recipients.map((r) => r.waId)
         );
+        const assessment = assessRealSendReadiness({
+            purpose: c.purpose,
+            consentEligibleCount: Math.max(
+                c.totalEligible,
+                recipients.length
+            ),
+            openWindowCount: windows.openWindowCount,
+            hasApprovedTemplate: hasTemplate,
+            hasFreeformBody: Boolean(c.messageBody?.trim()),
+        });
+        if (!assessment.realSendReady) {
+            throw new CampaignError(
+                assessment.blockReason ||
+                    "Agendamento real bloqueado: sem autorização técnica.",
+                400
+            );
+        }
     }
     await prisma.datafyCampaign.update({
         where: { id },

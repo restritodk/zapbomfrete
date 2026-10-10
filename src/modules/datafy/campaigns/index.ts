@@ -5,6 +5,7 @@ export * from "./service";
 export * from "./recipients";
 export * from "./variables";
 export * from "./bulletin";
+export * from "./send-readiness";
 export { resolveCampaignParts, partClientMessageId } from "./parts";
 export { startDatafyCampaignWorker, stopDatafyCampaignWorker } from "./worker";
 export { tickDatafyCampaigns } from "./queue";

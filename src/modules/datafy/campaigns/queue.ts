@@ -6,7 +6,10 @@ import { loadDatafyConfig } from "@/modules/datafy/config";
 import { datafyProvider } from "@/modules/datafy/provider";
 import { DatafyApiError } from "@/modules/datafy/client";
 import { redactSecrets } from "@/modules/datafy/crypto-secrets";
-import { normalizeWaId } from "@/modules/datafy/chat/window";
+import {
+    isWithinServiceWindow,
+    normalizeWaId,
+} from "@/modules/datafy/chat/window";
 import { emitDatafyEvent } from "@/modules/datafy/chat/realtime";
 import {
     CAMPAIGN_LOCK_TTL_MS,
@@ -17,6 +20,10 @@ import { appendEvent, setStatus } from "./service";
 import { buildTemplateComponents } from "./variables";
 import { evaluateEligibility } from "./eligibility";
 import { partClientMessageId, resolveCampaignParts } from "./parts";
+import {
+    hasApprovedTemplateContent,
+    purposeAllowsServiceWindowFreeform,
+} from "./send-readiness";
 import type { CampaignMessagePart } from "./bulletin/types";
 
 const WORKER_ID = `worker_${process.pid}_${randomUUID().slice(0, 8)}`;
@@ -203,13 +210,24 @@ async function sendOneRecipient(
         return;
     }
 
-    if (!parts.some((p) => p.templateName)) {
+    const hasTemplate = hasApprovedTemplateContent({
+        contentKind: fullCampaign.contentKind,
+        templateName: fullCampaign.templateName,
+        templateApprovalStatus: fullCampaign.templateApprovalStatus,
+        messageParts: parts,
+    });
+    const allowWindow =
+        purposeAllowsServiceWindowFreeform(fullCampaign.purpose) &&
+        Boolean((fullCampaign.messageBody || "").trim());
+
+    if (!hasTemplate && !allowWindow) {
         await prisma.datafyCampaignRecipient.update({
             where: { id: recipient.id },
             data: {
                 status: "failed",
                 failedAt: new Date(),
-                lastError: "Template não configurado",
+                lastError:
+                    "Sem template APPROVED e finalidade não permite resposta livre na janela 24h",
             },
         });
         return;
@@ -226,6 +244,21 @@ async function sendOneRecipient(
         recipient.fullName
     );
 
+    if (!hasTemplate && allowWindow) {
+        if (!isWithinServiceWindow(conversation.lastCustomerMessageAt)) {
+            await prisma.datafyCampaignRecipient.update({
+                where: { id: recipient.id },
+                data: {
+                    status: "skipped",
+                    skipReason: "no_service_window",
+                    lastError:
+                        "Janela de atendimento fechada — destinatário precisa de template APPROVED",
+                },
+            });
+            return;
+        }
+    }
+
     try {
         await sendPartsSequentially({
             campaign: fullCampaign,
@@ -234,6 +267,8 @@ async function sendOneRecipient(
             conversationId: conversation.id,
             phoneNumberId,
             delayMs: campaign.delayMs,
+            sendMode: hasTemplate ? "template" : "freeform",
+            purpose: fullCampaign.purpose,
         });
     } catch (e) {
         const apiErr = e instanceof DatafyApiError ? e : null;
@@ -288,6 +323,7 @@ async function sendPartsSequentially(opts: {
         id: string;
         headerImageUrl: string | null;
         delayMs?: number;
+        messageBody?: string | null;
     };
     parts: CampaignMessagePart[];
     recipient: {
@@ -300,6 +336,8 @@ async function sendPartsSequentially(opts: {
     conversationId: string;
     phoneNumberId: string;
     delayMs: number;
+    sendMode: "template" | "freeform";
+    purpose: string;
 }) {
     const { campaign, parts, recipient, conversationId, phoneNumberId } = opts;
     const prev = (recipient.partStatuses || {}) as {
@@ -313,9 +351,21 @@ async function sendPartsSequentially(opts: {
 
     for (let i = nextIndex; i < parts.length; i++) {
         const part = parts[i];
-        if (!part.templateName) {
+        const useTemplate =
+            opts.sendMode === "template" && Boolean(part.templateName);
+
+        if (!useTemplate && opts.sendMode === "template") {
             throw new DatafyApiError(
                 `Parte ${i + 1} sem templateName`,
+                400
+            );
+        }
+        if (
+            !useTemplate &&
+            !purposeAllowsServiceWindowFreeform(opts.purpose)
+        ) {
+            throw new DatafyApiError(
+                "Resposta livre na janela 24h não permitida para esta finalidade",
                 400
             );
         }
@@ -341,61 +391,104 @@ async function sendPartsSequentially(opts: {
             continue;
         }
 
-        // Bulletin parts are fixed template bodies (no CRM body params by default)
-        const mapping =
-            part.variableMapping &&
-            Array.isArray(part.variableMapping.body) &&
-            part.variableMapping.body.length
-                ? part.variableMapping
-                : { body: [] as string[] };
-
-        const headerUrl =
-            i === 0
-                ? part.headerImageUrl || campaign.headerImageUrl
-                : part.headerImageUrl || null;
-
-        const components = buildTemplateComponents(
-            mapping,
-            {
-                fullName: recipient.fullName,
-                company: recipient.company,
-                waId: recipient.waId,
-            },
-            { headerImageUrl: headerUrl }
+        const freeformText = (
+            part.bodyText ||
+            campaign.messageBody ||
+            ""
+        ).trim();
+        const preview = (useTemplate ? part.bodyText : freeformText).slice(
+            0,
+            280
         );
 
-        const preview = part.bodyText.slice(0, 280);
-
         let messageId = existingMsg?.id;
-        if (!messageId) {
-            const pending = await prisma.datafyMessage.create({
-                data: {
-                    conversationId,
-                    clientMessageId: cmid,
-                    direction: "outbound",
-                    type: "template",
-                    body: preview,
-                    status: "pending",
-                    metadata: {
-                        campaignId: campaign.id,
-                        campaignRecipientId: recipient.id,
-                        templateName: part.templateName,
-                        languageCode: part.templateLanguage || "pt_BR",
-                        partIndex: part.index,
-                        components: components as Prisma.InputJsonValue,
-                    } as Prisma.InputJsonValue,
-                },
-            });
-            messageId = pending.id;
-        }
+        let wamid: string | null = null;
 
-        const res = await client.sendTemplate(phoneNumberId, {
-            to: normalizeWaId(recipient.waId),
-            name: part.templateName,
-            languageCode: part.templateLanguage || "pt_BR",
-            components,
-        });
-        const wamid = res.messages?.[0]?.id || null;
+        if (useTemplate && part.templateName) {
+            const mapping =
+                part.variableMapping &&
+                Array.isArray(part.variableMapping.body) &&
+                part.variableMapping.body.length
+                    ? part.variableMapping
+                    : { body: [] as string[] };
+
+            const headerUrl =
+                i === 0
+                    ? part.headerImageUrl || campaign.headerImageUrl
+                    : part.headerImageUrl || null;
+
+            const components = buildTemplateComponents(
+                mapping,
+                {
+                    fullName: recipient.fullName,
+                    company: recipient.company,
+                    waId: recipient.waId,
+                },
+                { headerImageUrl: headerUrl }
+            );
+
+            if (!messageId) {
+                const pending = await prisma.datafyMessage.create({
+                    data: {
+                        conversationId,
+                        clientMessageId: cmid,
+                        direction: "outbound",
+                        type: "template",
+                        body: preview,
+                        status: "pending",
+                        metadata: {
+                            campaignId: campaign.id,
+                            campaignRecipientId: recipient.id,
+                            templateName: part.templateName,
+                            languageCode: part.templateLanguage || "pt_BR",
+                            partIndex: part.index,
+                            components: components as Prisma.InputJsonValue,
+                        } as Prisma.InputJsonValue,
+                    },
+                });
+                messageId = pending.id;
+            }
+
+            const res = await client.sendTemplate(phoneNumberId, {
+                to: normalizeWaId(recipient.waId),
+                name: part.templateName,
+                languageCode: part.templateLanguage || "pt_BR",
+                components,
+            });
+            wamid = res.messages?.[0]?.id || null;
+        } else {
+            if (!freeformText) {
+                throw new DatafyApiError(
+                    `Parte ${i + 1} sem texto para resposta livre`,
+                    400
+                );
+            }
+            if (!messageId) {
+                const pending = await prisma.datafyMessage.create({
+                    data: {
+                        conversationId,
+                        clientMessageId: cmid,
+                        direction: "outbound",
+                        type: "text",
+                        body: preview,
+                        status: "pending",
+                        metadata: {
+                            campaignId: campaign.id,
+                            campaignRecipientId: recipient.id,
+                            partIndex: part.index,
+                            sendMode: "service_window_freeform",
+                        } as Prisma.InputJsonValue,
+                    },
+                });
+                messageId = pending.id;
+            }
+
+            const res = await client.sendText(phoneNumberId, {
+                to: normalizeWaId(recipient.waId),
+                text: freeformText.slice(0, 4096),
+            });
+            wamid = res.messages?.[0]?.id || null;
+        }
 
         await prisma.datafyMessage.update({
             where: { id: messageId },
