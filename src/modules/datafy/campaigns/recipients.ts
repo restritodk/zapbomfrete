@@ -1,8 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import { normalizeBrazilianPhone } from "@/lib/phone-br";
 import { CRM_ORG_DEFAULT } from "@/modules/crm/constants";
-import { evaluateEligibility, type EligibilityContact } from "./eligibility";
-import type { CampaignPurpose } from "./constants";
+import {
+    evaluateEligibility,
+    type EligibilityContact,
+    type EligibilityOpts,
+} from "./eligibility";
 
 export type SegmentFilter = {
     /** When true (default CRM UX), load all active org contacts; geo filters remain optional. */
@@ -132,9 +135,9 @@ export function isSyntheticContactId(id: string | null | undefined): boolean {
     return !id || id.startsWith("synth:");
 }
 
-export function previewRecipients(
+function runPreviewPass(
     contacts: EligibilityContact[],
-    opts: { purpose: CampaignPurpose | string; requireConsent: boolean }
+    opts: EligibilityOpts
 ) {
     const seen = new Set<string>();
     const eligible: Array<EligibilityContact & { waId: string }> = [];
@@ -169,13 +172,38 @@ export function previewRecipients(
         eligible.push({ ...c, waId: result.waId });
     }
 
+    const exclusionBreakdown: Record<string, number> = {};
+    for (const e of excluded) {
+        exclusionBreakdown[e.reason] =
+            (exclusionBreakdown[e.reason] || 0) + 1;
+    }
+
+    return { eligible, excluded, exclusionBreakdown };
+}
+
+export function previewRecipients(
+    contacts: EligibilityContact[],
+    opts: EligibilityOpts
+) {
+    const pass = runPreviewPass(contacts, opts);
+
+    let simulationEligibleCount = pass.eligible.length;
+    if (opts.requireConsent && !opts.simulationRelaxConsent) {
+        simulationEligibleCount = runPreviewPass(contacts, {
+            ...opts,
+            simulationRelaxConsent: true,
+        }).eligible.length;
+    }
+
     return {
         selected: contacts.length,
-        eligibleCount: eligible.length,
-        excludedCount: excluded.length,
-        eligible: eligible.slice(0, 50),
-        excluded: excluded.slice(0, 100),
-        eligibleAll: eligible,
-        excludedAll: excluded,
+        eligibleCount: pass.eligible.length,
+        excludedCount: pass.excluded.length,
+        exclusionBreakdown: pass.exclusionBreakdown,
+        simulationEligibleCount,
+        eligible: pass.eligible.slice(0, 50),
+        excluded: pass.excluded.slice(0, 100),
+        eligibleAll: pass.eligible,
+        excludedAll: pass.excluded,
     };
 }

@@ -66,11 +66,29 @@ import {
 } from "@/components/dashboard/broadcast-progress-modal";
 import { CRM_CATEGORIES } from "@/modules/crm/constants";
 import {
+    EXCLUSION_REASON_ORDER,
+    skipReasonLabel,
+} from "@/modules/datafy/campaigns/eligibility";
+import {
     extractPhonesFromParticipants,
     formatPhoneDisplay,
     parsePhoneList,
 } from "@/lib/phone-br";
 import { cn } from "@/lib/utils";
+
+type AudienceResult = {
+    selected: number;
+    eligibleCount: number;
+    excludedCount: number;
+    exclusionBreakdown?: Record<string, number>;
+    simulationEligibleCount?: number;
+    excludedPreview?: Array<{
+        contactId: string;
+        waId: string;
+        fullName: string | null;
+        reason: string;
+    }>;
+};
 
 type RecipientSource = "import" | "crm" | "groups";
 type GroupItem = {
@@ -309,11 +327,13 @@ export function DatafyCampaignsPanel() {
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [tags, setTags] = useState<Tag[]>([]);
     const [requireConsent, setRequireConsent] = useState(true);
-    const [audience, setAudience] = useState<{
-        selected: number;
-        eligibleCount: number;
-        excludedCount: number;
-    } | null>(null);
+    const [audience, setAudience] = useState<AudienceResult | null>(null);
+    const [audienceCalculating, setAudienceCalculating] = useState(false);
+    const [audienceError, setAudienceError] = useState<string | null>(null);
+    const [showExclusionDetails, setShowExclusionDetails] = useState(false);
+    /** Continuar com 0 aptos reais — só simulação (dryRun forçado) */
+    const [simulationOnlyAudience, setSimulationOnlyAudience] =
+        useState(false);
 
     // Import (TXT/CSV) — same parsePhoneList as Disparo Baileys
     const [importText, setImportText] = useState("");
@@ -564,7 +584,7 @@ export function DatafyCampaignsPanel() {
             invalid: invalid.length,
             duplicates,
         });
-        setAudience(null);
+        invalidateAudience();
     };
 
     const handleImportFile = async (file: File) => {
@@ -686,7 +706,7 @@ export function DatafyCampaignsPanel() {
                 }
                 return next;
             });
-            setAudience(null);
+            invalidateAudience();
             toast.success(
                 `${phones.length} número(s) do grupo. Participação em grupo não é consentimento de marketing.`
             );
@@ -709,7 +729,14 @@ export function DatafyCampaignsPanel() {
         } else {
             setGroupPhones((prev) => prev.filter((p) => p !== phone));
         }
+        invalidateAudience();
+    };
+
+    const invalidateAudience = () => {
         setAudience(null);
+        setAudienceError(null);
+        setSimulationOnlyAudience(false);
+        setShowExclusionDetails(false);
     };
 
     const previewAudience = async () => {
@@ -724,31 +751,109 @@ export function DatafyCampaignsPanel() {
             (filter.source === "import" || filter.source === "groups") &&
             !(filter.phones?.length)
         ) {
+            setAudienceError("Adicione números válidos antes de calcular");
             toast.error("Adicione números válidos antes de calcular");
             return;
         }
-        const consent =
-            purpose === "marketing" ? true : requireConsent;
+        if (
+            recipientSource === "crm" &&
+            crmPickMode === "manual" &&
+            !selectedIds.size
+        ) {
+            setAudienceError("Selecione ao menos um contato do CRM");
+            toast.error("Selecione ao menos um contato do CRM");
+            return;
+        }
+        const consent = purpose === "marketing" ? true : requireConsent;
         if (purpose === "marketing" && !requireConsent) {
             setRequireConsent(true);
         }
-        const res = await fetch("/api/channels/datafy/campaigns/preview", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                purpose,
-                requireConsent: consent,
-                segmentFilter: filter,
-            }),
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            toast.error(json.message || "Falha na prévia");
+        setAudienceCalculating(true);
+        setAudienceError(null);
+        setSimulationOnlyAudience(false);
+        try {
+            const res = await fetch("/api/channels/datafy/campaigns/preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    purpose,
+                    requireConsent: consent,
+                    segmentFilter: filter,
+                }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                const msg = json.message || "Erro ao calcular audiência";
+                setAudience(null);
+                setAudienceError(msg);
+                toast.error(msg);
+                return;
+            }
+            setAudience(json.data as AudienceResult);
+            setShowExclusionDetails(
+                (json.data.excludedCount || 0) > 0
+            );
+            if (json.data.eligibleCount > 0) {
+                toast.success(
+                    `Cálculo concluído: ${json.data.eligibleCount} aptos · ${json.data.excludedCount} excluídos`
+                );
+            } else {
+                toast.message(
+                    `Cálculo concluído: nenhum apto · ${json.data.excludedCount} excluídos. Verifique consentimentos no CRM.`
+                );
+            }
+        } catch {
+            setAudience(null);
+            setAudienceError("Erro ao calcular audiência");
+            toast.error("Erro ao calcular audiência");
+        } finally {
+            setAudienceCalculating(false);
+        }
+    };
+
+    const handleStep2Next = () => {
+        if (audienceCalculating) {
+            toast.error("Aguarde o cálculo da audiência");
             return;
         }
-        setAudience(json.data);
-        toast.success(
-            `${json.data.eligibleCount} aptos · ${json.data.excludedCount} excluídos`
+        if (audienceError && !audience) {
+            toast.error(audienceError);
+            return;
+        }
+        if (!audience) {
+            toast.error("Calcule a audiência antes de continuar");
+            return;
+        }
+        if (audience.eligibleCount > 0) {
+            setSimulationOnlyAudience(false);
+            setStep((s) => s + 1);
+            return;
+        }
+        if (
+            simulationOnlyAudience &&
+            (audience.simulationEligibleCount || 0) > 0
+        ) {
+            setDryRun(true);
+            setStep((s) => s + 1);
+            return;
+        }
+        toast.error(
+            "Nenhum destinatário está autorizado para esta campanha. Verifique os consentimentos no CRM."
+        );
+    };
+
+    const continueAsSimulation = () => {
+        if (!audience || (audience.simulationEligibleCount || 0) <= 0) {
+            toast.error(
+                "Não há números válidos sequer para simulação (verifique opt-out e telefones inválidos)."
+            );
+            return;
+        }
+        setSimulationOnlyAudience(true);
+        setDryRun(true);
+        setStep((s) => s + 1);
+        toast.message(
+            "Continuando só em simulação — nenhum envio real e consentimento não é concedido."
         );
     };
 
@@ -778,6 +883,10 @@ export function DatafyCampaignsPanel() {
         setContactSearch("");
         setSelectedIds(new Set());
         setAudience(null);
+        setAudienceError(null);
+        setAudienceCalculating(false);
+        setShowExclusionDetails(false);
+        setSimulationOnlyAudience(false);
         setImportText("");
         setImportPhones([]);
         setImportStats(null);
@@ -913,8 +1022,24 @@ export function DatafyCampaignsPanel() {
             toast.error("Informe o nome");
             return;
         }
-        if (!audience || audience.eligibleCount <= 0) {
-            toast.error("Calcule a audiência com destinatários elegíveis");
+        if (!audience) {
+            toast.error("Calcule a audiência antes de continuar");
+            return;
+        }
+        const simOk =
+            simulationOnlyAudience &&
+            dryRun &&
+            (audience.simulationEligibleCount || 0) > 0;
+        if (audience.eligibleCount <= 0 && !simOk) {
+            toast.error(
+                "Nenhum destinatário está autorizado para esta campanha. Verifique os consentimentos no CRM."
+            );
+            return;
+        }
+        if (!dryRun && audience.eligibleCount <= 0) {
+            toast.error(
+                "Envio real bloqueado: nenhum destinatário com consentimento válido."
+            );
             return;
         }
 
@@ -974,6 +1099,7 @@ export function DatafyCampaignsPanel() {
         }
         const consentForced =
             purpose === "marketing" ? true : requireConsent;
+        const effectiveDryRun = simulationOnlyAudience ? true : dryRun;
 
         setSaving(true);
         try {
@@ -996,7 +1122,7 @@ export function DatafyCampaignsPanel() {
                     segmentFilter: finalFilter,
                     scheduledAt:
                         execMode === "schedule" ? scheduledAt : null,
-                    dryRun,
+                    dryRun: effectiveDryRun,
                     requireConsent: consentForced,
                     delayMs,
                 }),
@@ -1676,7 +1802,7 @@ export function DatafyCampaignsPanel() {
                                             type="button"
                                             onClick={() => {
                                                 setRecipientSource(opt.id);
-                                                setAudience(null);
+                                                invalidateAudience();
                                             }}
                                             className={cn(
                                                 "rounded-2xl border p-4 text-left transition-all",
@@ -1747,7 +1873,7 @@ export function DatafyCampaignsPanel() {
                                         value={importText}
                                         onChange={(e) => {
                                             setImportText(e.target.value);
-                                            setAudience(null);
+                                            invalidateAudience();
                                         }}
                                         className="font-mono text-xs rounded-xl"
                                     />
@@ -1791,7 +1917,7 @@ export function DatafyCampaignsPanel() {
                                             className="rounded-xl"
                                             onClick={() => {
                                                 setCrmPickMode("all");
-                                                setAudience(null);
+                                                invalidateAudience();
                                             }}
                                         >
                                             Todos elegíveis
@@ -1807,7 +1933,7 @@ export function DatafyCampaignsPanel() {
                                             className="rounded-xl"
                                             onClick={() => {
                                                 setCrmPickMode("manual");
-                                                setAudience(null);
+                                                invalidateAudience();
                                             }}
                                         >
                                             Seleção manual / lote
@@ -1832,7 +1958,7 @@ export function DatafyCampaignsPanel() {
                                                 value={category}
                                                 onValueChange={(v) => {
                                                     setCategory(v);
-                                                    setAudience(null);
+                                                    invalidateAudience();
                                                 }}
                                             >
                                                 <SelectTrigger>
@@ -1861,7 +1987,7 @@ export function DatafyCampaignsPanel() {
                                                 value={tagId}
                                                 onValueChange={(v) => {
                                                     setTagId(v);
-                                                    setAudience(null);
+                                                    invalidateAudience();
                                                 }}
                                             >
                                                 <SelectTrigger>
@@ -1894,7 +2020,7 @@ export function DatafyCampaignsPanel() {
                                                         setCity(
                                                             e.target.value
                                                         );
-                                                        setAudience(null);
+                                                        invalidateAudience();
                                                     }}
                                                 />
                                             </div>
@@ -1907,7 +2033,7 @@ export function DatafyCampaignsPanel() {
                                                         setStateUf(
                                                             e.target.value.toUpperCase()
                                                         );
-                                                        setAudience(null);
+                                                        invalidateAudience();
                                                     }}
                                                 />
                                             </div>
@@ -1919,7 +2045,7 @@ export function DatafyCampaignsPanel() {
                                                         setCompany(
                                                             e.target.value
                                                         );
-                                                        setAudience(null);
+                                                        invalidateAudience();
                                                     }}
                                                 />
                                             </div>
@@ -1956,7 +2082,7 @@ export function DatafyCampaignsPanel() {
                                                                 )
                                                             )
                                                         );
-                                                        setAudience(null);
+                                                        invalidateAudience();
                                                     }}
                                                 >
                                                     Marcar visíveis
@@ -2084,7 +2210,7 @@ export function DatafyCampaignsPanel() {
                                                             setGroupPhones(
                                                                 []
                                                             );
-                                                            setAudience(null);
+                                                            invalidateAudience();
                                                         }}
                                                     >
                                                         <SelectTrigger>
@@ -2231,7 +2357,7 @@ export function DatafyCampaignsPanel() {
                                                     } else {
                                                         setGroupPhones([]);
                                                     }
-                                                    setAudience(null);
+                                                    invalidateAudience();
                                                 }}
                                             >
                                                 Limpar lista
@@ -2277,9 +2403,10 @@ export function DatafyCampaignsPanel() {
                                 <input
                                     type="checkbox"
                                     checked={requireConsent}
+                                    disabled={purpose === "marketing"}
                                     onChange={(e) => {
                                         setRequireConsent(e.target.checked);
-                                        setAudience(null);
+                                        invalidateAudience();
                                     }}
                                 />
                                 Exigir consentimento válido (obrigatório para
@@ -2290,41 +2417,43 @@ export function DatafyCampaignsPanel() {
                                 <Button
                                     variant="outline"
                                     className="rounded-xl"
-                                    onClick={() => {
-                                        if (
-                                            (recipientSource === "import" ||
-                                                recipientSource ===
-                                                    "groups") &&
-                                            !activePhones.length
-                                        ) {
-                                            toast.error(
-                                                "Adicione números antes de calcular"
-                                            );
-                                            return;
-                                        }
-                                        if (
-                                            recipientSource === "crm" &&
-                                            crmPickMode === "manual" &&
-                                            !selectedIds.size
-                                        ) {
-                                            toast.error(
-                                                "Selecione ao menos um contato do CRM"
-                                            );
-                                            return;
-                                        }
-                                        void previewAudience();
-                                    }}
+                                    disabled={audienceCalculating}
+                                    onClick={() => void previewAudience()}
                                 >
-                                    Calcular elegíveis
+                                    {audienceCalculating ? (
+                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    ) : null}
+                                    {audience
+                                        ? "Recalcular audiência"
+                                        : "Calcular elegíveis"}
                                 </Button>
-                                {audience && (
-                                    <div className="rounded-xl border bg-muted/30 px-4 py-2 text-sm flex flex-wrap gap-4">
+                            </div>
+
+                            {audienceError && !audience && (
+                                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                                    {audienceError}
+                                </div>
+                            )}
+
+                            {audience && (
+                                <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800 ring-1 ring-emerald-200/80">
+                                            Cálculo concluído
+                                        </span>
+                                        {audience.eligibleCount <= 0 && (
+                                            <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-amber-200/80">
+                                                Nenhum autorizado
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-4 text-sm">
                                         <span>
                                             Selecionados:{" "}
                                             <strong>{audience.selected}</strong>
                                         </span>
                                         <span>
-                                            Aptos:{" "}
+                                            Aptos (autorizados):{" "}
                                             <strong className="text-emerald-700">
                                                 {audience.eligibleCount}
                                             </strong>
@@ -2335,9 +2464,149 @@ export function DatafyCampaignsPanel() {
                                                 {audience.excludedCount}
                                             </strong>
                                         </span>
+                                        {(audience.simulationEligibleCount ||
+                                            0) > audience.eligibleCount && (
+                                            <span className="text-slate-500 text-xs self-center">
+                                                {audience.simulationEligibleCount}{" "}
+                                                válidos p/ simulação (sem
+                                                consentimento)
+                                            </span>
+                                        )}
                                     </div>
-                                )}
-                            </div>
+
+                                    {audience.exclusionBreakdown &&
+                                        audience.excludedCount > 0 && (
+                                            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+                                                <p className="text-xs font-semibold text-slate-600 mb-2">
+                                                    Motivos das exclusões
+                                                </p>
+                                                <ul className="space-y-1 text-sm text-slate-700">
+                                                    {EXCLUSION_REASON_ORDER.filter(
+                                                        (r) =>
+                                                            (audience
+                                                                .exclusionBreakdown?.[
+                                                                r
+                                                            ] || 0) > 0
+                                                    ).map((r) => (
+                                                        <li
+                                                            key={r}
+                                                            className="flex justify-between gap-3"
+                                                        >
+                                                            <span>
+                                                                {skipReasonLabel(
+                                                                    r
+                                                                )}
+                                                            </span>
+                                                            <strong className="tabular-nums">
+                                                                {
+                                                                    audience
+                                                                        .exclusionBreakdown![
+                                                                        r
+                                                                    ]
+                                                                }
+                                                            </strong>
+                                                        </li>
+                                                    ))}
+                                                    {Object.entries(
+                                                        audience.exclusionBreakdown
+                                                    )
+                                                        .filter(
+                                                            ([k]) =>
+                                                                !(
+                                                                    EXCLUSION_REASON_ORDER as readonly string[]
+                                                                ).includes(k)
+                                                        )
+                                                        .map(([k, n]) => (
+                                                            <li
+                                                                key={k}
+                                                                className="flex justify-between gap-3"
+                                                            >
+                                                                <span>
+                                                                    {skipReasonLabel(
+                                                                        k
+                                                                    )}
+                                                                </span>
+                                                                <strong className="tabular-nums">
+                                                                    {n}
+                                                                </strong>
+                                                            </li>
+                                                        ))}
+                                                </ul>
+                                                <button
+                                                    type="button"
+                                                    className="mt-2 text-xs font-medium text-primary hover:underline"
+                                                    onClick={() =>
+                                                        setShowExclusionDetails(
+                                                            (v) => !v
+                                                        )
+                                                    }
+                                                >
+                                                    {showExclusionDetails
+                                                        ? "Ocultar detalhes"
+                                                        : "Ver detalhes dos excluídos"}
+                                                </button>
+                                                {showExclusionDetails &&
+                                                    audience.excludedPreview
+                                                        ?.length ? (
+                                                    <div className="mt-2 max-h-36 overflow-y-auto rounded-lg border bg-white divide-y text-xs font-mono">
+                                                        {audience.excludedPreview
+                                                            .slice(0, 80)
+                                                            .map((e, i) => (
+                                                                <div
+                                                                    key={`${e.waId}-${i}`}
+                                                                    className="flex justify-between gap-2 px-2 py-1.5"
+                                                                >
+                                                                    <span className="truncate">
+                                                                        {formatPhoneDisplay(
+                                                                            e.waId
+                                                                        ) ||
+                                                                            e.waId}
+                                                                        {e.fullName
+                                                                            ? ` · ${e.fullName}`
+                                                                            : ""}
+                                                                    </span>
+                                                                    <span className="text-amber-800 shrink-0 font-sans">
+                                                                        {skipReasonLabel(
+                                                                            e.reason
+                                                                        )}
+                                                                    </span>
+                                                                </div>
+                                                            ))}
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        )}
+
+                                    {audience.eligibleCount <= 0 && (
+                                        <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-3.5 py-3 text-sm text-amber-950 space-y-2">
+                                            <p>
+                                                Nenhum destinatário está
+                                                autorizado para esta campanha.
+                                                Verifique os consentimentos no
+                                                CRM.
+                                            </p>
+                                            {(audience.simulationEligibleCount ||
+                                                0) > 0 && (
+                                                <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    variant="outline"
+                                                    className="rounded-xl border-amber-300 bg-white"
+                                                    onClick={
+                                                        continueAsSimulation
+                                                    }
+                                                >
+                                                    Continuar só em simulação (
+                                                    {
+                                                        audience.simulationEligibleCount
+                                                    }{" "}
+                                                    números)
+                                                </Button>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -2521,7 +2790,12 @@ export function DatafyCampaignsPanel() {
                             <label className="flex items-center gap-2 text-sm rounded-xl border border-amber-200 bg-amber-50/60 p-3">
                                 <input
                                     type="checkbox"
-                                    checked={dryRun}
+                                    checked={
+                                        simulationOnlyAudience
+                                            ? true
+                                            : dryRun
+                                    }
+                                    disabled={simulationOnlyAudience}
                                     onChange={(e) =>
                                         setDryRun(e.target.checked)
                                     }
@@ -2529,6 +2803,9 @@ export function DatafyCampaignsPanel() {
                                 <span>
                                     <FlaskConical className="inline h-3.5 w-3.5 mr-1" />
                                     Modo simulação — não envia mensagens reais
+                                    {simulationOnlyAudience
+                                        ? " (obrigatório nesta audiência)"
+                                        : ""}
                                 </span>
                             </label>
                         </div>
@@ -2653,14 +2930,8 @@ export function DatafyCampaignsPanel() {
                                 <Button
                                     className="rounded-xl min-w-[110px]"
                                     onClick={() => {
-                                        if (
-                                            step === 2 &&
-                                            (!audience ||
-                                                audience.eligibleCount <= 0)
-                                        ) {
-                                            toast.error(
-                                                "Calcule a audiência com elegíveis antes de continuar"
-                                            );
+                                        if (step === 2) {
+                                            handleStep2Next();
                                             return;
                                         }
                                         setStep((s) => s + 1);

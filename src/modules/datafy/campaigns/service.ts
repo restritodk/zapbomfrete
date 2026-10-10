@@ -349,9 +349,12 @@ export async function createCampaign(
     });
 
     if (input.segmentFilter) {
+        const dryRun = Boolean(input.dryRun);
         await materializeRecipients(created.id, input.segmentFilter, {
             purpose,
             requireConsent: input.requireConsent !== false,
+            // Dry-run may include valid phones without marketing consent; never authorizes real send
+            simulationRelaxConsent: dryRun,
         });
     }
 
@@ -459,12 +462,15 @@ export async function updateCampaign(
     await prisma.datafyCampaign.update({ where: { id }, data });
 
     if (input.segmentFilter) {
+        const nextDryRun =
+            input.dryRun !== undefined ? Boolean(input.dryRun) : current.dryRun;
         await materializeRecipients(id, input.segmentFilter, {
             purpose: (input.purpose || current.purpose) as string,
             requireConsent:
                 input.requireConsent !== undefined
                     ? Boolean(input.requireConsent)
                     : current.requireConsent,
+            simulationRelaxConsent: nextDryRun,
         });
     }
 
@@ -480,7 +486,11 @@ export async function updateCampaign(
 
 export async function previewCampaignAudience(
     filter: SegmentFilter,
-    opts: { purpose: string; requireConsent: boolean }
+    opts: {
+        purpose: string;
+        requireConsent: boolean;
+        simulationRelaxConsent?: boolean;
+    }
 ) {
     const contacts = await resolveSegmentContacts(filter);
     const preview = previewRecipients(contacts, opts);
@@ -488,6 +498,8 @@ export async function previewCampaignAudience(
         selected: preview.selected,
         eligibleCount: preview.eligibleCount,
         excludedCount: preview.excludedCount,
+        exclusionBreakdown: preview.exclusionBreakdown,
+        simulationEligibleCount: preview.simulationEligibleCount,
         eligiblePreview: preview.eligible.map((c) => ({
             id: c.id,
             waId: c.waId,
@@ -509,7 +521,11 @@ export async function previewCampaignAudience(
 export async function materializeRecipients(
     campaignId: string,
     filter: SegmentFilter,
-    opts: { purpose: string; requireConsent: boolean }
+    opts: {
+        purpose: string;
+        requireConsent: boolean;
+        simulationRelaxConsent?: boolean;
+    }
 ) {
     const contacts = await resolveSegmentContacts(filter);
     const preview = previewRecipients(contacts, opts);

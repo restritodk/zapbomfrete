@@ -131,6 +131,7 @@ async function sendOneRecipient(
             const elig = evaluateEligibility(contact, {
                 purpose: campaign.purpose,
                 requireConsent: campaign.requireConsent,
+                simulationRelaxConsent: campaign.dryRun,
             });
             if (!elig.ok) {
                 await prisma.datafyCampaignRecipient.update({

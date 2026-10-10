@@ -18,6 +18,20 @@ export type EligibilityResult =
     | { ok: true; waId: string }
     | { ok: false; reason: string };
 
+export type EligibilityOpts = {
+    purpose: CampaignPurpose | string;
+    requireConsent: boolean;
+    /**
+     * Dry-run only: allow numbers that lack marketing consent / are not in CRM,
+     * without treating them as authorized. Still blocks opt-out, denied, inactive, invalid.
+     */
+    simulationRelaxConsent?: boolean;
+};
+
+function isNotInCrm(contact: EligibilityContact): boolean {
+    return contact.id.startsWith("synth:");
+}
+
 /**
  * Marketing campaigns require explicit consent (granted).
  * Utility/transactional still respect opt-out and inactive.
@@ -25,7 +39,7 @@ export type EligibilityResult =
  */
 export function evaluateEligibility(
     contact: EligibilityContact,
-    opts: { purpose: CampaignPurpose | string; requireConsent: boolean }
+    opts: EligibilityOpts
 ): EligibilityResult {
     const waId = normalizeBrazilianPhone(contact.waId);
     if (!waId || waId.length < 10) {
@@ -47,6 +61,13 @@ export function evaluateEligibility(
         (purpose === "marketing" || purpose === "other");
 
     if (needsConsent && contact.consentStatus !== "granted") {
+        if (opts.simulationRelaxConsent) {
+            // Simulation path — valid phone, not opted out; not authorized for real send
+            return { ok: true, waId };
+        }
+        if (isNotInCrm(contact)) {
+            return { ok: false, reason: "not_in_crm" };
+        }
         return { ok: false, reason: "missing_consent" };
     }
 
@@ -64,10 +85,23 @@ export function skipReasonLabel(reason: string | null | undefined): string {
         case "denied":
             return "Consentimento negado";
         case "missing_consent":
-            return "Sem consentimento para campanhas";
+            return "Consentimento ausente no CRM";
+        case "not_in_crm":
+            return "Número não encontrado no CRM";
         case "duplicate":
             return "Número duplicado na campanha";
         default:
             return reason || "Excluído";
     }
 }
+
+/** Ordered keys for UI breakdown */
+export const EXCLUSION_REASON_ORDER = [
+    "missing_consent",
+    "not_in_crm",
+    "opted_out",
+    "denied",
+    "inactive",
+    "invalid_phone",
+    "duplicate",
+] as const;
