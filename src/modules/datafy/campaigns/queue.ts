@@ -16,6 +16,8 @@ import {
 import { appendEvent, setStatus } from "./service";
 import { buildTemplateComponents } from "./variables";
 import { evaluateEligibility } from "./eligibility";
+import { partClientMessageId, resolveCampaignParts } from "./parts";
+import type { CampaignMessagePart } from "./bulletin/types";
 
 const WORKER_ID = `worker_${process.pid}_${randomUUID().slice(0, 8)}`;
 
@@ -117,8 +119,12 @@ async function sendOneRecipient(
         where: { id: recipientId },
     });
     if (!recipient) return;
-    if (!["pending", "queued", "failed"].includes(recipient.status)) return;
-    if (recipient.status === "failed" && recipient.attemptCount >= recipient.maxAttempts) {
+    if (!["pending", "queued", "failed", "sending"].includes(recipient.status))
+        return;
+    if (
+        recipient.status === "failed" &&
+        recipient.attemptCount >= recipient.maxAttempts
+    ) {
         return;
     }
 
@@ -149,7 +155,7 @@ async function sendOneRecipient(
     const claim = await prisma.datafyCampaignRecipient.updateMany({
         where: {
             id: recipient.id,
-            status: { in: ["pending", "queued", "failed"] },
+            status: { in: ["pending", "queued", "failed", "sending"] },
         },
         data: {
             status: "sending",
@@ -158,43 +164,37 @@ async function sendOneRecipient(
     });
     if (claim.count === 0) return;
 
-    const clientMessageId =
+    const fullCampaign = await prisma.datafyCampaign.findUnique({
+        where: { id: campaign.id },
+    });
+    if (!fullCampaign) return;
+
+    const parts = resolveCampaignParts(fullCampaign);
+    const legacyClientMessageId =
         recipient.clientMessageId ||
         `camp_${campaign.id}_${recipient.waId}`;
 
-    // Idempotency: if DatafyMessage already exists for this client key, reuse
-    const existingMsg = await prisma.datafyMessage.findUnique({
-        where: { clientMessageId },
-    });
-    if (existingMsg?.wamid) {
-        await prisma.datafyCampaignRecipient.update({
-            where: { id: recipient.id },
-            data: {
-                status:
-                    existingMsg.status === "failed"
-                        ? "failed"
-                        : existingMsg.status === "read"
-                          ? "read"
-                          : existingMsg.status === "delivered"
-                            ? "delivered"
-                            : existingMsg.status === "sent"
-                              ? "sent"
-                              : "accepted",
-                wamid: existingMsg.wamid,
-                datafyMessageId: existingMsg.id,
-                conversationId: existingMsg.conversationId,
-                acceptedAt: existingMsg.providerTimestamp || new Date(),
-            },
-        });
-        return;
-    }
-
     if (campaign.dryRun) {
+        const partState = {
+            nextPartIndex: parts.length,
+            parts: parts.map((p) => ({
+                index: p.index,
+                status: "accepted",
+                clientMessageId: partClientMessageId(
+                    campaign.id,
+                    recipient.waId,
+                    p.index
+                ),
+            })),
+        };
         await prisma.datafyCampaignRecipient.update({
             where: { id: recipient.id },
             data: {
                 status: "accepted",
-                clientMessageId,
+                clientMessageId:
+                    partState.parts[0]?.clientMessageId ||
+                    legacyClientMessageId,
+                partStatuses: partState as Prisma.InputJsonValue,
                 acceptedAt: new Date(),
                 sentAt: new Date(),
                 lastError: "SIMULAÇÃO — nenhum envio real foi realizado",
@@ -203,7 +203,7 @@ async function sendOneRecipient(
         return;
     }
 
-    if (!campaign.templateName) {
+    if (!parts.some((p) => p.templateName)) {
         await prisma.datafyCampaignRecipient.update({
             where: { id: recipient.id },
             data: {
@@ -226,98 +226,16 @@ async function sendOneRecipient(
         recipient.fullName
     );
 
-    const fullCampaign = await prisma.datafyCampaign.findUnique({
-        where: { id: campaign.id },
-        select: {
-            headerImageUrl: true,
-            messageBody: true,
-            variableMapping: true,
-        },
-    });
-
-    const components = buildTemplateComponents(
-        (fullCampaign?.variableMapping || campaign.variableMapping) as {
-            body?: string[];
-            header?: string[];
-        } | null,
-        {
-            fullName: recipient.fullName,
-            company: recipient.company,
-            waId: recipient.waId,
-        },
-        {
-            headerImageUrl: fullCampaign?.headerImageUrl || null,
-        }
-    );
-
-    const preview =
-        fullCampaign?.messageBody?.slice(0, 280) ||
-        `Template: ${campaign.templateName}`;
-
-    let messageId = existingMsg?.id;
-    if (!messageId) {
-        const pending = await prisma.datafyMessage.create({
-            data: {
-                conversationId: conversation.id,
-                clientMessageId,
-                direction: "outbound",
-                type: "template",
-                body: preview,
-                status: "pending",
-                metadata: {
-                    campaignId: campaign.id,
-                    campaignRecipientId: recipient.id,
-                    templateName: campaign.templateName,
-                    languageCode: campaign.templateLanguage || "pt_BR",
-                    components: components as Prisma.InputJsonValue,
-                } as Prisma.InputJsonValue,
-            },
-        });
-        messageId = pending.id;
-    }
-
     try {
-        const client = await datafyProvider.createClient();
-        const res = await client.sendTemplate(phoneNumberId, {
-            to: normalizeWaId(recipient.waId),
-            name: campaign.templateName,
-            languageCode: campaign.templateLanguage || "pt_BR",
-            components,
-        });
-        const wamid = res.messages?.[0]?.id || null;
-
-        await prisma.datafyMessage.update({
-            where: { id: messageId },
-            data: {
-                wamid,
-                status: "accepted",
-                providerTimestamp: new Date(),
-            },
-        });
-
-        await prisma.datafyConversation.update({
-            where: { id: conversation.id },
-            data: {
-                lastMessagePreview: preview.slice(0, 280),
-                lastMessageAt: new Date(),
-            },
-        });
-
-        await prisma.datafyCampaignRecipient.update({
-            where: { id: recipient.id },
-            data: {
-                status: "accepted",
-                clientMessageId,
-                wamid,
-                datafyMessageId: messageId,
-                conversationId: conversation.id,
-                acceptedAt: new Date(),
-                sentAt: new Date(),
-                lastError: null,
-            },
+        await sendPartsSequentially({
+            campaign: fullCampaign,
+            parts,
+            recipient,
+            conversationId: conversation.id,
+            phoneNumberId,
+            delayMs: campaign.delayMs,
         });
     } catch (e) {
-        // Ambiguous failure after possible accept: do not auto-retry blindly
         const apiErr = e instanceof DatafyApiError ? e : null;
         const statusCode = apiErr?.statusCode || 0;
         const msg = redactSecrets(
@@ -340,52 +258,205 @@ async function sendOneRecipient(
             return;
         }
 
-        // Network / 5xx: mark unknown_after_send if we already created pending
-        // and cannot confirm — avoid duplicate send on next tick
-        if (!statusCode || statusCode >= 500) {
-            await prisma.datafyMessage.update({
-                where: { id: messageId },
-                data: {
-                    status: "failed",
-                    failedAt: new Date(),
-                    errorMessage: msg,
-                    errorCode: statusCode || null,
-                },
-            });
-            await prisma.datafyCampaignRecipient.update({
-                where: { id: recipient.id },
-                data: {
-                    status: "unknown_after_send",
-                    failedAt: new Date(),
-                    lastError: msg,
-                    errorCode: statusCode || null,
-                    datafyMessageId: messageId,
-                    conversationId: conversation.id,
-                    clientMessageId,
-                },
-            });
-            return;
+        await prisma.datafyCampaignRecipient.update({
+            where: { id: recipient.id },
+            data: {
+                status:
+                    !statusCode || statusCode >= 500
+                        ? "unknown_after_send"
+                        : "failed",
+                failedAt: new Date(),
+                lastError: msg,
+                errorCode: statusCode || null,
+                conversationId: conversation.id,
+            },
+        });
+    }
+}
+
+type PartStatusEntry = {
+    index: number;
+    status: string;
+    clientMessageId: string;
+    wamid?: string | null;
+    datafyMessageId?: string | null;
+    lastError?: string | null;
+};
+
+async function sendPartsSequentially(opts: {
+    campaign: {
+        id: string;
+        headerImageUrl: string | null;
+        delayMs?: number;
+    };
+    parts: CampaignMessagePart[];
+    recipient: {
+        id: string;
+        waId: string;
+        fullName: string | null;
+        company: string | null;
+        partStatuses: unknown;
+    };
+    conversationId: string;
+    phoneNumberId: string;
+    delayMs: number;
+}) {
+    const { campaign, parts, recipient, conversationId, phoneNumberId } = opts;
+    const prev = (recipient.partStatuses || {}) as {
+        nextPartIndex?: number;
+        parts?: PartStatusEntry[];
+    };
+    let nextIndex = prev.nextPartIndex || 0;
+    const partEntries: PartStatusEntry[] = [...(prev.parts || [])];
+
+    const client = await datafyProvider.createClient();
+
+    for (let i = nextIndex; i < parts.length; i++) {
+        const part = parts[i];
+        if (!part.templateName) {
+            throw new DatafyApiError(
+                `Parte ${i + 1} sem templateName`,
+                400
+            );
         }
+
+        const cmid = partClientMessageId(
+            campaign.id,
+            recipient.waId,
+            part.index
+        );
+
+        const existingMsg = await prisma.datafyMessage.findUnique({
+            where: { clientMessageId: cmid },
+        });
+        if (existingMsg?.wamid) {
+            partEntries[i] = {
+                index: part.index,
+                status: "accepted",
+                clientMessageId: cmid,
+                wamid: existingMsg.wamid,
+                datafyMessageId: existingMsg.id,
+            };
+            nextIndex = i + 1;
+            continue;
+        }
+
+        // Bulletin parts are fixed template bodies (no CRM body params by default)
+        const mapping =
+            part.variableMapping &&
+            Array.isArray(part.variableMapping.body) &&
+            part.variableMapping.body.length
+                ? part.variableMapping
+                : { body: [] as string[] };
+
+        const headerUrl =
+            i === 0
+                ? part.headerImageUrl || campaign.headerImageUrl
+                : part.headerImageUrl || null;
+
+        const components = buildTemplateComponents(
+            mapping,
+            {
+                fullName: recipient.fullName,
+                company: recipient.company,
+                waId: recipient.waId,
+            },
+            { headerImageUrl: headerUrl }
+        );
+
+        const preview = part.bodyText.slice(0, 280);
+
+        let messageId = existingMsg?.id;
+        if (!messageId) {
+            const pending = await prisma.datafyMessage.create({
+                data: {
+                    conversationId,
+                    clientMessageId: cmid,
+                    direction: "outbound",
+                    type: "template",
+                    body: preview,
+                    status: "pending",
+                    metadata: {
+                        campaignId: campaign.id,
+                        campaignRecipientId: recipient.id,
+                        templateName: part.templateName,
+                        languageCode: part.templateLanguage || "pt_BR",
+                        partIndex: part.index,
+                        components: components as Prisma.InputJsonValue,
+                    } as Prisma.InputJsonValue,
+                },
+            });
+            messageId = pending.id;
+        }
+
+        const res = await client.sendTemplate(phoneNumberId, {
+            to: normalizeWaId(recipient.waId),
+            name: part.templateName,
+            languageCode: part.templateLanguage || "pt_BR",
+            components,
+        });
+        const wamid = res.messages?.[0]?.id || null;
 
         await prisma.datafyMessage.update({
             where: { id: messageId },
             data: {
-                status: "failed",
-                failedAt: new Date(),
-                errorMessage: msg,
-                errorCode: statusCode,
+                wamid,
+                status: "accepted",
+                providerTimestamp: new Date(),
             },
         });
+
+        partEntries[i] = {
+            index: part.index,
+            status: "accepted",
+            clientMessageId: cmid,
+            wamid,
+            datafyMessageId: messageId,
+        };
+        nextIndex = i + 1;
+
         await prisma.datafyCampaignRecipient.update({
             where: { id: recipient.id },
             data: {
-                status: "failed",
-                failedAt: new Date(),
-                lastError: msg,
-                errorCode: statusCode,
+                status: nextIndex >= parts.length ? "accepted" : "sending",
+                clientMessageId: partEntries[0]?.clientMessageId || cmid,
+                wamid: wamid,
                 datafyMessageId: messageId,
-                conversationId: conversation.id,
-                clientMessageId,
+                conversationId,
+                partStatuses: {
+                    nextPartIndex: nextIndex,
+                    parts: partEntries,
+                } as Prisma.InputJsonValue,
+                acceptedAt:
+                    nextIndex >= parts.length ? new Date() : undefined,
+                sentAt: new Date(),
+                lastError: null,
+            },
+        });
+
+        await prisma.datafyConversation.update({
+            where: { id: conversationId },
+            data: {
+                lastMessagePreview: preview,
+                lastMessageAt: new Date(),
+            },
+        });
+
+        if (i < parts.length - 1 && opts.delayMs > 0) {
+            await sleep(opts.delayMs);
+        }
+    }
+
+    if (nextIndex >= parts.length) {
+        await prisma.datafyCampaignRecipient.update({
+            where: { id: recipient.id },
+            data: {
+                status: "accepted",
+                partStatuses: {
+                    nextPartIndex: nextIndex,
+                    parts: partEntries,
+                } as Prisma.InputJsonValue,
+                acceptedAt: new Date(),
             },
         });
     }
@@ -442,7 +513,7 @@ async function processCampaign(campaignId: string) {
         const retryable = await prisma.datafyCampaignRecipient.findMany({
             where: {
                 campaignId,
-                status: { in: ["pending", "queued"] },
+                status: { in: ["pending", "queued", "sending"] },
                 OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
             },
             orderBy: { createdAt: "asc" },
@@ -465,6 +536,8 @@ async function processCampaign(campaignId: string) {
                     delayMs: true,
                     headerImageUrl: true,
                     messageBody: true,
+                    contentKind: true,
+                    messageParts: true,
                 },
             });
             if (!fresh || fresh.status !== "running") break;

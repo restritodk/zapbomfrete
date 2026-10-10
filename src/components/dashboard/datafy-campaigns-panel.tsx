@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+    useCallback,
+    useDeferredValue,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
 import { toast } from "sonner";
 import {
     Loader2,
@@ -24,8 +31,18 @@ import {
     AlertTriangle,
     ChevronDown,
     ChevronUp,
+    ChevronLeft,
+    ChevronRight,
 } from "lucide-react";
 import { useSession } from "@/components/dashboard/session-provider";
+import {
+    analyzeBulletin,
+    associatePartsWithTemplates,
+    estimateMessageTotal,
+    META_TEMPLATE_BODY_MAX,
+    type BulletinAnalysis,
+    type CampaignMessagePart,
+} from "@/modules/datafy/campaigns/bulletin";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -188,11 +205,24 @@ function WhatsAppMessagePreview({
     previewText,
     imagePreview,
     compact,
+    partLabel,
+    partIndex,
+    partCount,
+    onPrevPart,
+    onNextPart,
+    warnings,
 }: {
     previewText: string;
     imagePreview: string | null;
     compact?: boolean;
+    partLabel?: string | null;
+    partIndex?: number;
+    partCount?: number;
+    onPrevPart?: () => void;
+    onNextPart?: () => void;
+    warnings?: string[];
 }) {
+    const multi = (partCount || 0) > 1;
     return (
         <div
             className={cn(
@@ -209,20 +239,47 @@ function WhatsAppMessagePreview({
                     <p className="text-[13px] font-semibold truncate leading-tight">
                         Bom Frete
                     </p>
-                    <p className="text-[10px] text-white/70 leading-tight">
-                        WhatsApp Business · prévia
+                    <p className="text-[10px] text-white/70 leading-tight truncate">
+                        {partLabel || "WhatsApp Business · prévia"}
                     </p>
                 </div>
             </div>
+            {multi && (
+                <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 bg-white/80 border-b border-slate-200/80">
+                    <button
+                        type="button"
+                        className="rounded-lg p-1.5 hover:bg-slate-100 disabled:opacity-30"
+                        disabled={!onPrevPart || (partIndex || 0) <= 0}
+                        onClick={onPrevPart}
+                        aria-label="Parte anterior"
+                    >
+                        <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <span className="text-xs font-medium text-slate-600 tabular-nums">
+                        Parte {(partIndex || 0) + 1} de {partCount}
+                    </span>
+                    <button
+                        type="button"
+                        className="rounded-lg p-1.5 hover:bg-slate-100 disabled:opacity-30"
+                        disabled={
+                            !onNextPart ||
+                            (partIndex || 0) >= (partCount || 1) - 1
+                        }
+                        onClick={onNextPart}
+                        aria-label="Próxima parte"
+                    >
+                        <ChevronRight className="h-4 w-4" />
+                    </button>
+                </div>
+            )}
             <div
                 className={cn(
                     "flex-1 overflow-y-auto p-3 sm:p-4",
-                    "bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2MCIgaGVpZ2h0PSI2MCIgdmlld0JveD0iMCAwIDYwIDYwIj48ZyBmaWxsPSIjYzVkNGRjIiBmaWxsLW9wYWNpdHk9IjAuMzUiPjxjaXJjbGUgY3g9IjMiIGN5PSIzIiByPSIxIi8+PC9nPjwvc3ZnPg==')]",
                     "bg-[#e5ddd5]"
                 )}
             >
                 <div className="max-w-[92%] rounded-xl rounded-tl-sm bg-white shadow-sm overflow-hidden">
-                    {imagePreview && (
+                    {imagePreview && (partIndex || 0) === 0 && (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                             src={imagePreview}
@@ -243,10 +300,19 @@ function WhatsAppMessagePreview({
                         </p>
                     </div>
                 </div>
-                <p className="mt-3 text-[10px] leading-relaxed text-slate-600/90 px-0.5">
-                    Prévia ilustrativa. No canal oficial, o envio usa template
-                    aprovado pela Meta.
-                </p>
+                {warnings?.length ? (
+                    <ul className="mt-3 space-y-1 text-[10px] text-amber-800">
+                        {warnings.slice(0, 4).map((w) => (
+                            <li key={w}>⚠ {w}</li>
+                        ))}
+                    </ul>
+                ) : (
+                    <p className="mt-3 text-[10px] leading-relaxed text-slate-600/90 px-0.5">
+                        Prévia ilustrativa. Envio oficial exige template
+                        aprovado pela Meta (limite {META_TEMPLATE_BODY_MAX}{" "}
+                        caracteres por parte).
+                    </p>
+                )}
             </div>
         </div>
     );
@@ -297,6 +363,20 @@ export function DatafyCampaignsPanel() {
     const [messageBody, setMessageBody] = useState(
         "Olá, {{fullName}}! Tudo bem? Aqui é a equipe Bom Frete."
     );
+    /** message = texto comum (Fase 5) · bulletin = boletim de cargas (Fase 6) */
+    const [contentKind, setContentKind] = useState<"message" | "bulletin">(
+        "message"
+    );
+    const [bulletinParts, setBulletinParts] = useState<CampaignMessagePart[]>(
+        []
+    );
+    const [bulletinAnalysis, setBulletinAnalysis] =
+        useState<BulletinAnalysis | null>(null);
+    const [previewPartIndex, setPreviewPartIndex] = useState(0);
+    const [submittingPartIndex, setSubmittingPartIndex] = useState<
+        number | null
+    >(null);
+    const deferredBulletinText = useDeferredValue(messageBody);
     const [contentMode, setContentMode] = useState<"existing" | "custom">(
         "existing"
     );
@@ -864,6 +944,10 @@ export function DatafyCampaignsPanel() {
         setMessageBody(
             "Olá, {{fullName}}! Tudo bem? Aqui é a equipe Bom Frete."
         );
+        setContentKind("message");
+        setBulletinParts([]);
+        setBulletinAnalysis(null);
+        setPreviewPartIndex(0);
         setContentMode("existing");
         setTemplateKey("");
         setBodyVars(["fullName"]);
@@ -955,6 +1039,73 @@ export function DatafyCampaignsPanel() {
 
     const currentStepMeta =
         WIZARD_STEPS.find((s) => s.n === step) || WIZARD_STEPS[0];
+
+    const submitBulletinPart = async (partIndex: number) => {
+        const part = bulletinParts[partIndex];
+        if (!part?.bodyText) {
+            toast.error("Parte vazia");
+            return;
+        }
+        if (part.bodyText.length > META_TEMPLATE_BODY_MAX) {
+            toast.error(
+                `Parte excede ${META_TEMPLATE_BODY_MAX} caracteres — revise antes de submeter`
+            );
+            return;
+        }
+        setSubmittingPartIndex(partIndex);
+        try {
+            const res = await fetch(
+                "/api/channels/datafy/campaigns/submit-template",
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        name: `${name || "boletim"}_p${partIndex + 1}_${Date.now().toString(36)}`,
+                        language: "pt_BR",
+                        category:
+                            purpose === "utility" ? "UTILITY" : "MARKETING",
+                        bodyText: part.bodyText,
+                        headerImageHandle:
+                            partIndex === 0 ? headerImageHandle : null,
+                    }),
+                }
+            );
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                toast.error(json.message || "Falha ao submeter parte");
+                return;
+            }
+            setBulletinParts((prev) =>
+                prev.map((p, i) =>
+                    i === partIndex
+                        ? {
+                              ...p,
+                              templateName: json.data.templateName,
+                              templateLanguage: "pt_BR",
+                              templateCategory:
+                                  purpose === "utility"
+                                      ? "UTILITY"
+                                      : "MARKETING",
+                              templateApprovalStatus: String(
+                                  json.data.approvalStatus || "PENDING"
+                              ),
+                              variableMapping: { body: [] },
+                              readyForRealSend: false,
+                              blockReason:
+                                  "Aguardando aprovação Meta (PENDING)",
+                          }
+                        : p
+                )
+            );
+            toast.success(
+                `Parte ${partIndex + 1} enviada para aprovação (${json.data.approvalStatus})`
+            );
+        } catch {
+            toast.error("Erro ao submeter parte");
+        } finally {
+            setSubmittingPartIndex(null);
+        }
+    };
 
     const submitCustomTemplate = async (): Promise<{
         templateName: string;
@@ -1050,7 +1201,32 @@ export function DatafyCampaignsPanel() {
         let contentSource = "existing_template";
         let vars = bodyVars;
 
-        if (contentMode === "custom") {
+        if (contentKind === "bulletin") {
+            if (!bulletinParts.length) {
+                toast.error("Analise o boletim com ao menos uma carga/parte");
+                return;
+            }
+            const first = bulletinParts[0];
+            templateName = first.templateName || `boletim_${Date.now()}`;
+            templateLanguage = first.templateLanguage || "pt_BR";
+            templateCategory =
+                first.templateCategory ||
+                (purpose === "utility" ? "UTILITY" : "MARKETING");
+            templateApprovalStatus =
+                first.templateApprovalStatus || "PENDING";
+            contentSource = "bulletin_parts";
+            vars = [];
+            if (
+                !dryRun &&
+                !simulationOnlyAudience &&
+                bulletinParts.some((p) => !p.readyForRealSend)
+            ) {
+                toast.error(
+                    "Envio real bloqueado: associe/aprove templates de todas as partes (ou use simulação)."
+                );
+                return;
+            }
+        } else if (contentMode === "custom") {
             const custom =
                 submittedTemplate || (await submitCustomTemplate());
             if (!custom?.templateName) {
@@ -1100,6 +1276,25 @@ export function DatafyCampaignsPanel() {
         const consentForced =
             purpose === "marketing" ? true : requireConsent;
         const effectiveDryRun = simulationOnlyAudience ? true : dryRun;
+        const partN =
+            contentKind === "bulletin"
+                ? Math.max(1, bulletinParts.length)
+                : 1;
+        const msgTotal = estimateMessageTotal(
+            audience.eligibleCount > 0
+                ? audience.eligibleCount
+                : audience.simulationEligibleCount || 0,
+            partN
+        );
+
+        if (execMode === "now") {
+            const ok = window.confirm(
+                effectiveDryRun
+                    ? `Simulação: ${audience.eligibleCount || audience.simulationEligibleCount || 0} destinatário(s) × ${partN} parte(s) ≈ ${msgTotal} mensagens (sem envio real). Continuar?`
+                    : `Envio real: ${audience.eligibleCount} destinatário(s) × ${partN} parte(s) = ${msgTotal} mensagens previstas.\n\nAceite pela API ≠ entrega. Continuar?`
+            );
+            if (!ok) return;
+        }
 
         setSaving(true);
         try {
@@ -1115,7 +1310,19 @@ export function DatafyCampaignsPanel() {
                     templateComponents: selectedTemplate?.components || null,
                     templateApprovalStatus,
                     contentSource,
+                    contentKind,
                     messageBody,
+                    messageParts:
+                        contentKind === "bulletin" ? bulletinParts : null,
+                    bulletinMeta:
+                        contentKind === "bulletin" && bulletinAnalysis
+                            ? {
+                                  title: bulletinAnalysis.title,
+                                  loadCount: bulletinAnalysis.loadCount,
+                                  partCount: bulletinAnalysis.partCount,
+                                  warnings: bulletinAnalysis.warnings,
+                              }
+                            : null,
                     headerImageUrl,
                     headerImageHandle,
                     variableMapping: { body: vars },
@@ -1195,7 +1402,55 @@ export function DatafyCampaignsPanel() {
           ? "Salvar agendamento"
           : "Disparar agora";
 
-    const previewText = useMemo(() => {
+    // Re-analyze bulletin as the user types (deferred)
+    useEffect(() => {
+        if (contentKind !== "bulletin") {
+            setBulletinAnalysis(null);
+            setBulletinParts([]);
+            return;
+        }
+        const analysis = analyzeBulletin(deferredBulletinText);
+        setBulletinAnalysis(analysis);
+        setBulletinParts((prev) => {
+            const merged = analysis.parts.map((p, i) => {
+                const old = prev.find((x) => x.index === i);
+                return {
+                    ...p,
+                    templateName: old?.templateName,
+                    templateLanguage: old?.templateLanguage || "pt_BR",
+                    templateCategory: old?.templateCategory,
+                    templateApprovalStatus: old?.templateApprovalStatus,
+                    templateComponents: old?.templateComponents,
+                    variableMapping: old?.variableMapping || { body: [] },
+                    readyForRealSend: old?.readyForRealSend,
+                    blockReason: old?.blockReason || p.blockReason,
+                };
+            });
+            return associatePartsWithTemplates(
+                merged,
+                templates.map((t) => ({
+                    name: t.name,
+                    language: t.language,
+                    status: t.status,
+                    category: t.category,
+                    components: t.components,
+                })),
+                { purpose }
+            );
+        });
+        setPreviewPartIndex((idx) =>
+            Math.min(idx, Math.max(0, analysis.partCount - 1))
+        );
+    }, [contentKind, deferredBulletinText, templates, purpose]);
+
+    const activePreviewText = useMemo(() => {
+        if (contentKind === "bulletin" && bulletinParts.length) {
+            return (
+                bulletinParts[previewPartIndex]?.bodyText ||
+                bulletinParts[0]?.bodyText ||
+                ""
+            );
+        }
         return messageBody
             .replace(/\{\{fullName\}\}/gi, "Maria Silva")
             .replace(/\{\{company\}\}/gi, "Transportadora Exemplo")
@@ -1203,7 +1458,14 @@ export function DatafyCampaignsPanel() {
             .replace(/\{\{state\}\}/gi, "PR")
             .replace(/\{\{waId\}\}/gi, "5541999999999")
             .replace(/\{\{category\}\}/gi, "Motorista");
-    }, [messageBody]);
+    }, [
+        contentKind,
+        bulletinParts,
+        previewPartIndex,
+        messageBody,
+    ]);
+
+    const previewText = activePreviewText;
 
     const filteredCrm = crmRows.filter((c) => {
         if (!contactSearch.trim()) return true;
@@ -1599,13 +1861,60 @@ export function DatafyCampaignsPanel() {
                                 </div>
                             </div>
 
+                            <div className="flex flex-wrap gap-2">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant={
+                                        contentKind === "message"
+                                            ? "default"
+                                            : "outline"
+                                    }
+                                    className="rounded-xl"
+                                    onClick={() => {
+                                        setContentKind("message");
+                                        setContentMode("existing");
+                                    }}
+                                >
+                                    Mensagem comum
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant={
+                                        contentKind === "bulletin"
+                                            ? "default"
+                                            : "outline"
+                                    }
+                                    className="rounded-xl"
+                                    onClick={() => {
+                                        setContentKind("bulletin");
+                                        setContentMode("custom");
+                                        setPurpose("utility");
+                                        if (
+                                            messageBody.startsWith("Olá, {{")
+                                        ) {
+                                            setMessageBody("");
+                                        }
+                                    }}
+                                >
+                                    Boletim de cargas
+                                </Button>
+                            </div>
+
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between gap-2">
                                     <Label className="text-slate-700">
-                                        Mensagem *
+                                        {contentKind === "bulletin"
+                                            ? "Boletim completo *"
+                                            : "Mensagem *"}
                                     </Label>
                                     <span className="text-[11px] tabular-nums text-slate-400">
                                         {messageBody.length} caracteres
+                                        {contentKind === "bulletin" &&
+                                        bulletinAnalysis
+                                            ? ` · ${bulletinAnalysis.loadCount} carga(s) · ${bulletinAnalysis.partCount} parte(s)`
+                                            : ""}
                                     </span>
                                 </div>
                                 <Textarea
@@ -1613,57 +1922,106 @@ export function DatafyCampaignsPanel() {
                                     onChange={(e) =>
                                         setMessageBody(e.target.value)
                                     }
-                                    className="min-h-[200px] resize-y text-[15px] leading-relaxed rounded-xl bg-white border-slate-200 focus-visible:ring-primary/30 shadow-sm"
-                                    placeholder="Escreva a mensagem da campanha…"
+                                    className={cn(
+                                        "resize-y text-[15px] leading-relaxed rounded-xl bg-white border-slate-200 focus-visible:ring-primary/30 shadow-sm whitespace-pre-wrap",
+                                        contentKind === "bulletin"
+                                            ? "min-h-[280px] font-sans"
+                                            : "min-h-[200px]"
+                                    )}
+                                    placeholder={
+                                        contentKind === "bulletin"
+                                            ? "Cole aqui o boletim completo (título, separadores, cargas, links e emojis)…"
+                                            : "Escreva a mensagem da campanha…"
+                                    }
                                 />
-                                <div className="rounded-xl border border-slate-200/80 bg-white/80 p-3 space-y-2.5">
-                                    <div>
-                                        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400 mb-1.5">
-                                            Variáveis
-                                        </p>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {[
-                                                "fullName",
-                                                "company",
-                                                "city",
-                                                "state",
-                                            ].map((t) => (
-                                                <Button
-                                                    key={t}
-                                                    type="button"
-                                                    size="sm"
-                                                    variant="outline"
-                                                    className="h-7 rounded-lg text-xs border-slate-200 bg-slate-50/80 hover:bg-primary/5 hover:border-primary/30"
-                                                    onClick={() =>
-                                                        insertToken(t)
-                                                    }
-                                                >
-                                                    {`{{${t}}}`}
-                                                </Button>
-                                            ))}
+                                {contentKind === "bulletin" &&
+                                    bulletinAnalysis && (
+                                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600 space-y-1">
+                                            <p>
+                                                <strong>
+                                                    {bulletinAnalysis.title}
+                                                </strong>{" "}
+                                                — divisão automática respeita
+                                                cargas completas (limite Meta{" "}
+                                                {META_TEMPLATE_BODY_MAX}{" "}
+                                                chars/parte).
+                                            </p>
+                                            {bulletinAnalysis.warnings
+                                                .slice(0, 3)
+                                                .map((w) => (
+                                                    <p
+                                                        key={w}
+                                                        className="text-amber-800"
+                                                    >
+                                                        ⚠ {w}
+                                                    </p>
+                                                ))}
+                                        </div>
+                                    )}
+                                {contentKind === "message" && (
+                                    <div className="rounded-xl border border-slate-200/80 bg-white/80 p-3 space-y-2.5">
+                                        <div>
+                                            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400 mb-1.5">
+                                                Variáveis
+                                            </p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {[
+                                                    "fullName",
+                                                    "company",
+                                                    "city",
+                                                    "state",
+                                                ].map((t) => (
+                                                    <Button
+                                                        key={t}
+                                                        type="button"
+                                                        size="sm"
+                                                        variant="outline"
+                                                        className="h-7 rounded-lg text-xs border-slate-200 bg-slate-50/80 hover:bg-primary/5 hover:border-primary/30"
+                                                        onClick={() =>
+                                                            insertToken(t)
+                                                        }
+                                                    >
+                                                        {`{{${t}}}`}
+                                                    </Button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400 mb-1.5 inline-flex items-center gap-1">
+                                                <Smile className="h-3 w-3" />
+                                                Emojis
+                                            </p>
+                                            <div className="flex flex-wrap gap-0.5">
+                                                {EMOJIS.map((e) => (
+                                                    <button
+                                                        key={e}
+                                                        type="button"
+                                                        className="h-8 w-8 rounded-lg text-base transition-colors hover:bg-slate-100 active:scale-95"
+                                                        onClick={() =>
+                                                            insertEmoji(e)
+                                                        }
+                                                    >
+                                                        {e}
+                                                    </button>
+                                                ))}
+                                            </div>
                                         </div>
                                     </div>
-                                    <div>
-                                        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400 mb-1.5 inline-flex items-center gap-1">
-                                            <Smile className="h-3 w-3" />
-                                            Emojis
-                                        </p>
-                                        <div className="flex flex-wrap gap-0.5">
-                                            {EMOJIS.map((e) => (
-                                                <button
-                                                    key={e}
-                                                    type="button"
-                                                    className="h-8 w-8 rounded-lg text-base transition-colors hover:bg-slate-100 active:scale-95"
-                                                    onClick={() =>
-                                                        insertEmoji(e)
-                                                    }
-                                                >
-                                                    {e}
-                                                </button>
-                                            ))}
-                                        </div>
+                                )}
+                                {contentKind === "bulletin" && (
+                                    <div className="flex flex-wrap gap-0.5">
+                                        {EMOJIS.map((e) => (
+                                            <button
+                                                key={e}
+                                                type="button"
+                                                className="h-8 w-8 rounded-lg text-base transition-colors hover:bg-slate-100"
+                                                onClick={() => insertEmoji(e)}
+                                            >
+                                                {e}
+                                            </button>
+                                        ))}
                                     </div>
-                                </div>
+                                )}
                             </div>
 
                             <div className="space-y-2">
@@ -2612,6 +2970,81 @@ export function DatafyCampaignsPanel() {
 
                     {step === 3 && (
                         <div className="space-y-4 max-w-3xl">
+                            {contentKind === "bulletin" ? (
+                                <div className="space-y-3">
+                                    <p className="text-sm text-slate-600">
+                                        Cada parte do boletim precisa de um
+                                        template Meta APPROVED com o corpo
+                                        correspondente. Não usamos uma única
+                                        variável para contornar a aprovação.
+                                        Envio real só com todas as partes
+                                        prontas; simulação pode seguir sem
+                                        APPROVED.
+                                    </p>
+                                    {bulletinParts.map((p) => (
+                                        <div
+                                            key={p.index}
+                                            className="rounded-xl border bg-white p-3 space-y-2"
+                                        >
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <p className="text-sm font-medium">
+                                                    {p.label}{" "}
+                                                    <span className="text-slate-400 font-normal">
+                                                        ({p.charCount} chars)
+                                                    </span>
+                                                </p>
+                                                <Badge
+                                                    variant="outline"
+                                                    className={
+                                                        p.readyForRealSend
+                                                            ? "border-emerald-300 text-emerald-800"
+                                                            : "border-amber-300 text-amber-900"
+                                                    }
+                                                >
+                                                    {p.readyForRealSend
+                                                        ? "Pronto"
+                                                        : p.templateApprovalStatus ||
+                                                          "Sem template"}
+                                                </Badge>
+                                            </div>
+                                            {p.blockReason && (
+                                                <p className="text-xs text-amber-800">
+                                                    {p.blockReason}
+                                                </p>
+                                            )}
+                                            {p.templateName && (
+                                                <p className="text-xs text-slate-500 font-mono">
+                                                    {p.templateName}
+                                                </p>
+                                            )}
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                className="rounded-xl"
+                                                disabled={
+                                                    submittingPartIndex ===
+                                                        p.index ||
+                                                    p.charCount >
+                                                        META_TEMPLATE_BODY_MAX
+                                                }
+                                                onClick={() =>
+                                                    void submitBulletinPart(
+                                                        p.index
+                                                    )
+                                                }
+                                            >
+                                                {submittingPartIndex ===
+                                                p.index ? (
+                                                    <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                                                ) : null}
+                                                Enviar parte para aprovação Meta
+                                            </Button>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <>
                             <div className="flex flex-wrap gap-2">
                                 <Button
                                     type="button"
@@ -2728,6 +3161,8 @@ export function DatafyCampaignsPanel() {
                                     )}
                                 </div>
                             )}
+                                </>
+                            )}
                         </div>
                     )}
 
@@ -2835,10 +3270,25 @@ export function DatafyCampaignsPanel() {
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
                                             Conteúdo
                                         </span>
-                                        {contentMode === "existing"
-                                            ? `Template ${selectedTemplate?.name || "—"} (${selectedTemplate?.language || ""})`
-                                            : `Personalizado → ${submittedTemplate?.templateName || "(submeter na etapa 3)"}`}
+                                        {contentKind === "bulletin"
+                                            ? `Boletim · ${bulletinAnalysis?.loadCount ?? 0} carga(s) · ${bulletinParts.length} parte(s) · ${estimateMessageTotal(audience?.eligibleCount ?? 0, bulletinParts.length || 1)} msgs previstas`
+                                            : contentMode === "existing"
+                                              ? `Template ${selectedTemplate?.name || "—"} (${selectedTemplate?.language || ""})`
+                                              : `Personalizado → ${submittedTemplate?.templateName || "(submeter na etapa 3)"}`}
                                     </p>
+                                    {contentKind === "bulletin" && (
+                                        <p className="sm:col-span-2">
+                                            <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                                Templates / aprovação
+                                            </span>
+                                            {bulletinParts
+                                                .map(
+                                                    (p) =>
+                                                        `P${p.index + 1}: ${p.templateApprovalStatus || "—"}`
+                                                )
+                                                .join(" · ")}
+                                        </p>
+                                    )}
                                     <p className="sm:col-span-2">
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
                                             Execução
@@ -2895,6 +3345,34 @@ export function DatafyCampaignsPanel() {
                                             previewText={previewText}
                                             imagePreview={imagePreview}
                                             compact
+                                            partLabel={
+                                                bulletinParts[
+                                                    previewPartIndex
+                                                ]?.label
+                                            }
+                                            partIndex={previewPartIndex}
+                                            partCount={
+                                                contentKind === "bulletin"
+                                                    ? bulletinParts.length
+                                                    : 1
+                                            }
+                                            onPrevPart={() =>
+                                                setPreviewPartIndex((i) =>
+                                                    Math.max(0, i - 1)
+                                                )
+                                            }
+                                            onNextPart={() =>
+                                                setPreviewPartIndex((i) =>
+                                                    Math.min(
+                                                        bulletinParts.length -
+                                                            1,
+                                                        i + 1
+                                                    )
+                                                )
+                                            }
+                                            warnings={
+                                                bulletinAnalysis?.warnings
+                                            }
                                         />
                                     </div>
                                 )}
@@ -2908,6 +3386,29 @@ export function DatafyCampaignsPanel() {
                             <WhatsAppMessagePreview
                                 previewText={previewText}
                                 imagePreview={imagePreview}
+                                partLabel={
+                                    bulletinParts[previewPartIndex]?.label
+                                }
+                                partIndex={previewPartIndex}
+                                partCount={
+                                    contentKind === "bulletin"
+                                        ? bulletinParts.length
+                                        : 1
+                                }
+                                onPrevPart={() =>
+                                    setPreviewPartIndex((i) =>
+                                        Math.max(0, i - 1)
+                                    )
+                                }
+                                onNextPart={() =>
+                                    setPreviewPartIndex((i) =>
+                                        Math.min(
+                                            bulletinParts.length - 1,
+                                            i + 1
+                                        )
+                                    )
+                                }
+                                warnings={bulletinAnalysis?.warnings}
                             />
                         </aside>
                     </div>

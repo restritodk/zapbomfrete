@@ -257,7 +257,10 @@ export type CreateCampaignInput = {
     templateComponents?: unknown;
     templateApprovalStatus?: string | null;
     contentSource?: string;
+    contentKind?: string;
     messageBody?: string | null;
+    messageParts?: unknown;
+    bulletinMeta?: unknown;
     headerImageUrl?: string | null;
     headerImageHandle?: string | null;
     variableMapping?: unknown;
@@ -310,7 +313,17 @@ export async function createCampaign(
                     : (input.templateComponents as Prisma.InputJsonValue),
             templateApprovalStatus: input.templateApprovalStatus || null,
             contentSource: input.contentSource || "existing_template",
+            contentKind:
+                input.contentKind === "bulletin" ? "bulletin" : "message",
             messageBody: input.messageBody?.trim() || null,
+            messageParts:
+                input.messageParts === undefined
+                    ? undefined
+                    : (input.messageParts as Prisma.InputJsonValue),
+            bulletinMeta:
+                input.bulletinMeta === undefined
+                    ? undefined
+                    : (input.bulletinMeta as Prisma.InputJsonValue),
             headerImageUrl: input.headerImageUrl || null,
             headerImageHandle: input.headerImageHandle || null,
             variableMapping:
@@ -577,6 +590,14 @@ export async function materializeRecipients(
         }
     }
 
+    const camp = await prisma.datafyCampaign.findUnique({
+        where: { id: campaignId },
+        select: { messageParts: true, contentKind: true },
+    });
+    const partCount = Array.isArray(camp?.messageParts)
+        ? Math.max(1, (camp?.messageParts as unknown[]).length)
+        : 1;
+
     await prisma.datafyCampaign.update({
         where: { id: campaignId },
         data: {
@@ -585,7 +606,7 @@ export async function materializeRecipients(
             totalEligible: preview.eligibleCount,
             totalExcluded: preview.excludedCount,
             totalSkipped: preview.excludedCount,
-            totalQueued: preview.eligibleCount,
+            totalQueued: preview.eligibleCount * partCount,
         },
     });
 
@@ -607,19 +628,50 @@ export async function startCampaign(
         where: { id, organizationKey: CAMPAIGN_ORG_DEFAULT },
     });
     if (!c) throw new CampaignError("Campanha não encontrada", 404);
-    if (!c.templateName) {
-        throw new CampaignError("Selecione ou submeta um template aprovado", 400);
-    }
-    if (
-        !opts?.dryRun &&
-        !c.dryRun &&
-        c.templateApprovalStatus &&
-        c.templateApprovalStatus !== "APPROVED"
-    ) {
-        throw new CampaignError(
-            `Template ainda não aprovado pela Meta (status: ${c.templateApprovalStatus}). Aguarde a aprovação antes do envio real.`,
-            400
-        );
+    const isDry = Boolean(opts?.dryRun || c.dryRun);
+    const parts = Array.isArray(c.messageParts)
+        ? (c.messageParts as Array<{
+              templateName?: string | null;
+              templateApprovalStatus?: string | null;
+              readyForRealSend?: boolean;
+              blockReason?: string | null;
+              index?: number;
+          }>)
+        : [];
+
+    if (c.contentKind === "bulletin" && parts.length) {
+        if (!isDry) {
+            const blocked = parts.filter(
+                (p) =>
+                    !p.readyForRealSend ||
+                    !p.templateName ||
+                    String(p.templateApprovalStatus || "").toUpperCase() !==
+                        "APPROVED"
+            );
+            if (blocked.length) {
+                throw new CampaignError(
+                    `Envio real bloqueado: ${blocked.length} parte(s) sem template APPROVED. ${blocked[0]?.blockReason || ""}`.trim(),
+                    400
+                );
+            }
+        }
+    } else {
+        if (!c.templateName) {
+            throw new CampaignError(
+                "Selecione ou submeta um template aprovado",
+                400
+            );
+        }
+        if (
+            !isDry &&
+            c.templateApprovalStatus &&
+            c.templateApprovalStatus !== "APPROVED"
+        ) {
+            throw new CampaignError(
+                `Template ainda não aprovado pela Meta (status: ${c.templateApprovalStatus}). Aguarde a aprovação antes do envio real.`,
+                400
+            );
+        }
     }
     if (c.totalEligible <= 0) {
         throw new CampaignError("Nenhum destinatário elegível", 400);

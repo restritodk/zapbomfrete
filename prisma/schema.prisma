@@ -678,6 +678,12 @@ model DatafyCampaign {
   contentSource      String    @default("existing_template")
   /// User-authored body text (campaign copy / template body source).
   messageBody        String?   @db.Text
+  /// message | bulletin
+  contentKind        String    @default("message")
+  /// Ordered bulletin/message parts (CampaignMessagePart[]). Null = legacy single body.
+  messageParts       Json?
+  /// Bulletin analysis meta: { title, loadCount, partCount, warnings }
+  bulletinMeta       Json?
   /// Optional HEADER IMAGE — public URL used at send time (link).
   headerImageUrl     String?   @db.Text
   /// Meta header_handle from Datafy /uploads (template creation).
@@ -743,6 +749,8 @@ model DatafyCampaignRecipient {
   wamid           String?
   datafyMessageId String?
   conversationId  String?
+  /// Multi-part bulletin progress: { nextPartIndex, parts: [{index,status,clientMessageId,wamid,...}] }
+  partStatuses    Json?
   lastError       String?   @db.Text
   errorCode       Int?
   nextAttemptAt   DateTime?
