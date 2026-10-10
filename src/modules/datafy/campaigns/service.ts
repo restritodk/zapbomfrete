@@ -11,6 +11,7 @@ import {
     type CampaignStatus,
 } from "./constants";
 import {
+    isSyntheticContactId,
     previewRecipients,
     resolveSegmentContacts,
     type SegmentFilter,
@@ -521,7 +522,7 @@ export async function materializeRecipients(
         await prisma.datafyCampaignRecipient.createMany({
             data: preview.eligibleAll.map((c) => ({
                 campaignId,
-                crmContactId: c.id,
+                crmContactId: isSyntheticContactId(c.id) ? null : c.id,
                 waId: c.waId,
                 fullName: c.fullName,
                 company: c.company,
@@ -533,12 +534,10 @@ export async function materializeRecipients(
     }
 
     if (preview.excludedAll.length) {
-        // Persist excluded as skipped rows only when they have unique waIds not already eligible
         const eligibleSet = new Set(preview.eligibleAll.map((e) => e.waId));
         const skipped = preview.excludedAll.filter(
             (e) => e.waId && !eligibleSet.has(e.waId.replace(/\D/g, ""))
         );
-        // Store skip stats on campaign; optional skipped rows with unique waIds
         const byWa = new Map<string, (typeof skipped)[0]>();
         for (const s of skipped) {
             const wa = s.waId.replace(/\D/g, "");
@@ -549,7 +548,9 @@ export async function materializeRecipients(
             await prisma.datafyCampaignRecipient.createMany({
                 data: Array.from(byWa.values()).map((s) => ({
                     campaignId,
-                    crmContactId: s.contactId,
+                    crmContactId: isSyntheticContactId(s.contactId)
+                        ? null
+                        : s.contactId,
                     waId: s.waId.replace(/\D/g, "") || s.waId,
                     fullName: s.fullName,
                     status: "skipped",

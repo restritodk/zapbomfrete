@@ -57,6 +57,8 @@ const createSchema = z.object({
     segmentFilter: z
         .object({
             selectAllEligible: z.boolean().optional(),
+            source: z.enum(["import", "crm", "groups"]).optional(),
+            phones: z.array(z.string()).max(20000).optional(),
             contactIds: z.array(z.string()).optional(),
             tagIds: z.array(z.string()).optional(),
             category: z.string().nullable().optional(),

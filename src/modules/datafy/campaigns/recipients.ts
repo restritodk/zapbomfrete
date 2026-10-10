@@ -1,11 +1,16 @@
 import { prisma } from "@/lib/prisma";
+import { normalizeBrazilianPhone } from "@/lib/phone-br";
 import { CRM_ORG_DEFAULT } from "@/modules/crm/constants";
 import { evaluateEligibility, type EligibilityContact } from "./eligibility";
 import type { CampaignPurpose } from "./constants";
 
 export type SegmentFilter = {
-    /** When true (default UX), load all active org contacts; geo filters remain optional. */
+    /** When true (default CRM UX), load all active org contacts; geo filters remain optional. */
     selectAllEligible?: boolean;
+    /** import | crm | groups — informational for audit */
+    source?: "import" | "crm" | "groups";
+    /** Normalized phone digits from TXT/CSV or Baileys group extract */
+    phones?: string[];
     contactIds?: string[];
     tagIds?: string[];
     category?: string | null;
@@ -17,12 +22,21 @@ export type SegmentFilter = {
 };
 
 export async function resolveSegmentContacts(filter: SegmentFilter) {
+    // Phone-list path (import / groups) — match CRM by waId, never invent consent.
+    // Empty phones array must not fall through to CRM "select all".
+    if (
+        filter.source === "import" ||
+        filter.source === "groups" ||
+        (Array.isArray(filter.phones) && filter.phones.length > 0)
+    ) {
+        return resolveContactsFromPhones(filter.phones || []);
+    }
+
     const where: Record<string, unknown> = {
         organizationKey: CRM_ORG_DEFAULT,
         active: true,
     };
 
-    // Manual multi-select takes precedence; otherwise optional filters / all Brazil
     if (filter.contactIds?.length) {
         where.id = { in: filter.contactIds };
     }
@@ -55,6 +69,67 @@ export async function resolveSegmentContacts(filter: SegmentFilter) {
         take: 20_000,
         orderBy: { fullName: "asc" },
     });
+}
+
+/**
+ * Resolve imported/group phones against CRM.
+ * Numbers not in CRM become synthetic contacts with consentStatus=unknown
+ * (import/group membership never grants marketing consent).
+ */
+export async function resolveContactsFromPhones(
+    rawPhones: string[]
+): Promise<EligibilityContact[]> {
+    const normalized: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of rawPhones) {
+        const wa = normalizeBrazilianPhone(raw);
+        if (!wa || wa.length < 10 || seen.has(wa)) continue;
+        seen.add(wa);
+        normalized.push(wa);
+    }
+    if (!normalized.length) return [];
+
+    const existing = await prisma.crmContact.findMany({
+        where: {
+            organizationKey: CRM_ORG_DEFAULT,
+            waId: { in: normalized },
+        },
+    });
+    const byWa = new Map(existing.map((c) => [c.waId, c]));
+
+    return normalized.map((waId) => {
+        const c = byWa.get(waId);
+        if (c) {
+            return {
+                id: c.id,
+                waId: c.waId,
+                fullName: c.fullName,
+                company: c.company,
+                city: c.city,
+                state: c.state,
+                category: c.category,
+                origin: c.origin,
+                active: c.active,
+                consentStatus: c.consentStatus,
+            };
+        }
+        return {
+            id: `synth:${waId}`,
+            waId,
+            fullName: null,
+            company: null,
+            city: null,
+            state: null,
+            category: null,
+            origin: "import",
+            active: true,
+            consentStatus: "unknown",
+        };
+    });
+}
+
+export function isSyntheticContactId(id: string | null | undefined): boolean {
+    return !id || id.startsWith("synth:");
 }
 
 export function previewRecipients(

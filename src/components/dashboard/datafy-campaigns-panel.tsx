@@ -16,7 +16,14 @@ import {
     ImagePlus,
     X,
     Smile,
+    Upload,
+    Users,
+    Contact,
+    FileText,
+    Trash2,
+    AlertTriangle,
 } from "lucide-react";
+import { useSession } from "@/components/dashboard/session-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -56,8 +63,19 @@ import {
     type BroadcastRecipientRow,
 } from "@/components/dashboard/broadcast-progress-modal";
 import { CRM_CATEGORIES } from "@/modules/crm/constants";
-import { formatPhoneDisplay } from "@/lib/phone-br";
+import {
+    extractPhonesFromParticipants,
+    formatPhoneDisplay,
+    parsePhoneList,
+} from "@/lib/phone-br";
 import { cn } from "@/lib/utils";
+
+type RecipientSource = "import" | "crm" | "groups";
+type GroupItem = {
+    jid: string;
+    subject?: string | null;
+    participants?: unknown;
+};
 
 type Stats = {
     created: number;
@@ -158,6 +176,17 @@ function recipientDetail(s: string, skip?: string | null, err?: string | null) {
 }
 
 export function DatafyCampaignsPanel() {
+    const { channels } = useSession();
+    const baileysConnected = useMemo(
+        () =>
+            channels.filter(
+                (c) =>
+                    c.provider === "baileys" &&
+                    (c.status || "").toUpperCase() === "CONNECTED"
+            ),
+        [channels]
+    );
+
     const [stats, setStats] = useState<Stats | null>(null);
     const [campaigns, setCampaigns] = useState<Campaign[]>([]);
     const [loading, setLoading] = useState(true);
@@ -186,7 +215,9 @@ export function DatafyCampaignsPanel() {
     const [uploadingImage, setUploadingImage] = useState(false);
     const imageInputRef = useRef<HTMLInputElement>(null);
 
-    const [audienceMode, setAudienceMode] = useState<"all" | "manual">("all");
+    const [recipientSource, setRecipientSource] =
+        useState<RecipientSource>("crm");
+    const [crmPickMode, setCrmPickMode] = useState<"all" | "manual">("all");
     const [showGeoFilters, setShowGeoFilters] = useState(false);
     const [category, setCategory] = useState<string>("all");
     const [tagId, setTagId] = useState<string>("all");
@@ -203,6 +234,24 @@ export function DatafyCampaignsPanel() {
         eligibleCount: number;
         excludedCount: number;
     } | null>(null);
+
+    // Import (TXT/CSV) — same parsePhoneList as Disparo Baileys
+    const [importText, setImportText] = useState("");
+    const [importPhones, setImportPhones] = useState<string[]>([]);
+    const [importStats, setImportStats] = useState<{
+        valid: number;
+        invalid: number;
+        duplicates: number;
+    } | null>(null);
+    const importFileRef = useRef<HTMLInputElement>(null);
+
+    // Groups via Baileys only (Datafy has no groups API)
+    const [groupSessionId, setGroupSessionId] = useState("");
+    const [groups, setGroups] = useState<GroupItem[]>([]);
+    const [groupsLoading, setGroupsLoading] = useState(false);
+    const [selectedGroupJid, setSelectedGroupJid] = useState("");
+    const [importingGroup, setImportingGroup] = useState(false);
+    const [groupPhones, setGroupPhones] = useState<string[]>([]);
 
     const [execMode, setExecMode] = useState<"now" | "schedule">("now");
     const [scheduledAt, setScheduledAt] = useState("");
@@ -368,11 +417,28 @@ export function DatafyCampaignsPanel() {
         if (tRes.ok) setTags(tJson.data?.tags || []);
     };
 
+    const activePhones =
+        recipientSource === "import"
+            ? importPhones
+            : recipientSource === "groups"
+              ? groupPhones
+              : [];
+
     const segmentFilter = useMemo(() => {
-        if (audienceMode === "manual" && selectedIds.size) {
-            return { contactIds: Array.from(selectedIds) };
+        if (recipientSource === "import" || recipientSource === "groups") {
+            return {
+                source: recipientSource,
+                phones: activePhones,
+            };
+        }
+        if (crmPickMode === "manual" && selectedIds.size) {
+            return {
+                source: "crm" as const,
+                contactIds: Array.from(selectedIds),
+            };
         }
         return {
+            source: "crm" as const,
             selectAllEligible: true,
             category: category === "all" ? null : category,
             tagIds: tagId === "all" ? undefined : [tagId],
@@ -382,7 +448,9 @@ export function DatafyCampaignsPanel() {
             search: contactSearch || null,
         };
     }, [
-        audienceMode,
+        recipientSource,
+        activePhones,
+        crmPickMode,
         selectedIds,
         category,
         tagId,
@@ -393,14 +461,204 @@ export function DatafyCampaignsPanel() {
         contactSearch,
     ]);
 
+    const applyParsedPhones = (
+        phones: string[],
+        invalid: string[],
+        duplicates: number,
+        mode: "replace" | "merge" = "replace"
+    ) => {
+        setImportPhones((prev) => {
+            if (mode === "replace") return phones;
+            const seen = new Set(prev);
+            const next = [...prev];
+            for (const p of phones) {
+                if (!seen.has(p)) {
+                    seen.add(p);
+                    next.push(p);
+                }
+            }
+            return next;
+        });
+        setImportStats({
+            valid: phones.length,
+            invalid: invalid.length,
+            duplicates,
+        });
+        setAudience(null);
+    };
+
+    const handleImportFile = async (file: File) => {
+        try {
+            const text = await file.text();
+            const { phones, invalid, duplicates } = parsePhoneList(text);
+            setImportText(phones.join("\n"));
+            if (!phones.length) {
+                setImportStats({
+                    valid: 0,
+                    invalid: invalid.length,
+                    duplicates,
+                });
+                toast.error("Arquivo sem números válidos do Brasil");
+                return;
+            }
+            applyParsedPhones(phones, invalid, duplicates, "merge");
+            toast.success(
+                `Importados ${phones.length} número(s)` +
+                    (invalid.length ? ` · ${invalid.length} inválido(s)` : "") +
+                    (duplicates ? ` · ${duplicates} repetido(s)` : "")
+            );
+        } catch {
+            toast.error("Falha ao ler o arquivo");
+        } finally {
+            if (importFileRef.current) importFileRef.current.value = "";
+        }
+    };
+
+    const handleNormalizeImport = () => {
+        const { phones, invalid, duplicates } = parsePhoneList(importText);
+        setImportText(phones.join("\n"));
+        applyParsedPhones(phones, invalid, duplicates, "replace");
+        if (!phones.length) {
+            toast.error("Nenhum número válido encontrado");
+            return;
+        }
+        toast.success(
+            `${phones.length} válido(s)` +
+                (invalid.length ? ` · ${invalid.length} inválido(s)` : "") +
+                (duplicates ? ` · ${duplicates} repetido(s)` : "")
+        );
+    };
+
+    const fetchGroups = useCallback(async (sid: string) => {
+        if (!sid) {
+            setGroups([]);
+            return;
+        }
+        setGroupsLoading(true);
+        try {
+            const res = await fetch(`/api/groups/${sid}`);
+            if (res.ok) {
+                const data = await res.json();
+                setGroups(data?.data || []);
+            } else {
+                setGroups([]);
+                toast.error("Não foi possível listar grupos desta sessão");
+            }
+        } catch {
+            setGroups([]);
+            toast.error("Falha ao carregar grupos");
+        } finally {
+            setGroupsLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (recipientSource !== "groups") return;
+        if (!groupSessionId && baileysConnected[0]) {
+            setGroupSessionId(baileysConnected[0].id);
+        }
+    }, [recipientSource, baileysConnected, groupSessionId]);
+
+    useEffect(() => {
+        if (recipientSource === "groups" && groupSessionId) {
+            void fetchGroups(groupSessionId);
+        }
+    }, [recipientSource, groupSessionId, fetchGroups]);
+
+    const handleImportGroup = async () => {
+        if (!groupSessionId || !selectedGroupJid) {
+            toast.error("Selecione sessão Baileys e um grupo");
+            return;
+        }
+        setImportingGroup(true);
+        try {
+            let participants: unknown[] = [];
+            try {
+                const liveRes = await fetch(
+                    `/api/groups/${groupSessionId}/${encodeURIComponent(selectedGroupJid)}`
+                );
+                if (liveRes.ok) {
+                    const meta = await liveRes.json();
+                    participants = meta?.participants || [];
+                }
+            } catch {
+                /* fallback */
+            }
+            if (!participants.length) {
+                const group = groups.find((g) => g.jid === selectedGroupJid);
+                participants = (group?.participants as unknown[]) || [];
+            }
+            const phones = extractPhonesFromParticipants(participants);
+            if (!phones.length) {
+                toast.error(
+                    "Nenhum telefone extraível neste grupo (pode haver só LIDs)"
+                );
+                return;
+            }
+            setGroupPhones((prev) => {
+                const seen = new Set(prev);
+                const next = [...prev];
+                for (const p of phones) {
+                    if (!seen.has(p)) {
+                        seen.add(p);
+                        next.push(p);
+                    }
+                }
+                return next;
+            });
+            setAudience(null);
+            toast.success(
+                `${phones.length} número(s) do grupo. Participação em grupo não é consentimento de marketing.`
+            );
+        } catch {
+            toast.error("Falha ao extrair números do grupo");
+        } finally {
+            setImportingGroup(false);
+        }
+    };
+
+    const removePhone = (phone: string) => {
+        if (recipientSource === "import") {
+            setImportPhones((prev) => prev.filter((p) => p !== phone));
+            setImportText((prev) =>
+                prev
+                    .split("\n")
+                    .filter((l) => l.trim() !== phone)
+                    .join("\n")
+            );
+        } else {
+            setGroupPhones((prev) => prev.filter((p) => p !== phone));
+        }
+        setAudience(null);
+    };
+
     const previewAudience = async () => {
+        let filter = segmentFilter;
+        if (recipientSource === "import" && importText.trim()) {
+            const { phones, invalid, duplicates } = parsePhoneList(importText);
+            setImportText(phones.join("\n"));
+            applyParsedPhones(phones, invalid, duplicates, "replace");
+            filter = { source: "import", phones };
+        }
+        if (
+            (filter.source === "import" || filter.source === "groups") &&
+            !(filter.phones?.length)
+        ) {
+            toast.error("Adicione números válidos antes de calcular");
+            return;
+        }
+        const consent =
+            purpose === "marketing" ? true : requireConsent;
+        if (purpose === "marketing" && !requireConsent) {
+            setRequireConsent(true);
+        }
         const res = await fetch("/api/channels/datafy/campaigns/preview", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 purpose,
-                requireConsent,
-                segmentFilter,
+                requireConsent: consent,
+                segmentFilter: filter,
             }),
         });
         const json = await res.json().catch(() => ({}));
@@ -410,7 +668,7 @@ export function DatafyCampaignsPanel() {
         }
         setAudience(json.data);
         toast.success(
-            `${json.data.eligibleCount} elegíveis · ${json.data.excludedCount} excluídos`
+            `${json.data.eligibleCount} aptos · ${json.data.excludedCount} excluídos`
         );
     };
 
@@ -427,7 +685,8 @@ export function DatafyCampaignsPanel() {
         setHeaderImageUrl(null);
         setHeaderImageHandle(null);
         setImagePreview(null);
-        setAudienceMode("all");
+        setRecipientSource("crm");
+        setCrmPickMode("all");
         setShowGeoFilters(false);
         setCategory("all");
         setTagId("all");
@@ -437,6 +696,14 @@ export function DatafyCampaignsPanel() {
         setContactSearch("");
         setSelectedIds(new Set());
         setAudience(null);
+        setImportText("");
+        setImportPhones([]);
+        setImportStats(null);
+        setGroupSessionId("");
+        setGroups([]);
+        setSelectedGroupJid("");
+        setGroupPhones([]);
+        setRequireConsent(true);
         setExecMode("now");
         setScheduledAt("");
         setDryRun(true);
@@ -605,6 +872,16 @@ export function DatafyCampaignsPanel() {
             return;
         }
 
+        let finalFilter = segmentFilter;
+        if (recipientSource === "import") {
+            const parsed = parsePhoneList(importText || importPhones.join("\n"));
+            finalFilter = { source: "import", phones: parsed.phones };
+        } else if (recipientSource === "groups") {
+            finalFilter = { source: "groups", phones: groupPhones };
+        }
+        const consentForced =
+            purpose === "marketing" ? true : requireConsent;
+
         setSaving(true);
         try {
             const res = await fetch("/api/channels/datafy/campaigns", {
@@ -623,11 +900,11 @@ export function DatafyCampaignsPanel() {
                     headerImageUrl,
                     headerImageHandle,
                     variableMapping: { body: vars },
-                    segmentFilter,
+                    segmentFilter: finalFilter,
                     scheduledAt:
                         execMode === "schedule" ? scheduledAt : null,
                     dryRun,
-                    requireConsent,
+                    requireConsent: consentForced,
                     delayMs,
                 }),
             });
@@ -1184,236 +1461,712 @@ export function DatafyCampaignsPanel() {
                     )}
 
                     {step === 2 && (
-                        <div className="space-y-4">
-                            <div className="flex flex-wrap gap-2">
-                                <Button
-                                    type="button"
-                                    variant={
-                                        audienceMode === "all"
-                                            ? "default"
-                                            : "outline"
-                                    }
-                                    className="rounded-xl"
-                                    onClick={() => setAudienceMode("all")}
-                                >
-                                    Todos elegíveis (Brasil)
-                                </Button>
-                                <Button
-                                    type="button"
-                                    variant={
-                                        audienceMode === "manual"
-                                            ? "default"
-                                            : "outline"
-                                    }
-                                    className="rounded-xl"
-                                    onClick={() => setAudienceMode("manual")}
-                                >
-                                    Seleção manual
-                                </Button>
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    className="rounded-xl"
-                                    onClick={() =>
-                                        setShowGeoFilters((v) => !v)
-                                    }
-                                >
-                                    Filtros opcionais
-                                </Button>
+                        <div className="space-y-5">
+                            <div>
+                                <p className="text-sm font-medium">
+                                    Fonte dos destinatários
+                                </p>
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                    Contatos de qualquer região do Brasil.
+                                    Importação e grupos não autorizam marketing
+                                    sozinhos — a Datafy exige consentimento
+                                    válido.
+                                </p>
                             </div>
 
-                            <div className="grid sm:grid-cols-2 gap-3">
-                                <div className="space-y-1.5">
-                                    <Label>Categoria (opcional)</Label>
-                                    <Select
-                                        value={category}
-                                        onValueChange={setCategory}
-                                    >
-                                        <SelectTrigger>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="all">
-                                                Todas
-                                            </SelectItem>
-                                            {CRM_CATEGORIES.map((c) => (
-                                                <SelectItem key={c} value={c}>
-                                                    {c}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div className="space-y-1.5">
-                                    <Label>Etiqueta (opcional)</Label>
-                                    <Select
-                                        value={tagId}
-                                        onValueChange={setTagId}
-                                    >
-                                        <SelectTrigger>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="all">
-                                                Todas
-                                            </SelectItem>
-                                            {tags.map((t) => (
-                                                <SelectItem
-                                                    key={t.id}
-                                                    value={t.id}
-                                                >
-                                                    {t.name}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+                            <div className="grid gap-3 sm:grid-cols-3">
+                                {(
+                                    [
+                                        {
+                                            id: "import" as const,
+                                            title: "Importar números",
+                                            desc: "TXT/CSV — mesma lógica do Disparo",
+                                            icon: FileText,
+                                        },
+                                        {
+                                            id: "crm" as const,
+                                            title: "Contatos do CRM",
+                                            desc: "Seleção individual ou em lote",
+                                            icon: Contact,
+                                        },
+                                        {
+                                            id: "groups" as const,
+                                            title: "Grupos WhatsApp",
+                                            desc: "Via sessão Baileys conectada",
+                                            icon: Users,
+                                        },
+                                    ] as const
+                                ).map((opt) => {
+                                    const Icon = opt.icon;
+                                    const active = recipientSource === opt.id;
+                                    return (
+                                        <button
+                                            key={opt.id}
+                                            type="button"
+                                            onClick={() => {
+                                                setRecipientSource(opt.id);
+                                                setAudience(null);
+                                            }}
+                                            className={cn(
+                                                "rounded-2xl border p-4 text-left transition-all",
+                                                active
+                                                    ? "border-emerald-600 bg-emerald-50/80 shadow-sm ring-1 ring-emerald-600/20"
+                                                    : "hover:border-foreground/20 hover:bg-muted/30"
+                                            )}
+                                        >
+                                            <Icon
+                                                className={cn(
+                                                    "h-5 w-5 mb-2",
+                                                    active
+                                                        ? "text-emerald-700"
+                                                        : "text-muted-foreground"
+                                                )}
+                                            />
+                                            <p className="text-sm font-semibold">
+                                                {opt.title}
+                                            </p>
+                                            <p className="text-[11px] text-muted-foreground mt-1 leading-snug">
+                                                {opt.desc}
+                                            </p>
+                                        </button>
+                                    );
+                                })}
                             </div>
 
-                            {showGeoFilters && (
-                                <div className="grid sm:grid-cols-3 gap-3 rounded-xl border bg-muted/20 p-3">
-                                    <div className="space-y-1.5">
-                                        <Label>Cidade</Label>
-                                        <Input
-                                            value={city}
-                                            onChange={(e) =>
-                                                setCity(e.target.value)
-                                            }
+                            {recipientSource === "import" && (
+                                <div className="space-y-3 rounded-2xl border bg-muted/15 p-4">
+                                    <div className="flex flex-wrap gap-2">
+                                        <input
+                                            ref={importFileRef}
+                                            type="file"
+                                            accept=".txt,.csv,text/plain,text/csv"
+                                            className="hidden"
+                                            onChange={(e) => {
+                                                const f = e.target.files?.[0];
+                                                if (f) void handleImportFile(f);
+                                            }}
                                         />
-                                    </div>
-                                    <div className="space-y-1.5">
-                                        <Label>UF</Label>
-                                        <Input
-                                            value={stateUf}
-                                            maxLength={2}
-                                            onChange={(e) =>
-                                                setStateUf(
-                                                    e.target.value.toUpperCase()
-                                                )
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            className="rounded-xl"
+                                            onClick={() =>
+                                                importFileRef.current?.click()
                                             }
-                                        />
+                                        >
+                                            <Upload className="h-4 w-4 mr-2" />
+                                            Importar TXT/CSV
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            size="sm"
+                                            className="rounded-xl"
+                                            onClick={handleNormalizeImport}
+                                        >
+                                            Normalizar e deduplicar
+                                        </Button>
                                     </div>
-                                    <div className="space-y-1.5">
-                                        <Label>Empresa</Label>
-                                        <Input
-                                            value={company}
-                                            onChange={(e) =>
-                                                setCompany(e.target.value)
-                                            }
-                                        />
-                                    </div>
-                                    <p className="sm:col-span-3 text-[11px] text-muted-foreground">
-                                        Filtros geográficos são opcionais —
-                                        contatos de vários estados podem entrar
-                                        na mesma campanha.
-                                    </p>
-                                </div>
-                            )}
-
-                            {audienceMode === "manual" && (
-                                <div className="space-y-2">
-                                    <Input
-                                        placeholder="Buscar nome ou telefone…"
-                                        value={contactSearch}
-                                        onChange={(e) =>
-                                            setContactSearch(e.target.value)
+                                    <Textarea
+                                        rows={5}
+                                        placeholder={
+                                            "Cole números (qualquer DDD do Brasil)\nEx.: 45991253256\n11999998888"
                                         }
+                                        value={importText}
+                                        onChange={(e) => {
+                                            setImportText(e.target.value);
+                                            setAudience(null);
+                                        }}
+                                        className="font-mono text-xs rounded-xl"
                                     />
-                                    <div className="max-h-48 overflow-y-auto rounded-xl border divide-y">
-                                        {filteredCrm.map((c) => {
-                                            const checked = selectedIds.has(
-                                                c.id
-                                            );
-                                            return (
-                                                <label
-                                                    key={c.id}
-                                                    className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/40 cursor-pointer"
-                                                >
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={checked}
-                                                        onChange={() => {
-                                                            setSelectedIds(
-                                                                (prev) => {
-                                                                    const next =
-                                                                        new Set(
-                                                                            prev
-                                                                        );
-                                                                    if (
-                                                                        next.has(
-                                                                            c.id
-                                                                        )
-                                                                    )
-                                                                        next.delete(
-                                                                            c.id
-                                                                        );
-                                                                    else
-                                                                        next.add(
-                                                                            c.id
-                                                                        );
-                                                                    return next;
-                                                                }
-                                                            );
-                                                        }}
-                                                    />
-                                                    <span className="flex-1 truncate">
-                                                        {c.fullName ||
-                                                            "Sem nome"}
-                                                        <span className="text-muted-foreground text-xs ml-2">
-                                                            {formatPhoneDisplay(
-                                                                c.waId
-                                                            ) || c.waId}
-                                                            {c.state
-                                                                ? ` · ${c.state}`
-                                                                : ""}
-                                                        </span>
-                                                    </span>
-                                                </label>
-                                            );
-                                        })}
-                                    </div>
-                                    <p className="text-xs text-muted-foreground">
-                                        {selectedIds.size} selecionado(s)
+                                    {importStats && (
+                                        <div className="flex flex-wrap gap-3 text-xs">
+                                            <span className="text-emerald-700 font-medium">
+                                                {importStats.valid} válido(s)
+                                            </span>
+                                            <span className="text-amber-700">
+                                                {importStats.invalid} inválido(s)
+                                            </span>
+                                            <span className="text-muted-foreground">
+                                                {importStats.duplicates}{" "}
+                                                repetido(s)
+                                            </span>
+                                            <span className="text-foreground">
+                                                Lista atual: {importPhones.length}
+                                            </span>
+                                        </div>
+                                    )}
+                                    <p className="text-[11px] text-muted-foreground flex gap-1.5 items-start">
+                                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600" />
+                                        Importar números não concede
+                                        autorização comercial. Marketing exige
+                                        consentimento no CRM (Datafy).
                                     </p>
                                 </div>
                             )}
+
+                            {recipientSource === "crm" && (
+                                <div className="space-y-3 rounded-2xl border bg-muted/15 p-4">
+                                    <div className="flex flex-wrap gap-2">
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant={
+                                                crmPickMode === "all"
+                                                    ? "default"
+                                                    : "outline"
+                                            }
+                                            className="rounded-xl"
+                                            onClick={() => {
+                                                setCrmPickMode("all");
+                                                setAudience(null);
+                                            }}
+                                        >
+                                            Todos elegíveis
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant={
+                                                crmPickMode === "manual"
+                                                    ? "default"
+                                                    : "outline"
+                                            }
+                                            className="rounded-xl"
+                                            onClick={() => {
+                                                setCrmPickMode("manual");
+                                                setAudience(null);
+                                            }}
+                                        >
+                                            Seleção manual / lote
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            className="rounded-xl"
+                                            onClick={() =>
+                                                setShowGeoFilters((v) => !v)
+                                            }
+                                        >
+                                            Filtros opcionais
+                                        </Button>
+                                    </div>
+
+                                    <div className="grid sm:grid-cols-2 gap-3">
+                                        <div className="space-y-1.5">
+                                            <Label>Categoria</Label>
+                                            <Select
+                                                value={category}
+                                                onValueChange={(v) => {
+                                                    setCategory(v);
+                                                    setAudience(null);
+                                                }}
+                                            >
+                                                <SelectTrigger>
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="all">
+                                                        Todas
+                                                    </SelectItem>
+                                                    {CRM_CATEGORIES.map(
+                                                        (c) => (
+                                                            <SelectItem
+                                                                key={c}
+                                                                value={c}
+                                                            >
+                                                                {c}
+                                                            </SelectItem>
+                                                        )
+                                                    )}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <Label>Etiqueta</Label>
+                                            <Select
+                                                value={tagId}
+                                                onValueChange={(v) => {
+                                                    setTagId(v);
+                                                    setAudience(null);
+                                                }}
+                                            >
+                                                <SelectTrigger>
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="all">
+                                                        Todas
+                                                    </SelectItem>
+                                                    {tags.map((t) => (
+                                                        <SelectItem
+                                                            key={t.id}
+                                                            value={t.id}
+                                                        >
+                                                            {t.name}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    </div>
+
+                                    {showGeoFilters && (
+                                        <div className="grid sm:grid-cols-3 gap-3 rounded-xl border bg-background/60 p-3">
+                                            <div className="space-y-1.5">
+                                                <Label>Cidade</Label>
+                                                <Input
+                                                    value={city}
+                                                    onChange={(e) => {
+                                                        setCity(
+                                                            e.target.value
+                                                        );
+                                                        setAudience(null);
+                                                    }}
+                                                />
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                <Label>UF</Label>
+                                                <Input
+                                                    value={stateUf}
+                                                    maxLength={2}
+                                                    onChange={(e) => {
+                                                        setStateUf(
+                                                            e.target.value.toUpperCase()
+                                                        );
+                                                        setAudience(null);
+                                                    }}
+                                                />
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                <Label>Empresa</Label>
+                                                <Input
+                                                    value={company}
+                                                    onChange={(e) => {
+                                                        setCompany(
+                                                            e.target.value
+                                                        );
+                                                        setAudience(null);
+                                                    }}
+                                                />
+                                            </div>
+                                            <p className="sm:col-span-3 text-[11px] text-muted-foreground">
+                                                Filtros geográficos são
+                                                opcionais — vários estados na
+                                                mesma campanha.
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {crmPickMode === "manual" && (
+                                        <div className="space-y-2">
+                                            <div className="flex gap-2">
+                                                <Input
+                                                    placeholder="Buscar nome ou telefone…"
+                                                    value={contactSearch}
+                                                    onChange={(e) =>
+                                                        setContactSearch(
+                                                            e.target.value
+                                                        )
+                                                    }
+                                                />
+                                                <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    variant="outline"
+                                                    className="shrink-0 rounded-xl"
+                                                    onClick={() => {
+                                                        setSelectedIds(
+                                                            new Set(
+                                                                filteredCrm.map(
+                                                                    (c) => c.id
+                                                                )
+                                                            )
+                                                        );
+                                                        setAudience(null);
+                                                    }}
+                                                >
+                                                    Marcar visíveis
+                                                </Button>
+                                            </div>
+                                            <div className="max-h-48 overflow-y-auto rounded-xl border divide-y bg-background">
+                                                {filteredCrm.map((c) => {
+                                                    const checked =
+                                                        selectedIds.has(c.id);
+                                                    return (
+                                                        <label
+                                                            key={c.id}
+                                                            className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/40 cursor-pointer"
+                                                        >
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={
+                                                                    checked
+                                                                }
+                                                                onChange={() => {
+                                                                    setSelectedIds(
+                                                                        (
+                                                                            prev
+                                                                        ) => {
+                                                                            const next =
+                                                                                new Set(
+                                                                                    prev
+                                                                                );
+                                                                            if (
+                                                                                next.has(
+                                                                                    c.id
+                                                                                )
+                                                                            )
+                                                                                next.delete(
+                                                                                    c.id
+                                                                                );
+                                                                            else
+                                                                                next.add(
+                                                                                    c.id
+                                                                                );
+                                                                            return next;
+                                                                        }
+                                                                    );
+                                                                    setAudience(
+                                                                        null
+                                                                    );
+                                                                }}
+                                                            />
+                                                            <span className="flex-1 truncate">
+                                                                {c.fullName ||
+                                                                    "Sem nome"}
+                                                                <span className="text-muted-foreground text-xs ml-2">
+                                                                    {formatPhoneDisplay(
+                                                                        c.waId
+                                                                    ) ||
+                                                                        c.waId}
+                                                                    {c.state
+                                                                        ? ` · ${c.state}`
+                                                                        : ""}
+                                                                    {c.consentStatus ===
+                                                                    "granted"
+                                                                        ? " · ok"
+                                                                        : ""}
+                                                                </span>
+                                                            </span>
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                            <p className="text-xs text-muted-foreground">
+                                                {selectedIds.size}{" "}
+                                                selecionado(s)
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {recipientSource === "groups" && (
+                                <div className="space-y-3 rounded-2xl border bg-muted/15 p-4">
+                                    <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2.5 text-[12px] text-amber-950 leading-relaxed">
+                                        <p className="font-medium flex items-center gap-1.5">
+                                            <AlertTriangle className="h-3.5 w-3.5" />
+                                            Limitação da API Datafy / WhatsApp
+                                            Business Platform
+                                        </p>
+                                        <p className="mt-1">
+                                            A Datafy e a Cloud API oficial não
+                                            oferecem endpoint para listar
+                                            grupos ou participantes. Esta
+                                            opção usa apenas a sessão{" "}
+                                            <strong>Baileys</strong> já
+                                            conectada — isolada do canal
+                                            oficial. Números de grupo não são
+                                            consentimento de marketing e não
+                                            são copiados automaticamente para
+                                            campanhas.
+                                        </p>
+                                    </div>
+
+                                    {!baileysConnected.length ? (
+                                        <p className="text-sm text-muted-foreground">
+                                            Nenhuma sessão Baileys CONNECTED.
+                                            Conecte uma sessão no menu Sessões
+                                            para visualizar grupos.
+                                        </p>
+                                    ) : (
+                                        <>
+                                            <div className="grid sm:grid-cols-2 gap-3">
+                                                <div className="space-y-1.5">
+                                                    <Label>
+                                                        Sessão Baileys
+                                                    </Label>
+                                                    <Select
+                                                        value={groupSessionId}
+                                                        onValueChange={(
+                                                            v
+                                                        ) => {
+                                                            setGroupSessionId(
+                                                                v
+                                                            );
+                                                            setSelectedGroupJid(
+                                                                ""
+                                                            );
+                                                            setGroupPhones(
+                                                                []
+                                                            );
+                                                            setAudience(null);
+                                                        }}
+                                                    >
+                                                        <SelectTrigger>
+                                                            <SelectValue placeholder="Selecione" />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            {baileysConnected.map(
+                                                                (s) => (
+                                                                    <SelectItem
+                                                                        key={
+                                                                            s.id
+                                                                        }
+                                                                        value={
+                                                                            s.id
+                                                                        }
+                                                                    >
+                                                                        {s.name}{" "}
+                                                                        (
+                                                                        {s.status}
+                                                                        )
+                                                                    </SelectItem>
+                                                                )
+                                                            )}
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <Label>Grupo</Label>
+                                                    <div className="flex gap-2">
+                                                        <Select
+                                                            value={
+                                                                selectedGroupJid
+                                                            }
+                                                            onValueChange={
+                                                                setSelectedGroupJid
+                                                            }
+                                                        >
+                                                            <SelectTrigger className="flex-1">
+                                                                <SelectValue
+                                                                    placeholder={
+                                                                        groupsLoading
+                                                                            ? "Carregando…"
+                                                                            : "Selecione um grupo"
+                                                                    }
+                                                                />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                {groups.map(
+                                                                    (g) => (
+                                                                        <SelectItem
+                                                                            key={
+                                                                                g.jid
+                                                                            }
+                                                                            value={
+                                                                                g.jid
+                                                                            }
+                                                                        >
+                                                                            {g.subject ||
+                                                                                g.jid}{" "}
+                                                                            (
+                                                                            {Array.isArray(
+                                                                                g.participants
+                                                                            )
+                                                                                ? g
+                                                                                      .participants
+                                                                                      .length
+                                                                                : 0}
+                                                                            )
+                                                                        </SelectItem>
+                                                                    )
+                                                                )}
+                                                            </SelectContent>
+                                                        </Select>
+                                                        <Button
+                                                            type="button"
+                                                            variant="secondary"
+                                                            size="icon"
+                                                            className="shrink-0 rounded-xl"
+                                                            title="Atualizar grupos"
+                                                            onClick={() =>
+                                                                groupSessionId &&
+                                                                void fetchGroups(
+                                                                    groupSessionId
+                                                                )
+                                                            }
+                                                        >
+                                                            <RefreshCw
+                                                                className={cn(
+                                                                    "h-4 w-4",
+                                                                    groupsLoading &&
+                                                                        "animate-spin"
+                                                                )}
+                                                            />
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                className="rounded-xl"
+                                                disabled={
+                                                    !selectedGroupJid ||
+                                                    importingGroup
+                                                }
+                                                onClick={() =>
+                                                    void handleImportGroup()
+                                                }
+                                            >
+                                                {importingGroup ? (
+                                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                                ) : (
+                                                    <Users className="h-4 w-4 mr-2" />
+                                                )}
+                                                Extrair participantes
+                                            </Button>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+
+                            {(recipientSource === "import" ||
+                                recipientSource === "groups") &&
+                                activePhones.length > 0 && (
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <p className="text-sm font-medium">
+                                                Revisar números (
+                                                {activePhones.length})
+                                            </p>
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="sm"
+                                                className="text-destructive"
+                                                onClick={() => {
+                                                    if (
+                                                        recipientSource ===
+                                                        "import"
+                                                    ) {
+                                                        setImportPhones([]);
+                                                        setImportText("");
+                                                        setImportStats(null);
+                                                    } else {
+                                                        setGroupPhones([]);
+                                                    }
+                                                    setAudience(null);
+                                                }}
+                                            >
+                                                Limpar lista
+                                            </Button>
+                                        </div>
+                                        <div className="max-h-40 overflow-y-auto rounded-xl border divide-y">
+                                            {activePhones
+                                                .slice(0, 200)
+                                                .map((p) => (
+                                                    <div
+                                                        key={p}
+                                                        className="flex items-center justify-between px-3 py-1.5 text-sm font-mono"
+                                                    >
+                                                        <span>
+                                                            {formatPhoneDisplay(
+                                                                p
+                                                            ) || p}
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            className="text-muted-foreground hover:text-destructive p-1"
+                                                            onClick={() =>
+                                                                removePhone(p)
+                                                            }
+                                                            aria-label="Remover"
+                                                        >
+                                                            <Trash2 className="h-3.5 w-3.5" />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                        </div>
+                                        {activePhones.length > 200 && (
+                                            <p className="text-[11px] text-muted-foreground">
+                                                Mostrando 200 de{" "}
+                                                {activePhones.length}. Todos
+                                                entram no cálculo de elegíveis.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
 
                             <label className="flex items-center gap-2 text-sm">
                                 <input
                                     type="checkbox"
                                     checked={requireConsent}
-                                    onChange={(e) =>
-                                        setRequireConsent(e.target.checked)
-                                    }
+                                    onChange={(e) => {
+                                        setRequireConsent(e.target.checked);
+                                        setAudience(null);
+                                    }}
                                 />
-                                Exigir consentimento (recomendado para marketing)
+                                Exigir consentimento válido (obrigatório para
+                                marketing pela Datafy)
                             </label>
-                            <Button
-                                variant="outline"
-                                onClick={() => void previewAudience()}
-                            >
-                                Calcular elegíveis
-                            </Button>
-                            {audience && (
-                                <div className="rounded-xl border bg-muted/30 p-3 text-sm">
-                                    <p>
-                                        Selecionados:{" "}
-                                        <strong>{audience.selected}</strong>
-                                    </p>
-                                    <p>
-                                        Elegíveis:{" "}
-                                        <strong className="text-emerald-700">
-                                            {audience.eligibleCount}
-                                        </strong>
-                                    </p>
-                                    <p>
-                                        Excluídos (consentimento/duplicados):{" "}
-                                        <strong className="text-amber-700">
-                                            {audience.excludedCount}
-                                        </strong>
-                                    </p>
-                                </div>
-                            )}
+
+                            <div className="flex flex-wrap items-center gap-3">
+                                <Button
+                                    variant="outline"
+                                    className="rounded-xl"
+                                    onClick={() => {
+                                        if (
+                                            (recipientSource === "import" ||
+                                                recipientSource ===
+                                                    "groups") &&
+                                            !activePhones.length
+                                        ) {
+                                            toast.error(
+                                                "Adicione números antes de calcular"
+                                            );
+                                            return;
+                                        }
+                                        if (
+                                            recipientSource === "crm" &&
+                                            crmPickMode === "manual" &&
+                                            !selectedIds.size
+                                        ) {
+                                            toast.error(
+                                                "Selecione ao menos um contato do CRM"
+                                            );
+                                            return;
+                                        }
+                                        void previewAudience();
+                                    }}
+                                >
+                                    Calcular elegíveis
+                                </Button>
+                                {audience && (
+                                    <div className="rounded-xl border bg-muted/30 px-4 py-2 text-sm flex flex-wrap gap-4">
+                                        <span>
+                                            Selecionados:{" "}
+                                            <strong>{audience.selected}</strong>
+                                        </span>
+                                        <span>
+                                            Aptos:{" "}
+                                            <strong className="text-emerald-700">
+                                                {audience.eligibleCount}
+                                            </strong>
+                                        </span>
+                                        <span>
+                                            Excluídos:{" "}
+                                            <strong className="text-amber-700">
+                                                {audience.excludedCount}
+                                            </strong>
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
 

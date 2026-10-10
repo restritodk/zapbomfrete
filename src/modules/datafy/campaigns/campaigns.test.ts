@@ -6,7 +6,10 @@ import {
     RECIPIENT_STATUS_RANK,
 } from "./constants";
 import { evaluateEligibility } from "./eligibility";
-import { previewRecipients } from "./recipients";
+import {
+    isSyntheticContactId,
+    previewRecipients,
+} from "./recipients";
 import { buildTemplateComponents } from "./variables";
 import {
     canLaunchDatafyCampaigns,
@@ -220,8 +223,52 @@ describe("Phase 5 isolation", () => {
     });
 
     it("Baileys import parsePhoneList unchanged", () => {
-        const { phones } = parsePhoneList("11999998888\n5511888777666");
+        const { phones, invalid, duplicates } = parsePhoneList(
+            "11999998888\n5511888777666\n11999998888\nabc"
+        );
         assert.equal(phones.length, 2);
+        assert.ok(invalid.length >= 1);
+        assert.equal(duplicates, 1);
+    });
+});
+
+describe("Import/group phones for Datafy audience", () => {
+    it("marks synthetic contacts and excludes without consent", () => {
+        assert.equal(isSyntheticContactId("synth:5511999998888"), true);
+        assert.equal(isSyntheticContactId("clxyz123"), false);
+
+        const preview = previewRecipients(
+            [
+                {
+                    id: "synth:5511999998888",
+                    waId: "5511999998888",
+                    fullName: null,
+                    company: null,
+                    city: null,
+                    state: null,
+                    category: null,
+                    origin: "import",
+                    active: true,
+                    consentStatus: "unknown",
+                },
+                {
+                    id: "crm1",
+                    waId: "5511888777666",
+                    fullName: "Com consentimento",
+                    company: null,
+                    city: "Curitiba",
+                    state: "PR",
+                    category: null,
+                    origin: "manual",
+                    active: true,
+                    consentStatus: "granted",
+                },
+            ],
+            { purpose: "marketing", requireConsent: true }
+        );
+        assert.equal(preview.eligibleCount, 1);
+        assert.equal(preview.excludedCount, 1);
+        assert.equal(preview.excluded[0].reason, "missing_consent");
     });
 });
 
