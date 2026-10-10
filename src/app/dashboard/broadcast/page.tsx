@@ -36,6 +36,7 @@ import {
 import { toast } from "sonner";
 import { useSession } from "@/components/dashboard/session-provider";
 import { SessionGuard } from "@/components/dashboard/session-guard";
+import { ProviderUnavailablePanel } from "@/components/dashboard/provider-unavailable";
 import { useSocket } from "@/components/chat/socket-context";
 import {
     BroadcastProgressModal,
@@ -140,7 +141,7 @@ function classifyAttachment(file: File): "image" | "document" | null {
 }
 
 export default function BroadcastPage() {
-    const { sessionId } = useSession();
+    const { sessionId, isDatafyChannel, selectedChannel } = useSession();
     const [contacts, setContacts] = useState("");
     const [message, setMessage] = useState("");
     const [delay, setDelay] = useState([2000]);
@@ -851,6 +852,18 @@ export default function BroadcastPage() {
         { id: "new" as const, label: "Novo disparo", icon: Send },
         { id: "history" as const, label: "Histórico", icon: History },
     ];
+
+    if (isDatafyChannel) {
+        return (
+            <SessionGuard>
+                <ProviderUnavailablePanel
+                    feature="broadcast"
+                    channelName={selectedChannel?.name}
+                    displayPhoneNumber={selectedChannel?.displayPhoneNumber}
+                />
+            </SessionGuard>
+        );
+    }
 
     return (
         <SessionGuard>

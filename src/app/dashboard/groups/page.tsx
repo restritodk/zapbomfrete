@@ -26,6 +26,7 @@ import {
 import { SearchFilter } from "@/components/dashboard/search-filter";
 import { useSession } from "@/components/dashboard/session-provider";
 import { SessionGuard } from "@/components/dashboard/session-guard";
+import { ProviderUnavailablePanel } from "@/components/dashboard/provider-unavailable";
 import { toast } from "sonner";
 import {
     BROADCAST_IMPORT_KEY,
@@ -40,7 +41,7 @@ interface Group {
 }
 
 export default function GroupsPage() {
-    const { sessionId } = useSession();
+    const { sessionId, isDatafyChannel, selectedChannel } = useSession();
     const router = useRouter();
 
     const [groups, setGroups] = useState<Group[]>([]);
@@ -73,12 +74,12 @@ export default function GroupsPage() {
     };
 
     useEffect(() => {
-        if (sessionId) {
+        if (sessionId && !isDatafyChannel) {
             fetchGroups(sessionId);
         } else {
             setGroups([]);
         }
-    }, [sessionId]);
+    }, [sessionId, isDatafyChannel]);
 
     const handleCreateGroup = async () => {
         if (!sessionId || !newGroupName) return;
@@ -216,6 +217,18 @@ export default function GroupsPage() {
     );
 
     const preview = extractPhonesList.slice(0, 8);
+
+    if (isDatafyChannel) {
+        return (
+            <SessionGuard>
+                <ProviderUnavailablePanel
+                    feature="groups"
+                    channelName={selectedChannel?.name}
+                    displayPhoneNumber={selectedChannel?.displayPhoneNumber}
+                />
+            </SessionGuard>
+        );
+    }
 
     return (
         <SessionGuard>

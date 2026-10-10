@@ -1,6 +1,7 @@
 import { NextResponse, NextRequest } from "next/server";
 import { waManager } from "@/modules/whatsapp/manager";
 import { getAuthenticatedUser, canAccessSession } from "@/lib/api-auth";
+import { baileysRouteRejectedForChannel } from "@/modules/channels";
 import QRCode from "qrcode";
 
 // GET: Get QR code for session
@@ -15,6 +16,9 @@ export async function GET(
         if (!user) {
             return NextResponse.json({ status: false, message: "Unauthorized", error: "Unauthorized" }, { status: 401 });
         }
+
+        const datafyBlock = baileysRouteRejectedForChannel(sessionId);
+        if (datafyBlock.rejected) return datafyBlock.response!;
 
         // Check if user can access this session
         const canAccess = await canAccessSession(user.id, user.role, sessionId);

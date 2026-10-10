@@ -7,8 +7,10 @@ import { Input } from "@/components/ui/input";
 import { useRouter } from 'next/navigation';
 import { toast } from "sonner";
 import { Label } from '@/components/ui/label';
-import { Smartphone, Plus, Settings, UserPlus, Loader2 } from 'lucide-react';
+import { Smartphone, Plus, Settings, UserPlus, Loader2, BadgeCheck } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { OfficialDatafyCard } from './official-datafy-card';
+import type { ChannelItem } from './session-provider';
 
 type Session = {
     id: string;
@@ -47,6 +49,7 @@ function statusMeta(status: string) {
 
 export function SessionManager({ user }: { user: any }) {
     const [sessions, setSessions] = useState<Session[]>([]);
+    const [datafyChannel, setDatafyChannel] = useState<ChannelItem | null>(null);
     const [newSessionName, setNewSessionName] = useState("");
     const [newSessionId, setNewSessionId] = useState("");
     const [loading, setLoading] = useState(false);
@@ -55,6 +58,7 @@ export function SessionManager({ user }: { user: any }) {
 
     useEffect(() => {
         fetchSessions();
+        fetchChannels();
 
         const socketInstance = io({
             path: "/api/socket/io",
@@ -91,6 +95,17 @@ export function SessionManager({ user }: { user: any }) {
             if (Array.isArray(data)) setSessions(data);
         });
     }
+
+    const fetchChannels = () => {
+        fetch('/api/channels')
+            .then((res) => res.json())
+            .then((json) => {
+                const list = (json?.data?.channels || []) as ChannelItem[];
+                const official = list.find((c) => c.provider === "datafy") || null;
+                setDatafyChannel(official);
+            })
+            .catch(() => setDatafyChannel(null));
+    };
 
     const createSession = async () => {
         if (!newSessionName) {
@@ -147,11 +162,11 @@ export function SessionManager({ user }: { user: any }) {
                     <div className="space-y-1.5">
                         <div className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-primary/80">
                             <Smartphone className="h-3.5 w-3.5" />
-                            Conexões WhatsApp
+                            Canais e sessões WhatsApp
                         </div>
-                        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Gerenciar sessões</h1>
+                        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Gerenciar conexões</h1>
                         <p className="text-sm text-muted-foreground max-w-xl">
-                            Conecte e administre contas WhatsApp. Cada sessão pode ser compartilhada e gerenciada separadamente.
+                            Canal oficial Datafy (compartilhado) e sessões Baileys independentes por QR Code.
                         </p>
                     </div>
                     <div className="flex items-center gap-3 text-sm">
@@ -167,6 +182,28 @@ export function SessionManager({ user }: { user: any }) {
                 </div>
             </div>
 
+            {/* Official Datafy channel (no QR / no Baileys actions) */}
+            <div className="space-y-3">
+                <div className="flex items-end justify-between gap-3 px-0.5">
+                    <div>
+                        <h2 className="text-base font-semibold tracking-tight inline-flex items-center gap-2">
+                            <BadgeCheck className="h-4 w-4 text-emerald-600" />
+                            Canal oficial
+                        </h2>
+                        <p className="text-sm text-muted-foreground">
+                            WhatsApp Business API via Datafy — compartilhado entre usuários autorizados.
+                        </p>
+                    </div>
+                </div>
+                {datafyChannel ? (
+                    <OfficialDatafyCard channel={datafyChannel} canSelect={true} />
+                ) : (
+                    <div className="rounded-2xl border border-dashed bg-muted/20 px-5 py-8 text-sm text-muted-foreground">
+                        Canal oficial Datafy indisponível para o seu usuário ou ainda não configurado pelo SUPERADMIN.
+                    </div>
+                )}
+            </div>
+
             {/* Create session */}
             <div className="rounded-2xl border bg-card p-5 sm:p-6 shadow-sm">
                 <div className="flex items-start gap-3 mb-5">
@@ -174,9 +211,9 @@ export function SessionManager({ user }: { user: any }) {
                         <Plus className="h-5 w-5" />
                     </div>
                     <div>
-                        <h2 className="text-base font-semibold tracking-tight">Criar nova sessão</h2>
+                        <h2 className="text-base font-semibold tracking-tight">Criar sessão Baileys</h2>
                         <p className="text-sm text-muted-foreground mt-0.5">
-                            Adicione uma nova conta WhatsApp para gerenciar.
+                            Adicione uma conta WhatsApp independente (QR Code). Não utiliza o número oficial Datafy.
                         </p>
                     </div>
                 </div>
@@ -238,10 +275,10 @@ export function SessionManager({ user }: { user: any }) {
                 <div className="flex items-end justify-between gap-3 px-0.5">
                     <div>
                         <h2 className="text-base font-semibold tracking-tight">
-                            Suas sessões
+                            Sessões Baileys
                         </h2>
                         <p className="text-sm text-muted-foreground">
-                            Status em tempo real e ações rápidas.
+                            Status em tempo real, QR Code e ações de conexão.
                         </p>
                     </div>
                 </div>

@@ -34,6 +34,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { SessionGuard } from "@/components/dashboard/session-guard";
+import { ProviderUnavailablePanel } from "@/components/dashboard/provider-unavailable";
 
 interface Contact {
     id: string;
@@ -46,7 +47,7 @@ interface Contact {
 }
 
 export default function ContactListPage() {
-    const { sessionId } = useSession();
+    const { sessionId, isDatafyChannel, selectedChannel } = useSession();
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [loading, setLoading] = useState(false);
 
@@ -71,7 +72,7 @@ export default function ContactListPage() {
     }, [page, sessionId, limit]);
 
     const fetchContacts = async () => {
-        if (!sessionId) return;
+        if (!sessionId || isDatafyChannel) return;
         setLoading(true);
         try {
             const params = new URLSearchParams({
@@ -95,6 +96,18 @@ export default function ContactListPage() {
             setLoading(false);
         }
     };
+
+    if (isDatafyChannel) {
+        return (
+            <SessionGuard>
+                <ProviderUnavailablePanel
+                    feature="contacts"
+                    channelName={selectedChannel?.name}
+                    displayPhoneNumber={selectedChannel?.displayPhoneNumber}
+                />
+            </SessionGuard>
+        );
+    }
 
     return (
         <SessionGuard>

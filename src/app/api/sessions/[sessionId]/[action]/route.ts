@@ -1,6 +1,7 @@
 import { NextResponse, NextRequest } from "next/server";
 import { waManager } from "@/modules/whatsapp/manager";
 import { getAuthenticatedUser, canAccessSession } from "@/lib/api-auth";
+import { baileysRouteRejectedForChannel } from "@/modules/channels";
 import { prisma } from "@/lib/prisma";
 
 export async function POST(
@@ -16,6 +17,9 @@ export async function POST(
         const resolvedParams = await params;
         const sessionId = resolvedParams.sessionId;
         const action = resolvedParams.action;
+
+        const datafyBlock = baileysRouteRejectedForChannel(sessionId);
+        if (datafyBlock.rejected) return datafyBlock.response!;
 
         // Verify access
         const canAccess = await canAccessSession(user.id, user.role, sessionId);

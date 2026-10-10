@@ -2,6 +2,8 @@ import { prisma } from "./prisma";
 import { NextRequest } from "next/server";
 import { auth } from "./auth";
 import { logger } from "./logger";
+import { canAccessDatafyChannel } from "@/modules/channels/access";
+import { isDatafyChannelId, isReservedChannelId } from "@/modules/channels/ids";
 
 // Role hierarchy for permission checks
 const ROLE_HIERARCHY = {
@@ -81,11 +83,15 @@ export function isAdmin(userRole: string): boolean {
 }
 
 /**
- * Check if user can access a session
- * - SUPERADMIN can access all sessions
- * - Other users can access their own sessions OR sessions shared with them
+ * Check if user can access a Baileys session.
+ * Datafy official channel ids are never treated as Baileys sessions here
+ * (returns false) — use canAccessChannel / canAccessDatafyChannel instead.
  */
 export async function canAccessSession(userId: string, userRole: string, sessionId: string): Promise<boolean> {
+    if (isDatafyChannelId(sessionId) || isReservedChannelId(sessionId)) {
+        return false;
+    }
+
     if (isAdmin(userRole)) {
         return true;
     }
@@ -255,4 +261,18 @@ export function generateApiKey(): string {
         result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return result;
+}
+
+/**
+ * Unified channel access (Baileys sessionId or Datafy official channel).
+ */
+export async function canAccessChannel(
+    userId: string,
+    userRole: string,
+    channelId: string
+): Promise<boolean> {
+    if (isDatafyChannelId(channelId)) {
+        return canAccessDatafyChannel(userId, userRole);
+    }
+    return canAccessSession(userId, userRole, channelId);
 }

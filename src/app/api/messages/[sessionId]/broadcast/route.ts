@@ -2,6 +2,11 @@ import { NextResponse, NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { waManager } from "@/modules/whatsapp/manager";
 import { getAuthenticatedUser, canAccessSession } from "@/lib/api-auth";
+import {
+    baileysRouteRejectedForChannel,
+    datafyOutboundNotImplementedResponse,
+    isDatafyChannelId,
+} from "@/modules/channels";
 import { toWhatsAppJid } from "@/lib/phone-br";
 import {
     computeInterRecipientDelayMs,
@@ -161,6 +166,10 @@ export async function POST(
         }
 
         const { sessionId } = await params;
+
+        if (isDatafyChannelId(sessionId) || baileysRouteRejectedForChannel(sessionId).rejected) {
+            return datafyOutboundNotImplementedResponse();
+        }
 
         let payload: Awaited<ReturnType<typeof parseBroadcastRequest>>;
         try {

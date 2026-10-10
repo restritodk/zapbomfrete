@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse, NextRequest } from "next/server";
 import { getAuthenticatedUser, canAccessSession } from "@/lib/api-auth";
+import { baileysRouteRejectedForChannel } from "@/modules/channels";
 
 // GET: List groups for a session
 export async function GET(
@@ -14,6 +15,8 @@ export async function GET(
         }
 
         const { sessionId } = await params;
+        const datafyBlock = baileysRouteRejectedForChannel(sessionId);
+        if (datafyBlock.rejected) return datafyBlock.response!;
 
         // Verify access
         const canAccess = await canAccessSession(user.id, user.role, sessionId);

@@ -120,11 +120,11 @@ export class DatafyProvider {
     }
 
     /**
-     * Phase 1 guard — real outbound campaign sends are not enabled.
+     * Phase 2 guard — real outbound campaign sends are not enabled yet.
      */
     assertOutboundDisabled(): never {
         throw new DatafyApiError(
-            "Envio de campanhas via Datafy desabilitado na Fase 1",
+            "Envio de campanhas via Datafy desabilitado nesta fase",
             403
         );
     }

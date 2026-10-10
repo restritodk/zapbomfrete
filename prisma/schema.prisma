@@ -49,6 +49,7 @@ model User {
   webhooks  Webhook[]
   notifications Notification[]
   sessionAccesses SessionAccess[]
+  datafyChannelAccesses DatafyChannelAccess[]
 }
 
 model Session {
@@ -434,8 +435,24 @@ model DatafyIntegration {
   webhookConfigured  Boolean   @default(false)
   lastVerifiedAt     DateTime?
   lastError          String?   @db.Text
+  /// Who may use the shared official channel operationally (not credentials).
+  /// ROLE_OWNER | EXPLICIT | SUPERADMIN_ONLY
+  operationalAccessMode String @default("ROLE_OWNER")
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+}
+
+/// Explicit grants for operational use of the shared Datafy official channel.
+/// Does not store credentials. Used when operationalAccessMode = EXPLICIT.
+model DatafyChannelAccess {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  grantedById String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
 }
 
 /// Idempotency store for Datafy webhook deliveries (x-datafy-delivery-id).

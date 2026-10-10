@@ -1,27 +1,59 @@
 import { auth } from "@/lib/auth";
-import { ChatInterface } from "@/components/chat/chat-interface";
 import { ChatLayoutClient } from "@/components/chat/chat-layout-client";
+import { ChatInterface } from "@/components/chat/chat-interface";
 import { cookies } from "next/headers";
-import { canAccessSession } from "@/lib/api-auth";
+import { canAccessSession, canAccessChannel } from "@/lib/api-auth";
 import { SessionGuard } from "@/components/dashboard/session-guard";
+import { isDatafyChannelId } from "@/modules/channels/ids";
+import { getAccessibleDatafyChannel } from "@/modules/channels/datafy-channel";
+import { DatafyChatPlaceholder } from "@/components/dashboard/datafy-chat-placeholder";
 
 export default async function ChatPage() {
     const session = await auth();
-    console.log("ChatPage Session (Role debug):", session?.user?.role);
 
     if (!session?.user?.id) return <div>Não autorizado</div>;
 
     const cookieStore = await cookies();
-    const sessionId = cookieStore.get("sessionId")?.value;
+    const channelId = cookieStore.get("sessionId")?.value;
+
+    if (channelId && isDatafyChannelId(channelId)) {
+        const allowed = await canAccessChannel(
+            session.user.id,
+            session.user.role,
+            channelId
+        );
+        if (!allowed) {
+            return (
+                <SessionGuard>
+                    <ChatInterface sessionId={null} />
+                </SessionGuard>
+            );
+        }
+        const channel = await getAccessibleDatafyChannel(
+            session.user.id,
+            session.user.role
+        );
+        return (
+            <div className="h-[calc(100vh-6.5rem)] sm:h-[calc(100vh-6rem)] rounded-2xl border bg-card">
+                <DatafyChatPlaceholder
+                    channelName={channel?.name}
+                    displayPhoneNumber={channel?.displayPhoneNumber}
+                    status={channel?.status}
+                />
+            </div>
+        );
+    }
+
     let validSessionId: string | null = null;
 
-    if (sessionId) {
-        // Validate access
-        const hasAccess = await canAccessSession(session.user.id, session.user.role, sessionId);
+    if (channelId) {
+        const hasAccess = await canAccessSession(
+            session.user.id,
+            session.user.role,
+            channelId
+        );
         if (hasAccess) {
-            // Ideally also check if CONNECTED but canAccessSession checks ownership.
-            // We can do an extra check if needed.
-            validSessionId = sessionId;
+            validSessionId = channelId;
         }
     }
 

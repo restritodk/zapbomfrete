@@ -75,6 +75,11 @@ export default function DatafyIntegrationPage() {
     const [webhookSecret, setWebhookSecret] = useState("");
     const [showToken, setShowToken] = useState(false);
     const [showSecret, setShowSecret] = useState(false);
+    const [accessMode, setAccessMode] = useState<
+        "ROLE_OWNER" | "EXPLICIT" | "SUPERADMIN_ONLY"
+    >("ROLE_OWNER");
+    const [accessUserIds, setAccessUserIds] = useState("");
+    const [savingAccess, setSavingAccess] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -91,12 +96,54 @@ export default function DatafyIntegrationPage() {
             setWebhookConfigured(Boolean(s.webhookConfigured));
             setChannelToken("");
             setWebhookSecret("");
+
+            const accessRes = await fetch("/api/channels/datafy/access");
+            if (accessRes.ok) {
+                const accessJson = await accessRes.json().catch(() => ({}));
+                const access = accessJson?.data;
+                if (access?.mode) setAccessMode(access.mode);
+                if (Array.isArray(access?.userIds)) {
+                    setAccessUserIds(access.userIds.join(", "));
+                }
+            }
         } catch {
             toast.error("Erro ao carregar Datafy");
         } finally {
             setLoading(false);
         }
     }, []);
+
+    const handleSaveAccess = async () => {
+        if (!isAdmin) {
+            toast.error("Sem permissão");
+            return;
+        }
+        setSavingAccess(true);
+        try {
+            const userIds =
+                accessMode === "EXPLICIT"
+                    ? accessUserIds
+                          .split(/[,\s]+/)
+                          .map((s) => s.trim())
+                          .filter(Boolean)
+                    : [];
+            const res = await fetch("/api/channels/datafy/access", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode: accessMode, userIds }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                toast.error(data.message || "Falha ao salvar acesso");
+                return;
+            }
+            toast.success("Acesso operacional do canal atualizado");
+        } catch {
+            toast.error("Erro ao salvar acesso");
+        } finally {
+            setSavingAccess(false);
+        }
+    };
 
     useEffect(() => {
         if (authStatus === "authenticated") void load();
@@ -206,7 +253,9 @@ export default function DatafyIntegrationPage() {
                 <CardHeader>
                     <CardTitle>Acesso restrito</CardTitle>
                     <CardDescription>
-                        Apenas administradores podem gerenciar a Datafy API.
+                        Apenas SUPERADMIN pode alterar credenciais, webhook e
+                        habilitação da Datafy. Usuários OWNER autorizados podem
+                        selecionar o canal oficial em Sessões / seletor global.
                     </CardDescription>
                 </CardHeader>
             </Card>
@@ -237,7 +286,7 @@ export default function DatafyIntegrationPage() {
                     </h2>
                     <p className="mt-1 text-sm text-muted-foreground">
                         Integração oficial WhatsApp (Meta Cloud) via Datafy —
-                        Fase 1: conexão, webhook e templates. Sem campanhas.
+                        canal compartilhado. Sem campanhas nesta fase.
                     </p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => void load()}>
@@ -483,6 +532,79 @@ export default function DatafyIntegrationPage() {
                             ))}
                         </ul>
                     </div>
+                </CardContent>
+            </Card>
+
+            <Card className="border-slate-200/80 shadow-sm">
+                <CardHeader>
+                    <div className="flex items-start gap-3">
+                        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-violet-50 text-violet-700">
+                            <Shield className="h-5 w-5" />
+                        </div>
+                        <div>
+                            <CardTitle className="text-lg">
+                                Acesso operacional ao canal
+                            </CardTitle>
+                            <CardDescription className="mt-1">
+                                Define quem pode selecionar o canal oficial
+                                compartilhado. Não altera tokens nem webhook.
+                            </CardDescription>
+                        </div>
+                    </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                        <Label htmlFor="accessMode">Modo de acesso</Label>
+                        <select
+                            id="accessMode"
+                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                            value={accessMode}
+                            onChange={(e) =>
+                                setAccessMode(
+                                    e.target.value as
+                                        | "ROLE_OWNER"
+                                        | "EXPLICIT"
+                                        | "SUPERADMIN_ONLY"
+                                )
+                            }
+                        >
+                            <option value="ROLE_OWNER">
+                                SUPERADMIN + todos os OWNER
+                            </option>
+                            <option value="EXPLICIT">
+                                SUPERADMIN + usuários explícitos (IDs)
+                            </option>
+                            <option value="SUPERADMIN_ONLY">
+                                Somente SUPERADMIN
+                            </option>
+                        </select>
+                    </div>
+                    {accessMode === "EXPLICIT" && (
+                        <div className="space-y-2">
+                            <Label htmlFor="accessUserIds">
+                                IDs de usuário (separados por vírgula)
+                            </Label>
+                            <Input
+                                id="accessUserIds"
+                                value={accessUserIds}
+                                onChange={(e) => setAccessUserIds(e.target.value)}
+                                placeholder="cuid1, cuid2"
+                            />
+                        </div>
+                    )}
+                    <Button
+                        type="button"
+                        variant="outline"
+                        disabled={savingAccess}
+                        onClick={() => void handleSaveAccess()}
+                    >
+                        {savingAccess ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <Save className="mr-2 h-4 w-4" />
+                        )}
+                        Salvar acesso operacional
+                    </Button>
                 </CardContent>
             </Card>
 

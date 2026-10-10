@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { batchResolveToPhoneJid } from "@/lib/jid-utils";
 import { getAuthenticatedUser, canAccessSession } from "@/lib/api-auth";
+import { baileysRouteRejectedForChannel } from "@/modules/channels";
 
 export async function GET(
     req: NextRequest,
@@ -15,6 +16,8 @@ export async function GET(
         }
 
         const { sessionId } = await params;
+        const datafyBlock = baileysRouteRejectedForChannel(sessionId);
+        if (datafyBlock.rejected) return datafyBlock.response!;
         const { searchParams } = new URL(req.url);
         const page = parseInt(searchParams.get("page") || "1");
         const limitParam = searchParams.get("limit") || "10";

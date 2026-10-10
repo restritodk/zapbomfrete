@@ -1,7 +1,7 @@
 import { NextResponse, NextRequest } from "next/server";
 import { waManager } from "@/modules/whatsapp/manager";
-import { prisma } from "@/lib/prisma";
 import { getAuthenticatedUser, getAccessibleSessions } from "@/lib/api-auth";
+import { isReservedChannelId } from "@/modules/channels/ids";
 
 export const dynamic = 'force-dynamic';
 
@@ -35,6 +35,18 @@ export async function POST(request: NextRequest) {
 
         if (!name) {
             return NextResponse.json({ status: false, message: "Session name is required", error: "Session name is required" }, { status: 400 });
+        }
+
+        if (sessionId && isReservedChannelId(String(sessionId))) {
+            return NextResponse.json(
+                {
+                    status: false,
+                    message:
+                        "Este identificador é reservado ao canal oficial Datafy e não pode criar sessão Baileys.",
+                    error: "RESERVED_CHANNEL_ID",
+                },
+                { status: 400 }
+            );
         }
 
         // Create session for the authenticated user
