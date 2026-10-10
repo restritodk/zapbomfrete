@@ -52,6 +52,8 @@ model User {
   datafyChannelAccesses DatafyChannelAccess[]
   datafyAssignedConversations DatafyConversation[] @relation("DatafyAssignedTo")
   datafySentMessages DatafyMessage[] @relation("DatafySentBy")
+  crmContactsCreated CrmContact[] @relation("CrmContactCreatedBy")
+  crmContactsUpdated CrmContact[] @relation("CrmContactUpdatedBy")
 }
 
 model Session {
@@ -499,6 +501,8 @@ model DatafyConversation {
   /// Alternate Meta user id (BSUID), when present.
   contactUserId         String?
   phoneNumberId         String?
+  /// Optional link to organization CRM contact (Phase 4).
+  crmContactId          String?
   lastMessagePreview    String?   @db.Text
   lastMessageAt         DateTime?
   /// Last inbound customer message — drives the 24h service window.
@@ -512,6 +516,7 @@ model DatafyConversation {
   updatedAt             DateTime  @updatedAt
 
   assignedTo  User?                     @relation("DatafyAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  crmContact  CrmContact?               @relation(fields: [crmContactId], references: [id], onDelete: SetNull)
   messages    DatafyMessage[]
   assignments DatafyAssignmentHistory[]
 
@@ -520,6 +525,80 @@ model DatafyConversation {
   @@index([assignedToId])
   @@index([unreadCount])
   @@index([status])
+  @@index([crmContactId])
+}
+
+/// Organization CRM contact (shared Bom Frete directory — not Baileys session Contact).
+model CrmContact {
+  id                String    @id @default(cuid())
+  /// Reserved for future multi-tenant; single-org installs use "default".
+  organizationKey   String    @default("default")
+  /// Normalized WhatsApp id (digits, typically 55…).
+  waId              String
+  fullName          String?
+  company           String?
+  city              String?
+  state             String?
+  /// Motorista | Transportadora | Cliente | Parceiro | Prospect | Outros
+  category          String?
+  /// manual | import | datafy_webhook | baileys
+  origin            String    @default("manual")
+  notes             String?   @db.Text
+  active            Boolean   @default(true)
+  /// unknown | granted | denied | opted_out
+  consentStatus     String    @default("unknown")
+  consentSource     String?
+  consentAt         DateTime?
+  optedOutAt        DateTime?
+  lastInteractionAt DateTime?
+  createdById       String?
+  updatedById       String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  createdBy     User?                @relation("CrmContactCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy     User?                @relation("CrmContactUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  tags          CrmContactTag[]
+  conversations DatafyConversation[]
+
+  @@unique([organizationKey, waId])
+  @@index([fullName])
+  @@index([company])
+  @@index([city])
+  @@index([state])
+  @@index([category])
+  @@index([origin])
+  @@index([active])
+  @@index([consentStatus])
+  @@index([lastInteractionAt])
+}
+
+model CrmTag {
+  id              String   @id @default(cuid())
+  organizationKey String   @default("default")
+  name            String
+  colorHex        String   @default("#64748b")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contacts CrmContactTag[]
+
+  @@unique([organizationKey, name])
+  @@index([organizationKey])
+}
+
+model CrmContactTag {
+  id        String   @id @default(cuid())
+  contactId String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  contact CrmContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag     CrmTag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, tagId])
+  @@index([tagId])
+  @@index([contactId])
 }
 
 model DatafyMessage {

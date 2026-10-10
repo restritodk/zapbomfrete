@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { auth } from "@/lib/auth";
 import { ChatLayoutClient } from "@/components/chat/chat-layout-client";
 import { ChatInterface } from "@/components/chat/chat-interface";
@@ -34,9 +35,17 @@ export default async function ChatPage() {
             session.user.role
         );
         return (
-            <DatafyChatLayout
-                displayPhoneNumber={channel?.displayPhoneNumber}
-            />
+            <Suspense
+                fallback={
+                    <div className="flex h-[calc(100vh-6.5rem)] items-center justify-center text-sm text-muted-foreground">
+                        Carregando chat oficial…
+                    </div>
+                }
+            >
+                <DatafyChatLayout
+                    displayPhoneNumber={channel?.displayPhoneNumber}
+                />
+            </Suspense>
         );
     }
 

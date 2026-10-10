@@ -184,6 +184,19 @@ export async function persistInboundFromWebhookValue(
             typeof msg.timestamp === "string" ? msg.timestamp : undefined
         );
 
+        let crmContactId: string | null = null;
+        try {
+            const { upsertCrmFromDatafyWebhook } = await import(
+                "@/modules/crm/service"
+            );
+            crmContactId = await upsertCrmFromDatafyWebhook({
+                waId: from,
+                contactName: contact?.name || null,
+            });
+        } catch {
+            crmContactId = null;
+        }
+
         const conversation = await prisma.datafyConversation.upsert({
             where: {
                 channelId_waId: {
@@ -197,6 +210,7 @@ export async function persistInboundFromWebhookValue(
                 contactName: contact?.name || null,
                 contactUserId: contact?.userId || null,
                 phoneNumberId,
+                crmContactId: crmContactId || undefined,
                 lastMessagePreview: parsed.body,
                 lastMessageAt: providerTimestamp,
                 lastCustomerMessageAt: providerTimestamp,
@@ -207,6 +221,7 @@ export async function persistInboundFromWebhookValue(
                 contactName: contact?.name || undefined,
                 contactUserId: contact?.userId || undefined,
                 phoneNumberId: phoneNumberId || undefined,
+                ...(crmContactId ? { crmContactId } : {}),
                 lastMessagePreview: parsed.body,
                 lastMessageAt: providerTimestamp,
                 lastCustomerMessageAt: providerTimestamp,

@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
     BadgeCheck,
     Check,
@@ -14,12 +16,14 @@ import {
     UserRound,
     AlertCircle,
     Hand,
+    ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
 import { io, Socket } from "socket.io-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useSession as useAuthSession } from "next-auth/react";
 import type {
@@ -27,6 +31,19 @@ import type {
     DatafyMessageRow,
     ServiceWindow,
 } from "./types";
+
+type CrmSidebarContact = {
+    id: string;
+    waId: string;
+    fullName: string | null;
+    company: string | null;
+    city: string | null;
+    state: string | null;
+    category: string | null;
+    notes: string | null;
+    consentStatus: string;
+    tags: Array<{ id: string; name: string; colorHex: string }>;
+};
 
 function formatPhone(waId: string) {
     const d = waId.replace(/\D/g, "");
@@ -83,6 +100,8 @@ export function DatafyChatLayout({
 }) {
     const { data: auth } = useAuthSession();
     const userId = auth?.user?.id;
+    const searchParams = useSearchParams();
+    const deepLinkWaId = searchParams.get("waId")?.replace(/\D/g, "") || null;
 
     const [conversations, setConversations] = useState<DatafyConversationRow[]>(
         []
@@ -96,12 +115,17 @@ export function DatafyChatLayout({
     const [loadingList, setLoadingList] = useState(true);
     const [loadingMsgs, setLoadingMsgs] = useState(false);
     const [sending, setSending] = useState(false);
+    const [crmContact, setCrmContact] = useState<CrmSidebarContact | null>(
+        null
+    );
+    const [crmLoading, setCrmLoading] = useState(false);
     const [templates, setTemplates] = useState<
         Array<{ name: string; language: string; status: string }>
     >([]);
     const bottomRef = useRef<HTMLDivElement>(null);
     const socketRef = useRef<Socket | null>(null);
     const sendingLock = useRef(false);
+    const deepLinkApplied = useRef(false);
 
     const selected = useMemo(
         () => conversations.find((c) => c.id === selectedId) || null,
@@ -169,12 +193,55 @@ export function DatafyChatLayout({
     }, []);
 
     useEffect(() => {
-        void loadConversations();
-    }, [loadConversations]);
+        void loadConversations(deepLinkWaId || undefined);
+    }, [loadConversations, deepLinkWaId]);
+
+    useEffect(() => {
+        if (!deepLinkWaId || deepLinkApplied.current || !conversations.length) {
+            return;
+        }
+        const match = conversations.find(
+            (c) => c.waId.replace(/\D/g, "") === deepLinkWaId
+        );
+        if (match) {
+            setSelectedId(match.id);
+            deepLinkApplied.current = true;
+        }
+    }, [conversations, deepLinkWaId]);
 
     useEffect(() => {
         if (selectedId) void loadMessages(selectedId);
     }, [selectedId, loadMessages]);
+
+    useEffect(() => {
+        if (!selectedId) {
+            setCrmContact(null);
+            return;
+        }
+        let cancelled = false;
+        setCrmLoading(true);
+        void (async () => {
+            try {
+                const res = await fetch(
+                    `/api/channels/datafy/conversations/${selectedId}/crm`
+                );
+                const json = await res.json().catch(() => ({}));
+                if (cancelled) return;
+                if (res.ok) {
+                    setCrmContact(json.data?.contact || null);
+                } else {
+                    setCrmContact(null);
+                }
+            } catch {
+                if (!cancelled) setCrmContact(null);
+            } finally {
+                if (!cancelled) setCrmLoading(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedId]);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -705,26 +772,103 @@ export function DatafyChatLayout({
                 )}
             </section>
 
-            {/* Contact panel */}
-            <aside className="hidden w-[260px] flex-col border-l bg-slate-50/30 lg:flex">
+            {/* Contact / CRM panel */}
+            <aside className="hidden w-[280px] flex-col border-l bg-slate-50/30 lg:flex">
                 <div className="border-b px-4 py-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Contato
+                        Contato CRM
                     </p>
                 </div>
                 {selected ? (
-                    <div className="space-y-4 px-4 py-4 text-sm">
+                    <div className="space-y-4 px-4 py-4 text-sm overflow-y-auto">
                         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
                             <UserRound className="h-6 w-6" />
                         </div>
                         <div>
                             <p className="font-semibold">
-                                {selected.contactName || "Sem nome"}
+                                {crmContact?.fullName ||
+                                    selected.contactName ||
+                                    "Sem nome"}
                             </p>
                             <p className="font-mono text-xs text-muted-foreground">
                                 {formatPhone(selected.waId)}
                             </p>
                         </div>
+                        {crmLoading ? (
+                            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                Carregando CRM…
+                            </p>
+                        ) : crmContact ? (
+                            <div className="space-y-2 rounded-xl border bg-white p-3 text-xs">
+                                <p>
+                                    <span className="text-muted-foreground">
+                                        Empresa:
+                                    </span>{" "}
+                                    {crmContact.company || "—"}
+                                </p>
+                                <p>
+                                    <span className="text-muted-foreground">
+                                        Local:
+                                    </span>{" "}
+                                    {[crmContact.city, crmContact.state]
+                                        .filter(Boolean)
+                                        .join(" / ") || "—"}
+                                </p>
+                                <p>
+                                    <span className="text-muted-foreground">
+                                        Categoria:
+                                    </span>{" "}
+                                    {crmContact.category || "—"}
+                                </p>
+                                <p>
+                                    <span className="text-muted-foreground">
+                                        Consentimento:
+                                    </span>{" "}
+                                    {crmContact.consentStatus.replace("_", " ")}
+                                </p>
+                                {crmContact.tags.length > 0 && (
+                                    <div className="flex flex-wrap gap-1 pt-1">
+                                        {crmContact.tags.map((t) => (
+                                            <Badge
+                                                key={t.id}
+                                                variant="outline"
+                                                className="text-[10px]"
+                                                style={{
+                                                    borderColor: t.colorHex,
+                                                }}
+                                            >
+                                                {t.name}
+                                            </Badge>
+                                        ))}
+                                    </div>
+                                )}
+                                {crmContact.notes && (
+                                    <p className="pt-1 whitespace-pre-wrap text-muted-foreground">
+                                        {crmContact.notes}
+                                    </p>
+                                )}
+                                <Button
+                                    asChild
+                                    size="sm"
+                                    variant="outline"
+                                    className="mt-2 w-full rounded-xl"
+                                >
+                                    <Link
+                                        href="/dashboard/contacts"
+                                    >
+                                        <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                                        Abrir no CRM
+                                    </Link>
+                                </Button>
+                            </div>
+                        ) : (
+                            <p className="text-xs text-muted-foreground rounded-xl border bg-white p-3">
+                                Contato ainda não vinculado ao CRM. Será
+                                criado automaticamente na próxima mensagem
+                                inbound.
+                            </p>
+                        )}
                         <div className="space-y-2 rounded-xl border bg-white p-3 text-xs">
                             <p>
                                 <span className="text-muted-foreground">
@@ -737,6 +881,12 @@ export function DatafyChatLayout({
                                     Última interação:
                                 </span>{" "}
                                 {formatTime(selected.lastMessageAt) || "—"}
+                            </p>
+                            <p>
+                                <span className="text-muted-foreground">
+                                    Situação:
+                                </span>{" "}
+                                {selected.status}
                             </p>
                             <p>
                                 <span className="text-muted-foreground">

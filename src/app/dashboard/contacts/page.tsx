@@ -1,257 +1,40 @@
-
 "use client";
 
-import { useState, useEffect } from "react";
-import { useSession } from "@/components/dashboard/session-provider";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow
-} from "@/components/ui/table";
-import {
-    Pagination,
-    PaginationContent,
-    PaginationItem,
-    PaginationLink,
-    PaginationNext,
-    PaginationPrevious
-} from "@/components/ui/pagination";
-
-import { Search, Loader2, User, ChevronDown } from "lucide-react";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { formatPhoneDisplay } from "@/lib/phone-br";
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select";
 import { SessionGuard } from "@/components/dashboard/session-guard";
-import { ProviderUnavailablePanel } from "@/components/dashboard/provider-unavailable";
-
-interface Contact {
-    id: string;
-    jid: string;
-    name?: string;
-    notify?: string;
-    verifiedName?: string;
-    profilePic?: string;
-    remoteJidAlt?: string;
-}
+import { CrmContactsPanel } from "@/components/dashboard/crm-contacts-panel";
+import { BaileysContactsPanel } from "@/components/dashboard/baileys-contacts-panel";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useSession } from "@/components/dashboard/session-provider";
 
 export default function ContactListPage() {
-    const { sessionId, isDatafyChannel, selectedChannel } = useSession();
-    const [contacts, setContacts] = useState<Contact[]>([]);
-    const [loading, setLoading] = useState(false);
-
-    // Filters
-    const [search, setSearch] = useState("");
-    const [page, setPage] = useState(1);
-    const [limit, setLimit] = useState("10");
-    const [meta, setMeta] = useState({ total: 0, totalPages: 1 });
-
-    // Debounce Search
-    useEffect(() => {
-        const timer = setTimeout(() => {
-            setPage(1); // Reset to page 1 on search
-            fetchContacts();
-        }, 500);
-        return () => clearTimeout(timer);
-    }, [search]);
-
-    // Fetch on page/session/limit change
-    useEffect(() => {
-        fetchContacts();
-    }, [page, sessionId, limit]);
-
-    const fetchContacts = async () => {
-        if (!sessionId || isDatafyChannel) return;
-        setLoading(true);
-        try {
-            const params = new URLSearchParams({
-                page: page.toString(),
-                limit: limit,
-                search: search
-            });
-
-            const res = await fetch(`/api/contacts/${sessionId}?${params}`);
-            const data = await res.json();
-
-            if (res.ok) {
-                setContacts(data.data);
-                setMeta(data.meta);
-            } else {
-                setContacts([]);
-            }
-        } catch (error) {
-            console.error(error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    if (isDatafyChannel) {
-        return (
-            <SessionGuard>
-                <ProviderUnavailablePanel
-                    feature="contacts"
-                    channelName={selectedChannel?.name}
-                    displayPhoneNumber={selectedChannel?.displayPhoneNumber}
-                />
-            </SessionGuard>
-        );
-    }
+    const { isDatafyChannel } = useSession();
 
     return (
         <SessionGuard>
-            <div className="space-y-6">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div>
-                        <h2 className="text-3xl font-bold tracking-tight">Contatos</h2>
-                        <p className="text-muted-foreground">
-                            Gerencie e visualize seus contatos salvos.
+            <Tabs
+                defaultValue="crm"
+                className="space-y-4"
+            >
+                <TabsList variant="line" className="w-full sm:w-auto">
+                    <TabsTrigger value="crm">CRM Bom Frete</TabsTrigger>
+                    <TabsTrigger value="baileys" disabled={isDatafyChannel}>
+                        Agenda Baileys
+                    </TabsTrigger>
+                </TabsList>
+                <TabsContent value="crm">
+                    <CrmContactsPanel />
+                </TabsContent>
+                <TabsContent value="baileys">
+                    {isDatafyChannel ? (
+                        <p className="text-sm text-muted-foreground py-8">
+                            Selecione um canal Baileys no seletor de sessão para
+                            ver a agenda sincronizada do WhatsApp não oficial.
                         </p>
-                    </div>
-                </div>
-
-                <Card>
-                    <CardHeader>
-                        <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-                            <div className="space-y-1">
-                                <CardTitle>Lista de contatos</CardTitle>
-                                <CardDescription>
-                                    Total: {meta.total} contatos encontrados
-                                </CardDescription>
-                            </div>
-                            <div className="flex items-center gap-2 w-full md:w-auto">
-                                <Select value={limit} onValueChange={(val) => { setLimit(val); setPage(1); }}>
-                                    <SelectTrigger className="w-[120px]">
-                                        <SelectValue placeholder="Por página" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {[10, 25, 50, 100].map((l) => (
-                                            <SelectItem key={l} value={l.toString()}>
-                                                {l} / página
-                                            </SelectItem>
-                                        ))}
-                                        <SelectItem value="all">Mostrar todos</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                                <div className="relative w-full md:w-64">
-                                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                                    <Input
-                                        placeholder="Buscar contatos..."
-                                        className="pl-8"
-                                        value={search}
-                                        onChange={(e) => setSearch(e.target.value)}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="rounded-md border">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="w-[80px]">Imagem</TableHead>
-                                        <TableHead>Nome / Pushname</TableHead>
-                                        <TableHead className="hidden md:table-cell">Número de contato</TableHead>
-                                        <TableHead className="hidden md:table-cell">Telefone / Alt</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {loading ? (
-                                        <TableRow>
-                                            <TableCell colSpan={4} className="h-24 text-center">
-                                                <div className="flex justify-center items-center gap-2">
-                                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                                    Carregando...
-                                                </div>
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : contacts.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={4} className="h-24 text-center">
-                                                Nenhum contato encontrado.
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        contacts.map((contact) => (
-                                            <TableRow key={contact.id}>
-                                                <TableCell>
-                                                    <Avatar>
-                                                        <AvatarImage src={contact.profilePic || ""} />
-                                                        <AvatarFallback><User className="h-4 w-4" /></AvatarFallback>
-                                                    </Avatar>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <div className="flex flex-col">
-                                                        <span className="font-medium">{contact.name || contact.notify || "Desconhecido"}</span>
-                                                        {contact.verifiedName && (
-                                                            <span className="text-xs text-green-600 flex items-center gap-1">
-                                                                ✓ {contact.verifiedName}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
-                                                    {formatPhoneDisplay(contact.jid) || contact.jid.replace(/@s\.whatsapp\.net$/i, "")}
-                                                </TableCell>
-                                                <TableCell className="hidden md:table-cell text-sm">
-                                                    {contact.remoteJidAlt || "-"}
-                                                </TableCell>
-                                            </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </div>
-
-                        {/* Pagination */}
-                        {meta.totalPages > 1 && (
-                            <div className="mt-4">
-                                <Pagination>
-                                    <PaginationContent>
-                                        <PaginationItem>
-                                            <Button
-                                                variant="ghost"
-                                                disabled={page <= 1}
-                                                onClick={() => setPage(p => Math.max(1, p - 1))}
-                                            >
-                                                Anterior
-                                            </Button>
-                                        </PaginationItem>
-
-                                        <PaginationItem>
-                                            <span className="text-sm text-muted-foreground mx-4">
-                                                Página {page} de {meta.totalPages}
-                                            </span>
-                                        </PaginationItem>
-
-                                        <PaginationItem>
-                                            <Button
-                                                variant="ghost"
-                                                disabled={page >= meta.totalPages}
-                                                onClick={() => setPage(p => Math.min(meta.totalPages, p + 1))}
-                                            >
-                                                Próxima
-                                            </Button>
-                                        </PaginationItem>
-                                    </PaginationContent>
-                                </Pagination>
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-            </div>
+                    ) : (
+                        <BaileysContactsPanel />
+                    )}
+                </TabsContent>
+            </Tabs>
         </SessionGuard>
     );
 }
