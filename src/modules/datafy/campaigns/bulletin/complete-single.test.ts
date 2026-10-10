@@ -27,18 +27,27 @@ function approvedAll() {
 }
 
 describe("complete bulletin — single message modality", () => {
-    it("COTTON 8: complete mode preserves raw text verbatim under freeform limit", () => {
+    it("COTTON 8 (~2628 chars): sizeReady under freeform 4096; preserves verbatim", () => {
         const a = analyzeBulletin(COTTON_8_LOADS_RAW);
         assert.equal(a.loadCount, 8);
+        const trimmed = COTTON_8_LOADS_RAW.replace(/\r\n/g, "\n").trim();
+        assert.ok(
+            trimmed.length > META_TEMPLATE_BODY_MAX,
+            "fixture must exceed template BODY 1024"
+        );
+        assert.ok(trimmed.length <= META_FREEFORM_TEXT_MAX);
+
         const assessment = assessCompleteBulletin(
             COTTON_8_LOADS_RAW,
             a,
             "utility"
         );
         assert.ok(assessment.withinFreeformLimit);
-        assert.ok(assessment.charCount <= META_FREEFORM_TEXT_MAX);
+        assert.equal(assessment.charLimit, META_FREEFORM_TEXT_MAX);
+        assert.equal(assessment.sizeReady, true);
+        assert.equal(assessment.contentReady, true); // alias of sizeReady
+        assert.equal(assessment.realSendContentReady, true);
         assert.equal(assessment.purposeAllowsFreeform, true);
-        assert.equal(assessment.contentReady, true);
 
         const parts = composeCompleteBulletinPart(
             COTTON_8_LOADS_RAW,
@@ -46,31 +55,37 @@ describe("complete bulletin — single message modality", () => {
             "utility"
         );
         assert.equal(parts.length, 1);
-        assert.equal(parts[0].bodyText, COTTON_8_LOADS_RAW.trim());
+        assert.equal(parts[0].bodyText, trimmed);
+        assert.equal(parts[0].charCount, trimmed.length);
         assert.equal(parts[0].loadIndexes?.length, 8);
         assert.equal(parts[0].templateName, null);
         assert.equal(parts[0].readyForRealSend, true);
-        // No silent re-labeling of the raw paste
         assert.ok(parts[0].bodyText.includes("FRETE:"));
         assert.ok(parts[0].bodyText.includes("chat.whatsapp.com"));
     });
 
-    it("marketing blocks complete single (template required; Meta BODY 1024)", () => {
+    it("marketing: wizard sizeReady OK; real send blocked (no Utility bypass)", () => {
         const a = analyzeBulletin(COTTON_8_LOADS_RAW);
         const assessment = assessCompleteBulletin(
             COTTON_8_LOADS_RAW,
             a,
             "marketing"
         );
-        assert.equal(assessment.contentReady, false);
+        // Navigation/config allowed — size is under 4096
+        assert.equal(assessment.sizeReady, true);
+        assert.equal(assessment.contentReady, true);
+        assert.equal(assessment.realSendContentReady, false);
+        assert.equal(assessment.readyForRealSend, false);
+        assert.equal(assessment.purposeAllowsFreeform, false);
+        assert.equal(assessment.sizeBlockReasons.length, 0);
         assert.ok(
-            assessment.blockReasons.some((r) => /marketing|template/i.test(r))
+            assessment.realSendBlockReasons.some((r) =>
+                /marketing|template/i.test(r)
+            )
         );
         assert.ok(
             assessment.explanations.some((e) =>
-                String(META_TEMPLATE_BODY_MAX).includes("1024")
-                    ? e.includes("1024")
-                    : true
+                e.includes(String(META_TEMPLATE_BODY_MAX))
             )
         );
         const parts = composeCompleteBulletinPart(
@@ -79,18 +94,63 @@ describe("complete bulletin — single message modality", () => {
             "marketing"
         );
         assert.equal(parts[0].readyForRealSend, false);
+        assert.equal(parts[0].compatibility, "blocked");
+        // Content preserved even when real send blocked
+        assert.equal(
+            parts[0].bodyText,
+            COTTON_8_LOADS_RAW.replace(/\r\n/g, "\n").trim()
+        );
     });
 
-    it("oversized text (>4096) is not truncated and is not contentReady", () => {
-        const huge = "X".repeat(META_FREEFORM_TEXT_MAX + 100);
-        const a = analyzeBulletin(huge);
-        const assessment = assessCompleteBulletin(huge, a, "utility");
-        assert.equal(assessment.withinFreeformLimit, false);
-        assert.equal(assessment.contentReady, false);
-        assert.ok(assessment.blockReasons.some((r) => /4096/.test(r)));
-        const parts = composeCompleteBulletinPart(huge, a, "utility");
-        assert.equal(parts[0].bodyText.length, huge.length);
+    it("exactly 4096 chars: sizeReady; 4097: size blocked", () => {
+        const exact = "X".repeat(META_FREEFORM_TEXT_MAX);
+        const over = "X".repeat(META_FREEFORM_TEXT_MAX + 1);
+        const aExact = analyzeBulletin(exact);
+        const aOver = analyzeBulletin(over);
+
+        const ok = assessCompleteBulletin(exact, aExact, "utility");
+        assert.equal(ok.sizeReady, true);
+        assert.equal(ok.withinFreeformLimit, true);
+        assert.equal(ok.charCount, META_FREEFORM_TEXT_MAX);
+
+        const bad = assessCompleteBulletin(over, aOver, "utility");
+        assert.equal(bad.sizeReady, false);
+        assert.equal(bad.contentReady, false);
+        assert.equal(bad.withinFreeformLimit, false);
+        assert.ok(bad.sizeBlockReasons.some((r) => /4096/.test(r)));
+        const parts = composeCompleteBulletinPart(over, aOver, "utility");
+        assert.equal(parts[0].bodyText.length, over.length);
         assert.equal(parts[0].readyForRealSend, false);
+        assert.equal(parts[0].compatibility, "param_overflow");
+    });
+
+    it("split templates still block body over Meta 1024", () => {
+        const a = analyzeBulletin(COTTON_8_LOADS_RAW);
+        const split = composeReusableBulletinParts(a, approvedAll(), {
+            purpose: "marketing",
+        });
+        assert.ok(split.length >= 1);
+        for (const p of split) {
+            if (p.charCount > META_TEMPLATE_BODY_MAX) {
+                assert.equal(p.readyForRealSend, false);
+            }
+        }
+        // A single synthetic part over 1024 must remain blocked in template path
+        const hugeLoad = analyzeBulletin(
+            "🚛 CARGA ÚNICA\n" + "Y".repeat(META_TEMPLATE_BODY_MAX + 50)
+        );
+        const hugeParts = composeReusableBulletinParts(
+            hugeLoad,
+            approvedAll(),
+            { purpose: "marketing" }
+        );
+        assert.ok(
+            hugeParts.some(
+                (p) =>
+                    p.charCount > META_TEMPLATE_BODY_MAX ||
+                    !p.readyForRealSend
+            )
+        );
     });
 
     it("multi-load requires explicit delivery mode choice", () => {
@@ -115,13 +175,24 @@ describe("complete bulletin — single message modality", () => {
         assert.equal(a.loadCount, 20);
         const assessment = assessCompleteBulletin(raw, a, "utility");
         if (raw.length <= META_FREEFORM_TEXT_MAX) {
-            assert.equal(assessment.contentReady, true);
+            assert.equal(assessment.sizeReady, true);
             const parts = composeCompleteBulletinPart(raw, a, "utility");
             assert.equal(parts.length, 1);
             assert.equal(parts[0].bodyText, raw.trim());
             assert.equal(parts[0].loadIndexes?.length, 20);
         } else {
-            assert.equal(assessment.contentReady, false);
+            assert.equal(assessment.sizeReady, false);
         }
+    });
+
+    it("does not auto-split complete_single into multiple parts", () => {
+        const a = analyzeBulletin(COTTON_8_LOADS_RAW);
+        const parts = composeCompleteBulletinPart(
+            COTTON_8_LOADS_RAW,
+            a,
+            "utility"
+        );
+        assert.equal(parts.length, 1);
+        assert.ok(parts[0].charCount > META_TEMPLATE_BODY_MAX);
     });
 });

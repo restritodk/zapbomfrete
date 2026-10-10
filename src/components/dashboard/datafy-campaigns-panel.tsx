@@ -230,7 +230,9 @@ function WhatsAppMessagePreview({
     partIndex,
     partCount,
     partCharCount,
+    charLimit = META_TEMPLATE_BODY_MAX,
     loadCountInPart,
+    deliveryHint,
     onPrevPart,
     onNextPart,
     warnings,
@@ -242,14 +244,18 @@ function WhatsAppMessagePreview({
     partIndex?: number;
     partCount?: number;
     partCharCount?: number;
+    /** Meta template BODY = 1024 · free-form text = 4096 */
+    charLimit?: number;
     loadCountInPart?: number;
+    deliveryHint?: string | null;
     onPrevPart?: () => void;
     onNextPart?: () => void;
     warnings?: string[];
 }) {
     const multi = (partCount || 0) > 1;
+    const limit = charLimit > 0 ? charLimit : META_TEMPLATE_BODY_MAX;
     const overLimit =
-        typeof partCharCount === "number" && partCharCount > 1024;
+        typeof partCharCount === "number" && partCharCount > limit;
     return (
         <div
             className={cn(
@@ -320,12 +326,17 @@ function WhatsAppMessagePreview({
                                     : "text-slate-500"
                             )}
                         >
-                            {partCharCount}/1024 caracteres nesta mensagem
+                            {partCharCount}/{limit} caracteres nesta mensagem
                             {overLimit
-                                ? " — excede limite Meta (envio bloqueado)"
+                                ? " — excede limite Meta (tamanho inválido)"
                                 : ""}
                         </p>
                     )}
+                    {deliveryHint ? (
+                        <p className="text-[10px] text-center text-slate-500">
+                            {deliveryHint}
+                        </p>
+                    ) : null}
                 </div>
             )}
             <div
@@ -364,9 +375,9 @@ function WhatsAppMessagePreview({
                     </ul>
                 ) : (
                     <p className="mt-3 text-[10px] leading-relaxed text-slate-600/90 px-0.5">
-                        Prévia ilustrativa. Envio oficial exige template
-                        aprovado pela Meta (limite {META_TEMPLATE_BODY_MAX}{" "}
-                        caracteres por parte).
+                        {limit >= META_FREEFORM_TEXT_MAX
+                            ? `Prévia do texto livre (limite ${META_FREEFORM_TEXT_MAX} chars). Envio real exige janela 24h e finalidade permitida — não usa limite de template (${META_TEMPLATE_BODY_MAX}).`
+                            : `Prévia ilustrativa. Envio por template APPROVED (limite ${META_TEMPLATE_BODY_MAX} caracteres por parte).`}
                     </p>
                 )}
             </div>
@@ -2236,22 +2247,29 @@ export function DatafyCampaignsPanel() {
                                                     ? ` · prévia = conteúdo preparado (${bulletinParts.reduce((s, p) => s + (p.charCount || 0), 0)} chars nas partes)`
                                                     : ""}
                                             </p>
-                                            {bulletinParts.length > 1 && (
+                                            {bulletinParts.length > 0 && (
                                                 <ul className="space-y-0.5 text-[11px] text-slate-500">
                                                     {bulletinParts.map((p) => (
                                                         <li key={p.index}>
-                                                            Parte {p.index + 1}
+                                                            {bulletinDeliveryMode ===
+                                                            "complete_single"
+                                                                ? "Mensagem única"
+                                                                : `Parte ${p.index + 1}`}
                                                             :{" "}
                                                             {p.loadIndexes
                                                                 ?.length || 0}{" "}
                                                             carga(s) ·{" "}
-                                                            {p.charCount}/1024
+                                                            {p.charCount}/
+                                                            {bulletinDeliveryMode ===
+                                                            "complete_single"
+                                                                ? META_FREEFORM_TEXT_MAX
+                                                                : META_TEMPLATE_BODY_MAX}{" "}
                                                             chars
                                                             {p.templateName
                                                                 ? ` · ${p.templateName}`
                                                                 : ""}
                                                             {!p.readyForRealSend
-                                                                ? " · bloqueada"
+                                                                ? " · envio real bloqueado"
                                                                 : ""}
                                                         </li>
                                                     ))}
@@ -2328,15 +2346,16 @@ export function DatafyCampaignsPanel() {
                                                         <p
                                                             className={cn(
                                                                 "text-[11px] mt-1.5 font-medium",
-                                                                completeAssessment.contentReady
+                                                                completeAssessment.sizeReady
                                                                     ? "text-emerald-800"
                                                                     : "text-amber-800"
                                                             )}
                                                         >
-                                                            {completeAssessment.contentReady
-                                                                ? `${completeAssessment.charCount} chars · conteúdo elegível (ainda precisa janela aberta)`
-                                                                : completeAssessment.blockReasons[0] ||
-                                                                  "Indisponível nesta finalidade/tamanho"}
+                                                            {completeAssessment.sizeReady
+                                                                ? `${completeAssessment.charCount}/${META_FREEFORM_TEXT_MAX} chars · ${completeAssessment.loadCount} cargas · 1 mensagem`
+                                                                : completeAssessment.sizeBlockReasons[0] ||
+                                                                  completeAssessment.blockReasons[0] ||
+                                                                  "Texto excede o limite de mensagem única"}
                                                         </p>
                                                     )}
                                                 </button>
@@ -2383,44 +2402,75 @@ export function DatafyCampaignsPanel() {
                                             {bulletinDeliveryMode ===
                                                 "complete_single" &&
                                                 completeAssessment &&
-                                                !completeAssessment.contentReady && (
+                                                !completeAssessment.sizeReady && (
                                                     <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-[11px] text-amber-950 space-y-1">
-                                                        {completeAssessment.blockReasons.map(
+                                                        {completeAssessment.sizeBlockReasons.map(
                                                             (r) => (
                                                                 <p key={r}>
                                                                     {r}
                                                                 </p>
                                                             )
                                                         )}
-                                                        {completeAssessment.explanations
-                                                            .slice(0, 2)
-                                                            .map((e) => (
-                                                                <p
-                                                                    key={e}
-                                                                    className="text-amber-900/80"
-                                                                >
-                                                                    {e}
-                                                                </p>
-                                                            ))}
                                                         <p className="font-medium pt-1">
                                                             Alternativa: use
                                                             “Envio dividido por
-                                                            templates”.
+                                                            templates” (corpo ≤{" "}
+                                                            {META_TEMPLATE_BODY_MAX}{" "}
+                                                            chars por parte).
                                                         </p>
                                                     </div>
                                                 )}
                                             {bulletinDeliveryMode ===
                                                 "complete_single" &&
-                                                completeAssessment?.contentReady && (
-                                                    <p className="text-[11px] text-slate-600">
-                                                        Prévia = texto colado
-                                                        integral (
-                                                        {completeAssessment.charCount}
-                                                        /{META_FREEFORM_TEXT_MAX}{" "}
-                                                        chars ·{" "}
-                                                        {completeAssessment.loadCount}{" "}
-                                                        cargas · 1 mensagem).
-                                                    </p>
+                                                completeAssessment?.sizeReady && (
+                                                    <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-700 space-y-1">
+                                                        <p>
+                                                            Prévia = texto colado
+                                                            integral (
+                                                            {completeAssessment.charCount}
+                                                            /{META_FREEFORM_TEXT_MAX}{" "}
+                                                            chars ·{" "}
+                                                            {completeAssessment.loadCount}{" "}
+                                                            cargas · 1 mensagem).
+                                                            Limite de template (
+                                                            {META_TEMPLATE_BODY_MAX}
+                                                            ) não se aplica.
+                                                        </p>
+                                                        {completeAssessment.realSendBlockReasons
+                                                            .length > 0 && (
+                                                            <div className="text-amber-900 space-y-0.5 pt-0.5">
+                                                                <p className="font-medium">
+                                                                    Pode
+                                                                    configurar e
+                                                                    revisar —
+                                                                    envio real
+                                                                    bloqueado:
+                                                                </p>
+                                                                {completeAssessment.realSendBlockReasons.map(
+                                                                    (r) => (
+                                                                        <p
+                                                                            key={
+                                                                                r
+                                                                            }
+                                                                        >
+                                                                            {r}
+                                                                        </p>
+                                                                    )
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                        {completeAssessment.realSendContentReady && (
+                                                            <p className="text-emerald-800">
+                                                                Finalidade
+                                                                permite texto
+                                                                livre; no envio
+                                                                real só
+                                                                destinatários com
+                                                                janela 24h
+                                                                aberta.
+                                                            </p>
+                                                        )}
+                                                    </div>
                                                 )}
                                         </div>
                                     )}
@@ -3578,46 +3628,83 @@ export function DatafyCampaignsPanel() {
                         <div className="space-y-4 max-w-3xl">
                             {contentKind === "bulletin" ? (
                                 <div className="space-y-4">
-                                    <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-600 space-y-1.5">
-                                        <p>
-                                            Templates reutilizáveis APPROVED são
-                                            selecionados automaticamente. Só as
-                                            variáveis (origem, destino, terminal,
-                                            lote, localização, pedágio, detalhes)
-                                            mudam a cada boletim — sem nova
-                                            aprovação diária.
-                                        </p>
-                                        <p className="text-xs text-slate-500">
-                                            Biblioteca:{" "}
-                                            {libraryApprovalChecklist()
-                                                .map(
-                                                    (t) =>
-                                                        `${t.preferredName} (${t.loadsPerMessage} carga${t.loadsPerMessage > 1 ? "s" : ""})`
-                                                )
-                                                .join(" · ")}
-                                        </p>
-                                        <a
-                                            href="/dashboard/settings/integrations/datafy"
-                                            className="inline-flex text-xs font-medium text-primary hover:underline"
-                                        >
-                                            Gerenciar templates Datafy / Meta →
-                                        </a>
-                                    </div>
+                                    {bulletinDeliveryMode ===
+                                    "complete_single" ? (
+                                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-600 space-y-1.5">
+                                            <p>
+                                                Modalidade mensagem única: texto
+                                                livre integral (limite{" "}
+                                                {META_FREEFORM_TEXT_MAX}{" "}
+                                                caracteres). Não usa template
+                                                APPROVED nem o limite de{" "}
+                                                {META_TEMPLATE_BODY_MAX} do corpo
+                                                de template.
+                                            </p>
+                                            <p className="text-xs text-slate-500">
+                                                Configurar e revisar não autoriza
+                                                o disparo. Envio real exige
+                                                finalidade Utilidade/Transacional
+                                                e janela 24h aberta por
+                                                destinatário. Marketing comercial
+                                                deve usar envio dividido por
+                                                templates.
+                                            </p>
+                                            {completeAssessment?.realSendBlockReasons
+                                                .length ? (
+                                                <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-2.5 py-2 text-xs text-amber-950 space-y-1">
+                                                    {completeAssessment.realSendBlockReasons.map(
+                                                        (r) => (
+                                                            <p key={r}>{r}</p>
+                                                        )
+                                                    )}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    ) : (
+                                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-600 space-y-1.5">
+                                            <p>
+                                                Templates reutilizáveis APPROVED
+                                                são selecionados automaticamente.
+                                                Só as variáveis (origem, destino,
+                                                terminal, lote, localização,
+                                                pedágio, detalhes) mudam a cada
+                                                boletim — sem nova aprovação
+                                                diária.
+                                            </p>
+                                            <p className="text-xs text-slate-500">
+                                                Biblioteca:{" "}
+                                                {libraryApprovalChecklist()
+                                                    .map(
+                                                        (t) =>
+                                                            `${t.preferredName} (${t.loadsPerMessage} carga${t.loadsPerMessage > 1 ? "s" : ""})`
+                                                    )
+                                                    .join(" · ")}
+                                            </p>
+                                            <a
+                                                href="/dashboard/settings/integrations/datafy"
+                                                className="inline-flex text-xs font-medium text-primary hover:underline"
+                                            >
+                                                Gerenciar templates Datafy /
+                                                Meta →
+                                            </a>
+                                        </div>
+                                    )}
                                     {bulletinParts.some(
                                         (p) => !p.readyForRealSend
                                     ) && (
                                         <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-sm text-amber-950 space-y-1">
                                             <p className="font-medium inline-flex items-center gap-1.5">
                                                 <AlertTriangle className="h-4 w-4 shrink-0" />
-                                                Falta modelo compatível ou há
-                                                bloqueio
+                                                {bulletinDeliveryMode ===
+                                                "complete_single"
+                                                    ? "Envio real ainda não autorizado"
+                                                    : "Falta modelo compatível ou há bloqueio"}
                                             </p>
                                             <p className="text-xs">
-                                                Envio real fica bloqueado para as
-                                                partes abaixo. Simulação ainda
-                                                pode continuar. Não enviamos
-                                                automaticamente um template novo
-                                                por boletim.
+                                                {bulletinDeliveryMode ===
+                                                "complete_single"
+                                                    ? "Você pode seguir na revisão e simulação. O disparo real só ocorre se finalidade, janela 24h e elegibilidade forem satisfeitas."
+                                                    : "Envio real fica bloqueado para as partes abaixo. Simulação ainda pode continuar. Não enviamos automaticamente um template novo por boletim."}
                                             </p>
                                         </div>
                                     )}
@@ -3638,6 +3725,13 @@ export function DatafyCampaignsPanel() {
                                                         ·{" "}
                                                         {p.loadIndexes.length}{" "}
                                                         carga(s)
+                                                        {" · "}
+                                                        {p.charCount}/
+                                                        {bulletinDeliveryMode ===
+                                                        "complete_single"
+                                                            ? META_FREEFORM_TEXT_MAX
+                                                            : META_TEMPLATE_BODY_MAX}{" "}
+                                                        chars
                                                     </span>
                                                 </p>
                                                 <Badge
@@ -3649,15 +3743,25 @@ export function DatafyCampaignsPanel() {
                                                             : "border-amber-300 text-amber-900"
                                                     }
                                                 >
-                                                    {p.compatibility === "ready"
-                                                        ? "Compatível"
-                                                        : p.compatibility ===
-                                                            "missing_template"
-                                                          ? "Sem template"
+                                                    {bulletinDeliveryMode ===
+                                                        "complete_single" &&
+                                                    p.compatibility === "ready"
+                                                        ? "Pronto (texto livre)"
+                                                        : bulletinDeliveryMode ===
+                                                                "complete_single" &&
+                                                            p.compatibility ===
+                                                                "blocked"
+                                                          ? "Envio real bloqueado"
                                                           : p.compatibility ===
-                                                              "param_overflow"
-                                                            ? "Variável longa"
-                                                            : "Bloqueado"}
+                                                              "ready"
+                                                            ? "Compatível"
+                                                            : p.compatibility ===
+                                                                "missing_template"
+                                                              ? "Sem template"
+                                                              : p.compatibility ===
+                                                                  "param_overflow"
+                                                                ? "Variável longa"
+                                                                : "Bloqueado"}
                                                 </Badge>
                                             </div>
                                             {p.templateName ? (
@@ -3675,6 +3779,12 @@ export function DatafyCampaignsPanel() {
                                                     {p.templateApprovalStatus
                                                         ? ` · ${p.templateApprovalStatus}`
                                                         : ""}
+                                                </p>
+                                            ) : bulletinDeliveryMode ===
+                                              "complete_single" ? (
+                                                <p className="text-xs text-slate-600">
+                                                    Sem template — mensagem de
+                                                    texto livre (Modalidade B).
                                                 </p>
                                             ) : (
                                                 <p className="text-xs text-amber-900">
@@ -4063,6 +4173,21 @@ export function DatafyCampaignsPanel() {
                                                       ]?.charCount
                                                     : previewText.length
                                             }
+                                            charLimit={
+                                                contentKind === "bulletin" &&
+                                                bulletinDeliveryMode ===
+                                                    "complete_single"
+                                                    ? META_FREEFORM_TEXT_MAX
+                                                    : META_TEMPLATE_BODY_MAX
+                                            }
+                                            deliveryHint={
+                                                contentKind === "bulletin" &&
+                                                bulletinDeliveryMode ===
+                                                    "complete_single" &&
+                                                completeAssessment
+                                                    ? `${completeAssessment.loadCount} cargas · 1 mensagem (texto livre)`
+                                                    : null
+                                            }
                                             loadCountInPart={
                                                 contentKind === "bulletin"
                                                     ? bulletinParts[
@@ -4115,6 +4240,20 @@ export function DatafyCampaignsPanel() {
                                         ? bulletinParts[previewPartIndex]
                                               ?.charCount
                                         : previewText.length
+                                }
+                                charLimit={
+                                    contentKind === "bulletin" &&
+                                    bulletinDeliveryMode === "complete_single"
+                                        ? META_FREEFORM_TEXT_MAX
+                                        : META_TEMPLATE_BODY_MAX
+                                }
+                                deliveryHint={
+                                    contentKind === "bulletin" &&
+                                    bulletinDeliveryMode ===
+                                        "complete_single" &&
+                                    completeAssessment
+                                        ? `${completeAssessment.loadCount} cargas · 1 mensagem (texto livre)`
+                                        : null
                                 }
                                 loadCountInPart={
                                     contentKind === "bulletin"
@@ -4175,12 +4314,14 @@ export function DatafyCampaignsPanel() {
                                                 bulletinDeliveryMode ===
                                                     "complete_single" &&
                                                 completeAssessment &&
-                                                !completeAssessment.contentReady
+                                                !completeAssessment.sizeReady
                                             ) {
                                                 toast.error(
                                                     completeAssessment
-                                                        .blockReasons[0] ||
-                                                        "Mensagem única indisponível — use envio dividido ou ajuste a finalidade"
+                                                        .sizeBlockReasons[0] ||
+                                                        completeAssessment
+                                                            .blockReasons[0] ||
+                                                        `Mensagem única exige texto ≤ ${META_FREEFORM_TEXT_MAX} caracteres`
                                                 );
                                                 return;
                                             }

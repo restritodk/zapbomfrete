@@ -1,9 +1,10 @@
 /**
  * Boletim completo — uma única mensagem free-form por destinatário.
  *
- * Só é tecnicamente viável na Modalidade B (janela 24h + finalidade
- * utility/transactional). Marketing exige template APPROVED (Modalidade A),
- * cujo BODY Meta limita a 1024 chars — não cabe um boletim multi-carga integral.
+ * Limite de tamanho (4096) ≠ autorização de envio real.
+ * - Wizard/navegação: basta o texto caber em 4096.
+ * - Envio real: finalidade utility/transactional + janela 24h + elegibilidade.
+ * Marketing não usa texto livre nem “Utilidade” como contorno — use templates.
  */
 
 import { purposeAllowsServiceWindowFreeform } from "../send-readiness";
@@ -19,12 +20,25 @@ export type CompleteBulletinAssessment = {
     mode: "complete_single";
     charCount: number;
     loadCount: number;
+    charLimit: typeof META_FREEFORM_TEXT_MAX;
     withinFreeformLimit: boolean;
     purposeAllowsFreeform: boolean;
-    /** Content+purpose side: can attempt Modalidade B (still needs open window per recipient). */
+    /**
+     * Tamanho OK para configurar/revisar a campanha (wizard).
+     * Não implica autorização de disparo real.
+     */
+    sizeReady: boolean;
+    /** @deprecated alias de sizeReady — navegação do assistente */
     contentReady: boolean;
-    /** True only when contentReady — real send still needs open 24h windows. */
+    /**
+     * Conteúdo + finalidade permitem tentar Modalidade B.
+     * Ainda exige janela 24h aberta por destinatário no envio real.
+     */
+    realSendContentReady: boolean;
     readyForRealSend: boolean;
+    sizeBlockReasons: string[];
+    realSendBlockReasons: string[];
+    /** Motivos que impedem sizeReady (usado no wizard) */
     blockReasons: string[];
     explanations: string[];
     alternatives: Array<{
@@ -42,39 +56,47 @@ export function assessCompleteBulletin(
     const text = (rawText || "").replace(/\r\n/g, "\n").trim();
     const charCount = text.length;
     const loadCount = analysis?.loadCount ?? 0;
-    const withinFreeformLimit = charCount > 0 && charCount <= META_FREEFORM_TEXT_MAX;
+    const withinFreeformLimit =
+        charCount > 0 && charCount <= META_FREEFORM_TEXT_MAX;
     const purposeAllowsFreeform = purposeAllowsServiceWindowFreeform(purpose);
 
-    const blockReasons: string[] = [];
+    const sizeBlockReasons: string[] = [];
+    const realSendBlockReasons: string[] = [];
     const explanations: string[] = [];
 
     if (!text) {
-        blockReasons.push("Cole o boletim completo antes de escolher esta modalidade.");
+        sizeBlockReasons.push(
+            "Cole o boletim completo antes de escolher esta modalidade."
+        );
     }
     if (charCount > META_FREEFORM_TEXT_MAX) {
-        blockReasons.push(
+        sizeBlockReasons.push(
             `O texto tem ${charCount} caracteres e excede o limite de ${META_FREEFORM_TEXT_MAX} da mensagem de texto livre da Meta (Cloud API). Não truncamos o boletim.`
         );
     }
+
     if (!purposeAllowsFreeform) {
-        blockReasons.push(
-            "Finalidade marketing (ou equivalente comercial) exige template APPROVED (Modalidade A). A janela de 24h não autoriza divulgação comercial em texto livre."
+        realSendBlockReasons.push(
+            "Finalidade marketing (ou equivalente comercial) exige template APPROVED (Modalidade A). A janela de 24h e o texto livre não autorizam divulgação comercial."
         );
         explanations.push(
-            `Templates Meta limitam o corpo a ${META_TEMPLATE_BODY_MAX} caracteres — um boletim multi-carga integral não cabe em um único template. Use “Envio dividido por templates” ou altere a finalidade para Utilidade/Transacional apenas se a política Meta permitir (não é contorno de marketing).`
+            `Para campanhas comerciais use “Envio dividido por templates” (corpo ≤ ${META_TEMPLATE_BODY_MAX} chars por parte). Não altere a finalidade para Utilidade só para contornar regras de Marketing da Meta.`
         );
     } else {
         explanations.push(
-            `Modalidade B: texto livre até ${META_FREEFORM_TEXT_MAX} chars, somente para destinatários com janela de atendimento aberta (últimas 24h). Quem estiver fora da janela será ignorado/bloqueado no envio real.`
+            `Modalidade B: texto livre até ${META_FREEFORM_TEXT_MAX} chars, somente para destinatários com janela de atendimento aberta (últimas 24h). Quem estiver fora da janela será bloqueado no envio real.`
         );
     }
 
     explanations.push(
         "O link de grupo permanece só no texto — não adiciona participantes automaticamente."
     );
+    explanations.push(
+        "Preparar/revisar a campanha não autoriza o disparo — o envio real só ocorre se todas as regras Meta forem satisfeitas."
+    );
 
-    const contentReady =
-        Boolean(text) && withinFreeformLimit && purposeAllowsFreeform;
+    const sizeReady = Boolean(text) && withinFreeformLimit;
+    const realSendContentReady = sizeReady && purposeAllowsFreeform;
 
     const alternatives: CompleteBulletinAssessment["alternatives"] = [
         {
@@ -88,11 +110,16 @@ export function assessCompleteBulletin(
         mode: "complete_single",
         charCount,
         loadCount,
+        charLimit: META_FREEFORM_TEXT_MAX,
         withinFreeformLimit,
         purposeAllowsFreeform,
-        contentReady,
-        readyForRealSend: contentReady,
-        blockReasons,
+        sizeReady,
+        contentReady: sizeReady,
+        realSendContentReady,
+        readyForRealSend: realSendContentReady,
+        sizeBlockReasons,
+        realSendBlockReasons,
+        blockReasons: sizeBlockReasons,
         explanations,
         alternatives,
     };
@@ -108,6 +135,11 @@ export function composeCompleteBulletinPart(
     const bodyText = (rawText || "").replace(/\r\n/g, "\n").trim();
     const loadIndexes = analysis.loads.map((l) => l.index);
 
+    const blockBits = [
+        ...assessment.sizeBlockReasons,
+        ...assessment.realSendBlockReasons,
+    ];
+
     return [
         {
             index: 0,
@@ -122,9 +154,14 @@ export function composeCompleteBulletinPart(
             templateComponents: null,
             variableMapping: null,
             libraryTemplateId: null,
-            readyForRealSend: assessment.readyForRealSend,
-            compatibility: assessment.contentReady ? "ready" : "blocked",
-            blockReason: assessment.blockReasons.join(" ") || null,
+            // Size overflow blocks content; purpose only blocks real send
+            readyForRealSend: assessment.realSendContentReady,
+            compatibility: !assessment.sizeReady
+                ? "param_overflow"
+                : assessment.realSendContentReady
+                  ? "ready"
+                  : "blocked",
+            blockReason: blockBits.length ? blockBits.join(" ") : null,
             policyWarning: assessment.explanations[0] || null,
         },
     ];
@@ -135,6 +172,5 @@ export function deliveryModeNeedsUserChoice(
     splitPartCount: number
 ): boolean {
     if (!analysis?.loadCount) return false;
-    // Multi-load or multi-part split → must not auto-split silently
     return analysis.loadCount > 1 || splitPartCount > 1;
 }

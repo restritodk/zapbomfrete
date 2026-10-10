@@ -29,7 +29,10 @@ import {
     hasApprovedTemplateContent,
     purposeAllowsServiceWindowFreeform,
 } from "./send-readiness";
-import type { CampaignMessagePart } from "./bulletin/types";
+import {
+    META_FREEFORM_TEXT_MAX,
+    type CampaignMessagePart,
+} from "./bulletin/types";
 
 const WORKER_ID = `worker_${process.pid}_${randomUUID().slice(0, 8)}`;
 
@@ -488,10 +491,10 @@ async function sendPartsSequentially(opts: {
                 messageId = pending.id;
             }
 
-            // Meta Cloud API free-form text max = 4096 — never silently truncate
-            if (freeformText.length > 4096) {
+            // Meta Cloud API free-form text max — never silently truncate
+            if (freeformText.length > META_FREEFORM_TEXT_MAX) {
                 throw new DatafyApiError(
-                    `Texto livre excede 4096 caracteres (${freeformText.length}). Use boletim dividido ou reduza o conteúdo.`,
+                    `Texto livre excede ${META_FREEFORM_TEXT_MAX} caracteres (${freeformText.length}). Use boletim dividido ou reduza o conteúdo.`,
                     400
                 );
             }
