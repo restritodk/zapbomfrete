@@ -1,10 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { analyzeBulletin, estimateMessageTotal, packParts } from "./analyze";
+import { analyzeBulletin, estimateMessageTotal } from "./analyze";
 import {
-    associatePartsWithTemplates,
+    composeReusableBulletinParts,
     allPartsReadyForRealSend,
+    libraryApprovalChecklist,
 } from "./templates";
+import { BULLETIN_TEMPLATE_LIBRARY, sanitizeTemplateParam } from "./library";
 import { META_TEMPLATE_BODY_MAX } from "./types";
 
 const SAMPLE_SEP = "────────────────────";
@@ -23,6 +25,16 @@ function makeLoad(n: number, extra = ""): string {
     ].join("\n");
 }
 
+function approvedLibTemplates() {
+    return BULLETIN_TEMPLATE_LIBRARY.map((s) => ({
+        name: s.preferredName,
+        language: "pt_BR",
+        status: "APPROVED",
+        category: "MARKETING",
+        components: [{ type: "BODY", text: s.bodyTextForApproval }],
+    }));
+}
+
 describe("Bulletin analyzer — single & multi load", () => {
     it("parses one load with links and emojis", () => {
         const raw = [
@@ -32,12 +44,9 @@ describe("Bulletin analyzer — single & multi load", () => {
         ].join("\n");
         const a = analyzeBulletin(raw);
         assert.equal(a.loadCount, 1);
-        assert.equal(a.partCount, 1);
-        assert.match(a.parts[0].bodyText, /maps\.app\.goo\.gl/);
-        assert.match(a.parts[0].bodyText, /chat\.whatsapp\.com/);
-        assert.match(a.parts[0].bodyText, /✅|🚛/);
-        assert.ok(a.loads[0].fields.origem);
-        assert.ok(a.loads[0].fields.destino);
+        assert.match(a.loads[0].fields.origem || "", /Cidade A1/);
+        assert.ok(a.loads[0].fields.localizacaoUrl);
+        assert.ok(a.loads[0].fields.grupoUrl || a.loads[0].fields.detalhes);
     });
 
     it("splits six loads preserving order", () => {
@@ -47,64 +56,15 @@ describe("Bulletin analyzer — single & multi load", () => {
         }
         const a = analyzeBulletin(chunks.join("\n"));
         assert.equal(a.loadCount, 6);
-        assert.ok(a.partCount >= 1);
-        const joined = a.parts.map((p) => p.bodyText).join("\n");
-        for (let i = 1; i <= 6; i++) {
-            assert.match(joined, new RegExp(`Carga ${i}`));
-        }
-        // order: carga 1 before carga 6
-        assert.ok(joined.indexOf("Carga 1") < joined.indexOf("Carga 6"));
+        assert.ok(a.loads[0].index < a.loads[5].index);
     });
 
-    it("packs dozens of loads into multiple parts under Meta limit", () => {
-        const chunks = ["BOLETIM FRETE SUL 🚚"];
-        for (let i = 1; i <= 40; i++) {
-            chunks.push(SAMPLE_SEP, makeLoad(i, `Obs livre linha ${i}\nextra`));
-        }
-        const a = analyzeBulletin(chunks.join("\n"));
-        assert.equal(a.loadCount, 40);
-        assert.ok(a.partCount >= 2);
-        for (const p of a.parts) {
-            assert.ok(
-                p.charCount <= META_TEMPLATE_BODY_MAX ||
-                    a.warnings.some((w) => w.includes("excede")),
-                `part ${p.index} chars=${p.charCount}`
-            );
-        }
-        if (a.partCount > 1) {
-            assert.match(a.parts[0].label, /PARTE 1\//);
-            assert.match(
-                a.parts[a.partCount - 1].label,
-                new RegExp(`PARTE ${a.partCount}/${a.partCount}`)
-            );
-        }
-    });
-
-    it("preserves blank-line free text and separators", () => {
-        const raw = [
-            "BOLETIM TESTE",
-            "",
-            "Intro livre antes das cargas 🔥",
-            SAMPLE_SEP,
-            makeLoad(1),
-            SAMPLE_SEP,
-            "Texto livre entre blocos",
-            makeLoad(2).replace("🚛 Carga 2", "🚛 Carga 2\nnota"),
-        ].join("\n");
-        const a = analyzeBulletin(raw);
-        assert.ok(a.loadCount >= 2);
-        const all = a.parts.map((p) => p.bodyText).join("\n");
-        assert.match(all, /Texto livre entre blocos|Intro livre|🔥/);
-    });
-
-    it("flags individual load over Meta limit without truncating", () => {
+    it("flags individual load over Meta body limit without truncating source", () => {
         const huge = "X".repeat(META_TEMPLATE_BODY_MAX + 50);
         const raw = ["TITULO", SAMPLE_SEP, `🚛 Over\n${huge}`].join("\n");
         const a = analyzeBulletin(raw);
         assert.equal(a.loads[0].exceedsLimit, true);
         assert.ok(a.loads[0].text.includes(huge.slice(0, 20)));
-        assert.ok(a.warnings.some((w) => /excede/i.test(w)));
-        assert.equal(a.parts[0].bodyText.includes(huge.slice(0, 20)), true);
     });
 
     it("estimates total messages", () => {
@@ -112,74 +72,83 @@ describe("Bulletin analyzer — single & multi load", () => {
     });
 });
 
-describe("Bulletin template association", () => {
-    it("marks ready when APPROVED template body matches part", () => {
-        const a = analyzeBulletin(
-            ["TITULO", SAMPLE_SEP, makeLoad(1)].join("\n")
-        );
-        const body = a.parts[0].bodyText;
-        const associated = associatePartsWithTemplates(a.parts, [
-            {
-                name: "boletim_cotton_p1",
-                language: "pt_BR",
-                status: "APPROVED",
-                category: "UTILITY",
-                components: [{ type: "BODY", text: body }],
-            },
-        ]);
-        assert.equal(associated[0].readyForRealSend, true);
-        assert.equal(allPartsReadyForRealSend(associated), true);
-    });
-
-    it("blocks real send when template pending / missing", () => {
-        const a = analyzeBulletin(
-            ["TITULO", SAMPLE_SEP, makeLoad(1)].join("\n")
-        );
-        const associated = associatePartsWithTemplates(a.parts, [
-            {
-                name: "other",
-                language: "pt_BR",
-                status: "PENDING",
-                components: [{ type: "BODY", text: a.parts[0].bodyText }],
-            },
-        ]);
-        assert.equal(associated[0].readyForRealSend, false);
-        assert.ok(associated[0].blockReason);
-    });
-});
-
-describe("packParts unit", () => {
-    it("never splits a load across parts", () => {
-        const loads = [
-            {
-                index: 0,
-                text: "A".repeat(400),
-                fields: {},
-                charCount: 400,
-                exceedsLimit: false,
-            },
-            {
-                index: 1,
-                text: "B".repeat(400),
-                fields: {},
-                charCount: 400,
-                exceedsLimit: false,
-            },
-            {
-                index: 2,
-                text: "C".repeat(400),
-                fields: {},
-                charCount: 400,
-                exceedsLimit: false,
-            },
-        ];
-        const { parts } = packParts("T", loads, 1024);
-        for (const p of parts) {
-            for (const idx of p.loadIndexes) {
-                assert.match(p.bodyText, new RegExp(loads[idx].text.slice(0, 10)));
-            }
+describe("Reusable bulletin templates (6G)", () => {
+    it("packs 6 loads into 2 parts of 3 with boletim_3_cargas", () => {
+        const chunks = ["BOLETIM COTTON"];
+        for (let i = 1; i <= 6; i++) {
+            chunks.push(SAMPLE_SEP, makeLoad(i));
         }
-        const allIdx = parts.flatMap((p) => p.loadIndexes).sort();
-        assert.deepEqual(allIdx, [0, 1, 2]);
+        const a = analyzeBulletin(chunks.join("\n"));
+        const parts = composeReusableBulletinParts(a, approvedLibTemplates(), {
+            purpose: "marketing",
+        });
+        assert.equal(parts.length, 2);
+        assert.equal(parts[0].loadIndexes.length, 3);
+        assert.equal(parts[1].loadIndexes.length, 3);
+        assert.equal(parts[0].templateName, "boletim_3_cargas");
+        assert.equal(parts[0].readyForRealSend, true);
+        assert.equal(parts[0].variableMapping?.body?.length, 21);
+        assert.match(parts[0].bodyText, /Cidade A1/);
+        assert.match(parts[1].bodyText, /Cidade A4/);
+        assert.equal(allPartsReadyForRealSend(parts), true);
+    });
+
+    it("uses boletim_1_carga when only 1-load template is approved", () => {
+        const a = analyzeBulletin(
+            ["T", SAMPLE_SEP, makeLoad(1), SAMPLE_SEP, makeLoad(2)].join("\n")
+        );
+        const onlyOne = approvedLibTemplates().filter(
+            (t) => t.name === "boletim_1_carga"
+        );
+        const parts = composeReusableBulletinParts(a, onlyOne);
+        assert.equal(parts.length, 2);
+        assert.ok(parts.every((p) => p.templateName === "boletim_1_carga"));
+        assert.ok(parts.every((p) => p.variableMapping?.body?.length === 7));
+    });
+
+    it("blocks when no library template is approved", () => {
+        const a = analyzeBulletin(["T", SAMPLE_SEP, makeLoad(1)].join("\n"));
+        const parts = composeReusableBulletinParts(a, []);
+        assert.equal(parts[0].readyForRealSend, false);
+        assert.equal(parts[0].compatibility, "missing_template");
+        assert.match(parts[0].blockReason || "", /boletim_1_carga/);
+    });
+
+    it("does not require re-approval when only variable values change", () => {
+        const day1 = analyzeBulletin(
+            ["T", SAMPLE_SEP, makeLoad(1, "dia 1")].join("\n")
+        );
+        const day2 = analyzeBulletin(
+            ["T", SAMPLE_SEP, makeLoad(1, "dia 2")].join("\n")
+        );
+        const t = approvedLibTemplates();
+        const p1 = composeReusableBulletinParts(day1, t)[0];
+        const p2 = composeReusableBulletinParts(day2, t)[0];
+        assert.equal(p1.templateName, p2.templateName);
+        assert.equal(p1.libraryTemplateId, p2.libraryTemplateId);
+        assert.notEqual(
+            p1.variableMapping?.body?.join("|"),
+            p2.variableMapping?.body?.join("|")
+        );
+    });
+
+    it("sanitizes params and checklist lists 3 reusable models", () => {
+        assert.equal(sanitizeTemplateParam(""), "N/D");
+        assert.equal(sanitizeTemplateParam("a\nb"), "a · b");
+        const list = libraryApprovalChecklist();
+        assert.equal(list.length, 3);
+        assert.ok(list.every((x) => x.recommendedCategory === "MARKETING"));
+    });
+
+    it("warns when only UTILITY templates exist for marketing purpose", () => {
+        const a = analyzeBulletin(["T", SAMPLE_SEP, makeLoad(1)].join("\n"));
+        const util = approvedLibTemplates().map((t) => ({
+            ...t,
+            category: "UTILITY",
+        }));
+        const parts = composeReusableBulletinParts(a, util, {
+            purpose: "marketing",
+        });
+        assert.ok(parts[0].policyWarning);
     });
 });

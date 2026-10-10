@@ -32,7 +32,14 @@ const FIELD_PATTERNS: Array<{
         key: "localizacaoUrl",
         re: /(https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.[^\s]+|www\.google\.[^\s]*maps[^\s]*|maps\.apple\.[^\s]+)[^\s]*)/i,
     },
+    {
+        key: "grupoUrl",
+        re: /(https?:\/\/chat\.whatsapp\.com\/[^\s]+)/i,
+    },
 ];
+
+const STRUCTURED_LINE =
+    /^\s*(?:origem|destino|terminal|porto|armaz[eé]m|lote|pedido|os|pedágio|pedagio|tag|localiza[cç][aã]o|grupo)\s*[:：]/i;
 
 function extractFields(text: string): BulletinLoad["fields"] {
     const fields: BulletinLoad["fields"] = {};
@@ -43,12 +50,33 @@ function extractFields(text: string): BulletinLoad["fields"] {
             if (v) fields[key] = v;
         }
     }
-    // Also catch bare maps / chat.whatsapp.com links
     if (!fields.localizacaoUrl) {
         const anyUrl = text.match(
-            /(https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.[^\s]+|chat\.whatsapp\.com\/[^\s]+)[^\s]*)/i
+            /(https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.[^\s]+|www\.google\.[^\s]*maps[^\s]*|maps\.apple\.[^\s]+)[^\s]*)/i
         );
         if (anyUrl?.[1]) fields.localizacaoUrl = anyUrl[1];
+    }
+    if (!fields.grupoUrl) {
+        const g = text.match(/(https?:\/\/chat\.whatsapp\.com\/[^\s]+)/i);
+        if (g?.[1]) fields.grupoUrl = g[1];
+    }
+
+    // Preserve unmapped lines as detalhes (never invent; keep leftover content)
+    const leftover = text
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .filter((l) => !STRUCTURED_LINE.test(l))
+        .filter((l) => !/^https?:\/\//i.test(l))
+        .filter((l) => !/^[🚛📦✅⭐🔥💪📍⏰🎉\-_=─━═\*~•▪●.]{1,}$/u.test(l))
+        .join(" · ");
+    if (leftover) {
+        const withGrupo = fields.grupoUrl
+            ? `${leftover} · Grupo: ${fields.grupoUrl}`
+            : leftover;
+        fields.detalhes = withGrupo;
+    } else if (fields.grupoUrl) {
+        fields.detalhes = `Grupo: ${fields.grupoUrl}`;
     }
     return fields;
 }

@@ -37,8 +37,9 @@ import {
 import { useSession } from "@/components/dashboard/session-provider";
 import {
     analyzeBulletin,
-    associatePartsWithTemplates,
+    composeReusableBulletinParts,
     estimateMessageTotal,
+    libraryApprovalChecklist,
     META_TEMPLATE_BODY_MAX,
     type BulletinAnalysis,
     type CampaignMessagePart,
@@ -373,9 +374,6 @@ export function DatafyCampaignsPanel() {
     const [bulletinAnalysis, setBulletinAnalysis] =
         useState<BulletinAnalysis | null>(null);
     const [previewPartIndex, setPreviewPartIndex] = useState(0);
-    const [submittingPartIndex, setSubmittingPartIndex] = useState<
-        number | null
-    >(null);
     const deferredBulletinText = useDeferredValue(messageBody);
     const [contentMode, setContentMode] = useState<"existing" | "custom">(
         "existing"
@@ -1040,73 +1038,6 @@ export function DatafyCampaignsPanel() {
     const currentStepMeta =
         WIZARD_STEPS.find((s) => s.n === step) || WIZARD_STEPS[0];
 
-    const submitBulletinPart = async (partIndex: number) => {
-        const part = bulletinParts[partIndex];
-        if (!part?.bodyText) {
-            toast.error("Parte vazia");
-            return;
-        }
-        if (part.bodyText.length > META_TEMPLATE_BODY_MAX) {
-            toast.error(
-                `Parte excede ${META_TEMPLATE_BODY_MAX} caracteres — revise antes de submeter`
-            );
-            return;
-        }
-        setSubmittingPartIndex(partIndex);
-        try {
-            const res = await fetch(
-                "/api/channels/datafy/campaigns/submit-template",
-                {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        name: `${name || "boletim"}_p${partIndex + 1}_${Date.now().toString(36)}`,
-                        language: "pt_BR",
-                        category:
-                            purpose === "utility" ? "UTILITY" : "MARKETING",
-                        bodyText: part.bodyText,
-                        headerImageHandle:
-                            partIndex === 0 ? headerImageHandle : null,
-                    }),
-                }
-            );
-            const json = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                toast.error(json.message || "Falha ao submeter parte");
-                return;
-            }
-            setBulletinParts((prev) =>
-                prev.map((p, i) =>
-                    i === partIndex
-                        ? {
-                              ...p,
-                              templateName: json.data.templateName,
-                              templateLanguage: "pt_BR",
-                              templateCategory:
-                                  purpose === "utility"
-                                      ? "UTILITY"
-                                      : "MARKETING",
-                              templateApprovalStatus: String(
-                                  json.data.approvalStatus || "PENDING"
-                              ),
-                              variableMapping: { body: [] },
-                              readyForRealSend: false,
-                              blockReason:
-                                  "Aguardando aprovação Meta (PENDING)",
-                          }
-                        : p
-                )
-            );
-            toast.success(
-                `Parte ${partIndex + 1} enviada para aprovação (${json.data.approvalStatus})`
-            );
-        } catch {
-            toast.error("Erro ao submeter parte");
-        } finally {
-            setSubmittingPartIndex(null);
-        }
-    };
-
     const submitCustomTemplate = async (): Promise<{
         templateName: string;
         approvalStatus: string;
@@ -1222,7 +1153,7 @@ export function DatafyCampaignsPanel() {
                 bulletinParts.some((p) => !p.readyForRealSend)
             ) {
                 toast.error(
-                    "Envio real bloqueado: associe/aprove templates de todas as partes (ou use simulação)."
+                    "Envio real bloqueado: falta template reutilizável APPROVED compatível para alguma parte (ou use simulação)."
                 );
                 return;
             }
@@ -1402,7 +1333,7 @@ export function DatafyCampaignsPanel() {
           ? "Salvar agendamento"
           : "Disparar agora";
 
-    // Re-analyze bulletin as the user types (deferred)
+    // Re-analyze bulletin and map to reusable APPROVED templates (6G)
     useEffect(() => {
         if (contentKind !== "bulletin") {
             setBulletinAnalysis(null);
@@ -1411,35 +1342,20 @@ export function DatafyCampaignsPanel() {
         }
         const analysis = analyzeBulletin(deferredBulletinText);
         setBulletinAnalysis(analysis);
-        setBulletinParts((prev) => {
-            const merged = analysis.parts.map((p, i) => {
-                const old = prev.find((x) => x.index === i);
-                return {
-                    ...p,
-                    templateName: old?.templateName,
-                    templateLanguage: old?.templateLanguage || "pt_BR",
-                    templateCategory: old?.templateCategory,
-                    templateApprovalStatus: old?.templateApprovalStatus,
-                    templateComponents: old?.templateComponents,
-                    variableMapping: old?.variableMapping || { body: [] },
-                    readyForRealSend: old?.readyForRealSend,
-                    blockReason: old?.blockReason || p.blockReason,
-                };
-            });
-            return associatePartsWithTemplates(
-                merged,
-                templates.map((t) => ({
-                    name: t.name,
-                    language: t.language,
-                    status: t.status,
-                    category: t.category,
-                    components: t.components,
-                })),
-                { purpose }
-            );
-        });
+        const parts = composeReusableBulletinParts(
+            analysis,
+            templates.map((t) => ({
+                name: t.name,
+                language: t.language,
+                status: t.status,
+                category: t.category,
+                components: t.components,
+            })),
+            { purpose }
+        );
+        setBulletinParts(parts);
         setPreviewPartIndex((idx) =>
-            Math.min(idx, Math.max(0, analysis.partCount - 1))
+            Math.min(idx, Math.max(0, parts.length - 1))
         );
     }, [contentKind, deferredBulletinText, templates, purpose]);
 
@@ -1890,7 +1806,7 @@ export function DatafyCampaignsPanel() {
                                     onClick={() => {
                                         setContentKind("bulletin");
                                         setContentMode("custom");
-                                        setPurpose("utility");
+                                        // Do not force UTILITY — load ads are usually MARKETING
                                         if (
                                             messageBody.startsWith("Olá, {{")
                                         ) {
@@ -1913,7 +1829,7 @@ export function DatafyCampaignsPanel() {
                                         {messageBody.length} caracteres
                                         {contentKind === "bulletin" &&
                                         bulletinAnalysis
-                                            ? ` · ${bulletinAnalysis.loadCount} carga(s) · ${bulletinAnalysis.partCount} parte(s)`
+                                            ? ` · ${bulletinAnalysis.loadCount} carga(s) · ${bulletinParts.length || bulletinAnalysis.partCount} msg(s)`
                                             : ""}
                                     </span>
                                 </div>
@@ -1941,11 +1857,19 @@ export function DatafyCampaignsPanel() {
                                                 <strong>
                                                     {bulletinAnalysis.title}
                                                 </strong>{" "}
-                                                — divisão automática respeita
-                                                cargas completas (limite Meta{" "}
-                                                {META_TEMPLATE_BODY_MAX}{" "}
-                                                chars/parte).
+                                                — cargas preenchidas em templates
+                                                reutilizáveis (1/2/3 por
+                                                mensagem). Variáveis mudam todo
+                                                dia sem nova aprovação Meta.
                                             </p>
+                                            {purpose === "utility" && (
+                                                <p className="text-amber-800">
+                                                    Divulgação de cargas costuma
+                                                    ser MARKETING na Meta —
+                                                    Utilidade pode ser rejeitada
+                                                    ou restringida.
+                                                </p>
+                                            )}
                                             {bulletinAnalysis.warnings
                                                 .slice(0, 3)
                                                 .map((w) => (
@@ -2971,77 +2895,148 @@ export function DatafyCampaignsPanel() {
                     {step === 3 && (
                         <div className="space-y-4 max-w-3xl">
                             {contentKind === "bulletin" ? (
-                                <div className="space-y-3">
-                                    <p className="text-sm text-slate-600">
-                                        Cada parte do boletim precisa de um
-                                        template Meta APPROVED com o corpo
-                                        correspondente. Não usamos uma única
-                                        variável para contornar a aprovação.
-                                        Envio real só com todas as partes
-                                        prontas; simulação pode seguir sem
-                                        APPROVED.
-                                    </p>
+                                <div className="space-y-4">
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-600 space-y-1.5">
+                                        <p>
+                                            Templates reutilizáveis APPROVED são
+                                            selecionados automaticamente. Só as
+                                            variáveis (origem, destino, terminal,
+                                            lote, localização, pedágio, detalhes)
+                                            mudam a cada boletim — sem nova
+                                            aprovação diária.
+                                        </p>
+                                        <p className="text-xs text-slate-500">
+                                            Biblioteca:{" "}
+                                            {libraryApprovalChecklist()
+                                                .map(
+                                                    (t) =>
+                                                        `${t.preferredName} (${t.loadsPerMessage} carga${t.loadsPerMessage > 1 ? "s" : ""})`
+                                                )
+                                                .join(" · ")}
+                                        </p>
+                                        <a
+                                            href="/dashboard/settings/integrations/datafy"
+                                            className="inline-flex text-xs font-medium text-primary hover:underline"
+                                        >
+                                            Gerenciar templates Datafy / Meta →
+                                        </a>
+                                    </div>
+                                    {bulletinParts.some(
+                                        (p) => !p.readyForRealSend
+                                    ) && (
+                                        <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-sm text-amber-950 space-y-1">
+                                            <p className="font-medium inline-flex items-center gap-1.5">
+                                                <AlertTriangle className="h-4 w-4 shrink-0" />
+                                                Falta modelo compatível ou há
+                                                bloqueio
+                                            </p>
+                                            <p className="text-xs">
+                                                Envio real fica bloqueado para as
+                                                partes abaixo. Simulação ainda
+                                                pode continuar. Não enviamos
+                                                automaticamente um template novo
+                                                por boletim.
+                                            </p>
+                                        </div>
+                                    )}
                                     {bulletinParts.map((p) => (
                                         <div
                                             key={p.index}
-                                            className="rounded-xl border bg-white p-3 space-y-2"
+                                            className={cn(
+                                                "rounded-xl border bg-white p-3 space-y-2",
+                                                p.readyForRealSend
+                                                    ? "border-emerald-200"
+                                                    : "border-amber-200"
+                                            )}
                                         >
                                             <div className="flex flex-wrap items-center justify-between gap-2">
                                                 <p className="text-sm font-medium">
                                                     {p.label}{" "}
                                                     <span className="text-slate-400 font-normal">
-                                                        ({p.charCount} chars)
+                                                        ·{" "}
+                                                        {p.loadIndexes.length}{" "}
+                                                        carga(s)
                                                     </span>
                                                 </p>
                                                 <Badge
                                                     variant="outline"
                                                     className={
-                                                        p.readyForRealSend
+                                                        p.compatibility ===
+                                                        "ready"
                                                             ? "border-emerald-300 text-emerald-800"
                                                             : "border-amber-300 text-amber-900"
                                                     }
                                                 >
-                                                    {p.readyForRealSend
-                                                        ? "Pronto"
-                                                        : p.templateApprovalStatus ||
-                                                          "Sem template"}
+                                                    {p.compatibility === "ready"
+                                                        ? "Compatível"
+                                                        : p.compatibility ===
+                                                            "missing_template"
+                                                          ? "Sem template"
+                                                          : p.compatibility ===
+                                                              "param_overflow"
+                                                            ? "Variável longa"
+                                                            : "Bloqueado"}
                                                 </Badge>
                                             </div>
+                                            {p.templateName ? (
+                                                <p className="text-xs text-slate-600">
+                                                    Template:{" "}
+                                                    <code className="font-mono text-slate-800">
+                                                        {p.templateName}
+                                                    </code>
+                                                    {p.libraryTemplateId
+                                                        ? ` · ${p.libraryTemplateId}`
+                                                        : ""}
+                                                    {p.templateCategory
+                                                        ? ` · ${p.templateCategory}`
+                                                        : ""}
+                                                    {p.templateApprovalStatus
+                                                        ? ` · ${p.templateApprovalStatus}`
+                                                        : ""}
+                                                </p>
+                                            ) : (
+                                                <p className="text-xs text-amber-900">
+                                                    Nenhum template da biblioteca
+                                                    associado a esta parte.
+                                                </p>
+                                            )}
                                             {p.blockReason && (
-                                                <p className="text-xs text-amber-800">
+                                                <p className="text-xs text-amber-900">
                                                     {p.blockReason}
                                                 </p>
                                             )}
-                                            {p.templateName && (
-                                                <p className="text-xs text-slate-500 font-mono">
-                                                    {p.templateName}
+                                            {p.policyWarning && (
+                                                <p className="text-xs text-amber-800">
+                                                    {p.policyWarning}
                                                 </p>
                                             )}
-                                            <Button
-                                                type="button"
-                                                size="sm"
-                                                variant="outline"
-                                                className="rounded-xl"
-                                                disabled={
-                                                    submittingPartIndex ===
-                                                        p.index ||
-                                                    p.charCount >
-                                                        META_TEMPLATE_BODY_MAX
-                                                }
-                                                onClick={() =>
-                                                    void submitBulletinPart(
-                                                        p.index
-                                                    )
-                                                }
-                                            >
-                                                {submittingPartIndex ===
-                                                p.index ? (
-                                                    <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                                            <details className="text-xs text-slate-600">
+                                                <summary className="cursor-pointer select-none text-slate-500 hover:text-slate-800">
+                                                    Prévia com variáveis
+                                                    preenchidas
+                                                </summary>
+                                                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 border border-slate-100 p-2.5 font-sans text-[12px] leading-relaxed">
+                                                    {p.bodyText}
+                                                </pre>
+                                                {p.variableMapping?.body
+                                                    ?.length ? (
+                                                    <p className="mt-1.5 text-[11px] text-slate-400">
+                                                        {
+                                                            p.variableMapping
+                                                                .body.length
+                                                        }{" "}
+                                                        variáveis posicionais
+                                                    </p>
                                                 ) : null}
-                                                Enviar parte para aprovação Meta
-                                            </Button>
+                                            </details>
                                         </div>
                                     ))}
+                                    {!bulletinParts.length && (
+                                        <p className="text-sm text-slate-500">
+                                            Cole um boletim na Etapa 1 para
+                                            mapear templates.
+                                        </p>
+                                    )}
                                 </div>
                             ) : (
                                 <>
