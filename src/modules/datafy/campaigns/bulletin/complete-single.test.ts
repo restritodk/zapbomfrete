@@ -27,7 +27,7 @@ function approvedAll() {
 }
 
 describe("complete bulletin — single message modality", () => {
-    it("COTTON 8 (~2628 chars): sizeReady under freeform 4096; preserves verbatim", () => {
+    it("COTTON 8: sizeReady under freeform 5000; preserves verbatim", () => {
         const a = analyzeBulletin(COTTON_8_LOADS_RAW);
         assert.equal(a.loadCount, 8);
         const trimmed = COTTON_8_LOADS_RAW.replace(/\r\n/g, "\n").trim();
@@ -71,7 +71,7 @@ describe("complete bulletin — single message modality", () => {
             a,
             "marketing"
         );
-        // Navigation/config allowed — size is under 4096
+        // Navigation/config allowed — size under freeform limit
         assert.equal(assessment.sizeReady, true);
         assert.equal(assessment.contentReady, true);
         assert.equal(assessment.realSendContentReady, false);
@@ -102,7 +102,7 @@ describe("complete bulletin — single message modality", () => {
         );
     });
 
-    it("exactly 4096 chars: sizeReady; 4097: size blocked", () => {
+    it("exactly 5000 chars: sizeReady; 5001: size blocked", () => {
         const exact = "X".repeat(META_FREEFORM_TEXT_MAX);
         const over = "X".repeat(META_FREEFORM_TEXT_MAX + 1);
         const aExact = analyzeBulletin(exact);
@@ -117,7 +117,11 @@ describe("complete bulletin — single message modality", () => {
         assert.equal(bad.sizeReady, false);
         assert.equal(bad.contentReady, false);
         assert.equal(bad.withinFreeformLimit, false);
-        assert.ok(bad.sizeBlockReasons.some((r) => /4096/.test(r)));
+        assert.ok(
+            bad.sizeBlockReasons.some((r) =>
+                r.includes(String(META_FREEFORM_TEXT_MAX))
+            )
+        );
         const parts = composeCompleteBulletinPart(over, aOver, "utility");
         assert.equal(parts[0].bodyText.length, over.length);
         assert.equal(parts[0].readyForRealSend, false);

@@ -58,11 +58,20 @@ import {
     hasApprovedTemplateContent,
     purposeAllowsServiceWindowFreeform,
 } from "@/modules/datafy/campaigns/send-readiness";
+import {
+    buildEstimateCopy,
+    CAMPAIGN_DELAY_SEC_MAX,
+    CAMPAIGN_DELAY_SEC_MIN,
+    DEFAULT_CAMPAIGN_DELAY_SEC,
+    DELAY_PRESETS_SEC,
+    parseDelaySeconds,
+} from "@/modules/datafy/campaigns/pacing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Slider } from "@/components/ui/slider";
 import {
     Dialog,
     DialogContent,
@@ -244,7 +253,7 @@ function WhatsAppMessagePreview({
     partIndex?: number;
     partCount?: number;
     partCharCount?: number;
-    /** Meta template BODY = 1024 · free-form text = 4096 */
+    /** Meta template BODY = 1024 · free-form bulletin = META_FREEFORM_TEXT_MAX */
     charLimit?: number;
     loadCountInPart?: number;
     deliveryHint?: string | null;
@@ -520,7 +529,8 @@ export function DatafyCampaignsPanel() {
     const [execMode, setExecMode] = useState<"now" | "schedule">("now");
     const [scheduledAt, setScheduledAt] = useState("");
     const [dryRun, setDryRun] = useState(false);
-    const [delayMs, setDelayMs] = useState(1200);
+    const [delaySeconds, setDelaySeconds] = useState(DEFAULT_CAMPAIGN_DELAY_SEC);
+    const delayMs = delaySeconds * 1000;
     const [submittedTemplate, setSubmittedTemplate] = useState<{
         templateName: string;
         approvalStatus: string;
@@ -1186,6 +1196,7 @@ export function DatafyCampaignsPanel() {
         setExecMode("now");
         setScheduledAt("");
         setDryRun(false);
+        setDelaySeconds(DEFAULT_CAMPAIGN_DELAY_SEC);
         setSubmittedTemplate(null);
         setWizardOpen(true);
         void loadTemplates();
@@ -4002,17 +4013,127 @@ export function DatafyCampaignsPanel() {
                                     </p>
                                 </div>
                             )}
-                            <div className="space-y-1.5">
-                                <Label>Intervalo entre envios (ms)</Label>
-                                <Input
-                                    type="number"
-                                    value={delayMs}
-                                    onChange={(e) =>
-                                        setDelayMs(
-                                            Number(e.target.value) || 1200
-                                        )
-                                    }
-                                />
+                            <div className="rounded-2xl border border-slate-200/90 bg-gradient-to-b from-white to-slate-50/80 p-4 sm:p-5 space-y-4">
+                                <div className="space-y-1">
+                                    <p className="text-sm font-semibold text-slate-900 tracking-tight">
+                                        Intervalo entre mensagens
+                                    </p>
+                                    <p className="text-[12px] leading-relaxed text-slate-500">
+                                        Escolha quanto tempo o sistema deverá
+                                        aguardar entre o envio de uma mensagem e
+                                        a próxima.
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                                    {DELAY_PRESETS_SEC.map((sec) => {
+                                        const selected = delaySeconds === sec;
+                                        return (
+                                            <button
+                                                key={sec}
+                                                type="button"
+                                                onClick={() =>
+                                                    setDelaySeconds(sec)
+                                                }
+                                                className={cn(
+                                                    "rounded-xl border px-2 py-2.5 text-center transition-all duration-200",
+                                                    "active:scale-[0.97]",
+                                                    selected
+                                                        ? "border-emerald-600 bg-emerald-50 text-emerald-900 shadow-sm ring-1 ring-emerald-600/25"
+                                                        : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                                                )}
+                                            >
+                                                <span className="block text-sm font-semibold tabular-nums">
+                                                    {sec}s
+                                                </span>
+                                                <span
+                                                    className={cn(
+                                                        "block text-[10px] mt-0.5",
+                                                        selected
+                                                            ? "text-emerald-700/80"
+                                                            : "text-slate-400"
+                                                    )}
+                                                >
+                                                    {sec === 10
+                                                        ? "padrão"
+                                                        : "segundos"}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <div className="space-y-3 pt-1">
+                                    <div className="flex items-end justify-between gap-3">
+                                        <Label className="text-xs text-slate-500">
+                                            Ajuste fino
+                                        </Label>
+                                        <p className="text-2xl font-semibold tabular-nums tracking-tight text-emerald-800">
+                                            {delaySeconds}{" "}
+                                            <span className="text-sm font-medium text-emerald-700/80">
+                                                {delaySeconds === 1
+                                                    ? "segundo"
+                                                    : "segundos"}
+                                            </span>
+                                        </p>
+                                    </div>
+                                    <Slider
+                                        min={CAMPAIGN_DELAY_SEC_MIN}
+                                        max={CAMPAIGN_DELAY_SEC_MAX}
+                                        step={1}
+                                        value={[delaySeconds]}
+                                        onValueChange={(v) => {
+                                            const next = Array.isArray(v)
+                                                ? v[0]
+                                                : v;
+                                            const parsed =
+                                                parseDelaySeconds(next);
+                                            if (parsed.ok) {
+                                                setDelaySeconds(parsed.seconds);
+                                            }
+                                        }}
+                                        className="w-full **:data-[slot=slider-range]:bg-emerald-600 **:data-[slot=slider-thumb]:border-emerald-600"
+                                    />
+                                    <div className="flex justify-between text-[10px] tabular-nums text-slate-400">
+                                        <span>{CAMPAIGN_DELAY_SEC_MIN}s</span>
+                                        <span>{CAMPAIGN_DELAY_SEC_MAX}s</span>
+                                    </div>
+                                </div>
+                                <div className="rounded-xl border border-slate-200/80 bg-white/70 px-3 py-2.5 space-y-1">
+                                    <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                                        Tempo estimado de envio
+                                    </p>
+                                    <p className="text-[12px] leading-relaxed text-slate-600">
+                                        {buildEstimateCopy({
+                                            recipientCount: (() => {
+                                                if (!audience) return 0;
+                                                if (simulationOnlyAudience) {
+                                                    return (
+                                                        audience.simulationEligibleCount ||
+                                                        audience.eligibleCount ||
+                                                        0
+                                                    );
+                                                }
+                                                return (
+                                                    sendReadiness.technicallySendableCount ||
+                                                    audience.eligibleCount ||
+                                                    0
+                                                );
+                                            })(),
+                                            partsPerRecipient:
+                                                contentKind === "bulletin"
+                                                    ? Math.max(
+                                                          1,
+                                                          bulletinParts.length
+                                                      )
+                                                    : 1,
+                                            delaySeconds,
+                                        })}
+                                    </p>
+                                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                                        O intervalo não substitui os limites da
+                                        Meta/WhatsApp Business. Rate limits da
+                                        Datafy podem alongar a espera.
+                                    </p>
+                                </div>
                             </div>
                             {simulationOnlyAudience && (
                                 <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-sm text-amber-950">

@@ -61,7 +61,12 @@ const putSchema = z.object({
         .optional(),
     timezone: z.string().max(80).optional(),
     scheduledAt: z.string().nullable().optional(),
-    delayMs: z.number().int().optional(),
+    delayMs: z
+        .number()
+        .int()
+        .min(3_000)
+        .max(60_000)
+        .optional(),
     batchSize: z.number().int().optional(),
     dryRun: z.boolean().optional(),
     requireConsent: z.boolean().optional(),

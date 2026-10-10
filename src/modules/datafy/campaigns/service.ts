@@ -5,11 +5,11 @@ import {
     CAMPAIGN_ORG_DEFAULT,
     CAMPAIGN_PURPOSES,
     DEFAULT_CAMPAIGN_BATCH_SIZE,
-    DEFAULT_CAMPAIGN_DELAY_MS,
     canTransition,
     type CampaignPurpose,
     type CampaignStatus,
 } from "./constants";
+import { normalizeCampaignDelayMs } from "./pacing";
 import {
     isSyntheticContactId,
     previewRecipients,
@@ -341,9 +341,9 @@ export async function createCampaign(
                     : (input.segmentFilter as Prisma.InputJsonValue),
             timezone: input.timezone || "America/Sao_Paulo",
             scheduledAt,
-            delayMs: Math.max(
-                500,
-                Math.min(30_000, input.delayMs ?? DEFAULT_CAMPAIGN_DELAY_MS)
+            delayMs: normalizeCampaignDelayMs(
+                input.delayMs,
+                { allowLegacyBelowMin: true }
             ),
             batchSize: Math.max(
                 1,
@@ -466,7 +466,9 @@ export async function updateCampaign(
     }
     if (input.timezone !== undefined) data.timezone = input.timezone;
     if (input.delayMs !== undefined) {
-        data.delayMs = Math.max(500, Math.min(30_000, input.delayMs));
+        data.delayMs = normalizeCampaignDelayMs(input.delayMs, {
+            allowLegacyBelowMin: true,
+        });
     }
     if (input.batchSize !== undefined) {
         data.batchSize = Math.max(1, Math.min(50, input.batchSize));

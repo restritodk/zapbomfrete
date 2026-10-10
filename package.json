@@ -16,7 +16,7 @@
     "test:channels": "tsx --test src/modules/channels/channels.test.ts src/lib/phone-br-groups.test.ts",
     "test:datafy-chat": "tsx --test src/modules/datafy/chat/chat.test.ts",
     "test:crm": "tsx --test src/modules/crm/crm.test.ts",
-    "test:campaigns": "tsx --test src/modules/datafy/campaigns/campaigns.test.ts src/modules/datafy/campaigns/bulletin/bulletin.test.ts src/modules/datafy/campaigns/bulletin/library-submit.test.ts src/modules/datafy/campaigns/bulletin/smart-creator.test.ts src/modules/datafy/campaigns/bulletin/managed-templates.test.ts src/modules/datafy/campaigns/bulletin/preview-dedupe.test.ts src/modules/datafy/campaigns/bulletin/complete-single.test.ts src/modules/datafy/campaigns/send-readiness.test.ts src/modules/datafy/campaigns/real-send-audit.test.ts",
+    "test:campaigns": "tsx --test src/modules/datafy/campaigns/campaigns.test.ts src/modules/datafy/campaigns/bulletin/bulletin.test.ts src/modules/datafy/campaigns/bulletin/library-submit.test.ts src/modules/datafy/campaigns/bulletin/smart-creator.test.ts src/modules/datafy/campaigns/bulletin/managed-templates.test.ts src/modules/datafy/campaigns/bulletin/preview-dedupe.test.ts src/modules/datafy/campaigns/bulletin/complete-single.test.ts src/modules/datafy/campaigns/send-readiness.test.ts src/modules/datafy/campaigns/real-send-audit.test.ts src/modules/datafy/campaigns/pacing.test.ts",
     "db:push": "prisma db push && prisma generate",
     "db:studio": "prisma studio",
     "make-admin": "node scripts/setup-admin.js",

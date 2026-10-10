@@ -40,6 +40,7 @@ export function serializeCampaign(c: CampaignWithMeta) {
         pausedAt: c.pausedAt?.toISOString() ?? null,
         cancelledAt: c.cancelledAt?.toISOString() ?? null,
         delayMs: c.delayMs,
+        nextSendEligibleAt: c.nextSendEligibleAt?.toISOString() ?? null,
         batchSize: c.batchSize,
         dryRun: c.dryRun,
         requireConsent: c.requireConsent,

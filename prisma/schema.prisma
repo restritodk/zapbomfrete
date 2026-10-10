@@ -699,8 +699,8 @@ model DatafyCampaign {
   completedAt        DateTime?
   pausedAt           DateTime?
   cancelledAt        DateTime?
-  /// Milliseconds between recipient sends (rate control).
-  delayMs            Int       @default(1200)
+  /// Milliseconds between send-attempt starts (3s–60s; stored as ms).
+  delayMs            Int       @default(10000)
   batchSize          Int       @default(10)
   /// When true, queue advances without calling Datafy send API.
   dryRun             Boolean   @default(false)
@@ -717,6 +717,8 @@ model DatafyCampaign {
   totalSkipped       Int       @default(0)
   totalCancelled     Int       @default(0)
   lastError          String?   @db.Text
+  /// Earliest instant the next send attempt may start (persistent pacing).
+  nextSendEligibleAt DateTime?
   /// Worker lock for single-runner safety.
   lockedAt           DateTime?
   lockedBy           String?

@@ -84,7 +84,11 @@ export const RECIPIENT_STATUS_RANK: Record<string, number> = {
     unknown_after_send: 3,
 };
 
-export const DEFAULT_CAMPAIGN_DELAY_MS = 1200;
+export {
+    DEFAULT_CAMPAIGN_DELAY_MS,
+    CAMPAIGN_DELAY_MS_MIN,
+    CAMPAIGN_DELAY_MS_MAX,
+} from "./pacing";
 export const DEFAULT_CAMPAIGN_BATCH_SIZE = 5;
 export const CAMPAIGN_LOCK_TTL_MS = 90_000;
 export const WORKER_TICK_MS = 4_000;

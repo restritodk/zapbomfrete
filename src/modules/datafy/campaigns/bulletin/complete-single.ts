@@ -1,8 +1,8 @@
 /**
  * Boletim completo — uma única mensagem free-form por destinatário.
  *
- * Limite de tamanho (4096) ≠ autorização de envio real.
- * - Wizard/navegação: basta o texto caber em 4096.
+ * Limite de tamanho (5000) ≠ autorização de envio real.
+ * - Wizard/navegação: basta o texto caber em META_FREEFORM_TEXT_MAX.
  * - Envio real: finalidade utility/transactional + janela 24h + elegibilidade.
  * Marketing não usa texto livre nem “Utilidade” como contorno — use templates.
  */
@@ -71,7 +71,7 @@ export function assessCompleteBulletin(
     }
     if (charCount > META_FREEFORM_TEXT_MAX) {
         sizeBlockReasons.push(
-            `O texto tem ${charCount} caracteres e excede o limite de ${META_FREEFORM_TEXT_MAX} da mensagem de texto livre da Meta (Cloud API). Não truncamos o boletim.`
+            `O texto tem ${charCount} caracteres e excede o limite de ${META_FREEFORM_TEXT_MAX} para mensagem única. Não truncamos o boletim.`
         );
     }
 
@@ -84,7 +84,7 @@ export function assessCompleteBulletin(
         );
     } else {
         explanations.push(
-            `Modalidade B: texto livre até ${META_FREEFORM_TEXT_MAX} chars, somente para destinatários com janela de atendimento aberta (últimas 24h). Quem estiver fora da janela será bloqueado no envio real.`
+            `Modalidade B: texto livre até ${META_FREEFORM_TEXT_MAX} chars (limite operacional), somente para destinatários com janela de atendimento aberta (últimas 24h). Quem estiver fora da janela será bloqueado no envio real.`
         );
     }
 

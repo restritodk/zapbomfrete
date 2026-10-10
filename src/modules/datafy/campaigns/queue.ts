@@ -33,11 +33,42 @@ import {
     META_FREEFORM_TEXT_MAX,
     type CampaignMessagePart,
 } from "./bulletin/types";
+import {
+    normalizeCampaignDelayMs,
+} from "./pacing";
+import {
+    claimCampaignSendSlot,
+    deferCampaignSendSlot,
+    refreshCampaignLock,
+} from "./pacing-store";
 
 const WORKER_ID = `worker_${process.pid}_${randomUUID().slice(0, 8)}`;
 
 function sleep(ms: number) {
     return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Wait until campaign pacing slot is open, refreshing lock so TTL does not expire. */
+async function waitForSendSlot(
+    campaignId: string,
+    delayMs: number
+): Promise<boolean> {
+    for (;;) {
+        const camp = await prisma.datafyCampaign.findUnique({
+            where: { id: campaignId },
+            select: {
+                status: true,
+                nextSendEligibleAt: true,
+            },
+        });
+        if (!camp || camp.status !== "running") return false;
+        const now = Date.now();
+        const eligibleAt = camp.nextSendEligibleAt?.getTime() ?? 0;
+        const waitMs = Math.max(0, eligibleAt - now);
+        if (waitMs <= 0) return true;
+        await refreshCampaignLock(campaignId, WORKER_ID);
+        await sleep(Math.min(waitMs, 5_000));
+    }
 }
 
 async function refreshCounters(campaignId: string) {
@@ -288,16 +319,19 @@ async function sendOneRecipient(
 
         if (statusCode === 429) {
             const retrySec = apiErr?.retryAfterSec || 30;
+            const deferUntil = await deferCampaignSendSlot(campaign.id, {
+                campaignDelayMs: campaign.delayMs,
+                providerRetrySec: retrySec,
+            });
             await prisma.datafyCampaignRecipient.update({
                 where: { id: recipient.id },
                 data: {
                     status: "queued",
-                    nextAttemptAt: new Date(Date.now() + retrySec * 1000),
+                    nextAttemptAt: deferUntil,
                     lastError: msg,
                     errorCode: 429,
                 },
             });
-            await sleep(Math.min(retrySec * 1000, 60_000));
             return;
         }
 
@@ -551,8 +585,17 @@ async function sendPartsSequentially(opts: {
             },
         });
 
-        if (i < parts.length - 1 && opts.delayMs > 0) {
-            await sleep(opts.delayMs);
+        if (i < parts.length - 1) {
+            const delayMs = normalizeCampaignDelayMs(opts.delayMs, {
+                allowLegacyBelowMin: true,
+            });
+            // Wait for the slot claimed before this part, then claim the next
+            const ready = await waitForSendSlot(campaign.id, delayMs);
+            if (!ready) break;
+            const claimed = await claimCampaignSendSlot(campaign.id, {
+                delayMs,
+            });
+            if (!claimed.ok) break;
         }
     }
 
@@ -626,7 +669,7 @@ async function processCampaign(campaignId: string) {
                 OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
             },
             orderBy: { createdAt: "asc" },
-            take: campaign.batchSize,
+            take: Math.max(1, campaign.batchSize),
         });
 
         for (const r of retryable) {
@@ -651,7 +694,23 @@ async function processCampaign(campaignId: string) {
             });
             if (!fresh || fresh.status !== "running") break;
 
-            await sendOneRecipient(fresh, r.id);
+            const delayMs = normalizeCampaignDelayMs(fresh.delayMs, {
+                allowLegacyBelowMin: true,
+            });
+
+            // Persistent pacing: do not start until nextSendEligibleAt
+            const ready = await waitForSendSlot(campaignId, delayMs);
+            if (!ready) break;
+
+            const slot = await claimCampaignSendSlot(campaignId, { delayMs });
+            if (!slot.ok) {
+                if (slot.reason === "not_running") break;
+                // Concurrent claim or clock skew — stop this tick
+                break;
+            }
+
+            await refreshCampaignLock(campaignId, WORKER_ID);
+            await sendOneRecipient({ ...fresh, delayMs }, r.id);
             await refreshCounters(campaignId);
 
             const updated = await prisma.datafyCampaign.findUnique({
@@ -674,8 +733,6 @@ async function processCampaign(campaignId: string) {
                     dryRun: updated.dryRun,
                 });
             }
-
-            await sleep(Math.max(500, fresh.delayMs));
         }
 
         await finalizeIfDone(campaignId);
