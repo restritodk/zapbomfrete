@@ -17,6 +17,10 @@ import {
 } from "@/modules/datafy/campaigns/bulletin/managed-registry";
 import { validateTemplateDraft } from "@/modules/datafy/campaigns/bulletin/template-validation";
 import { FIELD_MAP_OPTIONS } from "@/modules/datafy/campaigns/bulletin/field-map";
+import {
+    buildTemplateCreatePayload,
+    formatMetaTemplateApiError,
+} from "@/modules/datafy/campaigns/bulletin/template-submit-payload";
 
 export const dynamic = "force-dynamic";
 
@@ -321,19 +325,34 @@ export async function POST(request: NextRequest) {
                 );
             }
 
-            const components: Array<Record<string, unknown>> = [];
+            const built = buildTemplateCreatePayload({
+                name: managed.technicalName,
+                language: "pt_BR",
+                category: managed.category as "MARKETING",
+                bodyText: managed.bodyText,
+                exampleRow: managed.exampleRow as string[],
+            });
+            if (!built.ok) {
+                return NextResponse.json(
+                    {
+                        status: false,
+                        message: built.errors.join(" "),
+                        data: { errors: built.errors, guidance: built.warnings },
+                    },
+                    { status: 400 }
+                );
+            }
+
+            const components: Array<Record<string, unknown>> = [
+                ...built.payload.components,
+            ];
             if (managed.headerText?.trim()) {
-                components.push({
+                components.unshift({
                     type: "HEADER",
                     format: "TEXT",
                     text: managed.headerText.trim(),
                 });
             }
-            components.push({
-                type: "BODY",
-                text: managed.bodyText,
-                example: { body_text: [managed.exampleRow] },
-            });
             if (managed.footerText?.trim()) {
                 components.push({
                     type: "FOOTER",
@@ -343,10 +362,9 @@ export async function POST(request: NextRequest) {
 
             const client = await datafyProvider.createClient();
             const created = await client.createTemplate(wabaId, {
-                name: managed.technicalName,
-                language: "pt_BR",
-                category: managed.category as "MARKETING",
-                parameter_format: "POSITIONAL",
+                name: built.payload.name,
+                language: built.payload.language,
+                category: built.payload.category,
                 components,
             });
 
@@ -370,14 +388,18 @@ export async function POST(request: NextRequest) {
                 },
             });
         } catch (e) {
-            const message =
-                e instanceof DatafyApiError
-                    ? e.message
-                    : e instanceof Error
-                      ? e.message
-                      : "Falha ao submeter template";
+            const formatted = formatMetaTemplateApiError(e);
             return NextResponse.json(
-                { status: false, message: redactSecrets(message) },
+                {
+                    status: false,
+                    message: redactSecrets(formatted.message),
+                    data: {
+                        code: formatted.code,
+                        subcode: formatted.subcode,
+                        fbtraceId: formatted.fbtraceId,
+                        guidance: formatted.guidance,
+                    },
+                },
                 { status: e instanceof DatafyApiError ? e.statusCode : 500 }
             );
         }

@@ -32,3 +32,9 @@ export {
     type LibraryProposalCard,
     type MetaApprovalUiStatus,
 } from "./meta-approval";
+export {
+    buildTemplateCreatePayload,
+    formatMetaTemplateApiError,
+    ensureBodyVariableBoundaries,
+    validateTemplateBodyAndExamples,
+} from "./template-submit-payload";

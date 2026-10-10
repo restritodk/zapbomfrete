@@ -82,7 +82,8 @@ function loadBlockV1(startVar: number, cargaLabel: string): string {
         `Lote: {{${n + 3}}}`,
         `Localização: {{${n + 4}}}`,
         `Pedágio: {{${n + 5}}}`,
-        `Detalhes: {{${n + 6}}}`,
+        // Meta rejects BODY that ends with a {{n}} placeholder — keep trailing static text
+        `Detalhes: {{${n + 6}}}.`,
     ].join("\n");
 }
 
@@ -100,7 +101,8 @@ function loadBlockV2(startVar: number, cargaLabel: string): string {
         `Frete: {{${n + 7}}}`,
         `Maps: {{${n + 8}}}`,
         `Pedágio: {{${n + 9}}}`,
-        `Obs.: {{${n + 10}}}`,
+        // Meta rejects BODY that ends with a {{n}} placeholder — keep trailing static text
+        `Obs.: {{${n + 10}}}.`,
     ].join("\n");
 }
 

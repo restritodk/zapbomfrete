@@ -202,7 +202,19 @@ export function BulletinCreatorPanel() {
             );
             const json = await res.json().catch(() => ({}));
             if (!res.ok) {
-                throw new Error(json.message || "Falha na submissão");
+                const detail = json.data as
+                    | {
+                          code?: number | null;
+                          subcode?: number | null;
+                          fbtraceId?: string | null;
+                          guidance?: string | null;
+                      }
+                    | undefined;
+                const bits = [
+                    json.message || "Falha na submissão",
+                    detail?.guidance || null,
+                ].filter(Boolean);
+                throw new Error(bits.join(" — "));
             }
             toast.success(
                 json.data?.message ||
