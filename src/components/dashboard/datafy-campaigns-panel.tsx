@@ -37,19 +37,26 @@ import {
 import { useSession } from "@/components/dashboard/session-provider";
 import {
     analyzeBulletin,
+    assessCompleteBulletin,
+    composeCompleteBulletinPart,
     composeReusableBulletinParts,
+    deliveryModeNeedsUserChoice,
     estimateMessageTotal,
     hydrateClientLibrary,
     libraryApprovalChecklist,
+    META_FREEFORM_TEXT_MAX,
     META_TEMPLATE_BODY_MAX,
     type BulletinAnalysis,
+    type BulletinDeliveryMode,
     type BulletinTemplateSpec,
     type CampaignMessagePart,
     type ClientLibrarySpec,
+    type CompleteBulletinAssessment,
 } from "@/modules/datafy/campaigns/bulletin";
 import {
     assessRealSendReadiness,
     hasApprovedTemplateContent,
+    purposeAllowsServiceWindowFreeform,
 } from "@/modules/datafy/campaigns/send-readiness";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -432,6 +439,11 @@ export function DatafyCampaignsPanel() {
     const [bulletinLibrary, setBulletinLibrary] = useState<
         BulletinTemplateSpec[] | null
     >(null);
+    /** null = usuário ainda não escolheu (obrigatório se multi-carga) */
+    const [bulletinDeliveryMode, setBulletinDeliveryMode] =
+        useState<BulletinDeliveryMode | null>(null);
+    const [completeAssessment, setCompleteAssessment] =
+        useState<CompleteBulletinAssessment | null>(null);
     const [templateKey, setTemplateKey] = useState("");
     const [bodyVars, setBodyVars] = useState<string[]>(["fullName"]);
     const [headerImageUrl, setHeaderImageUrl] = useState<string | null>(null);
@@ -868,6 +880,7 @@ export function DatafyCampaignsPanel() {
             if (!parsed.rawText?.trim()) return;
             setContentKind("bulletin");
             setContentMode("custom");
+            setBulletinDeliveryMode(null);
             setPurpose("marketing");
             setName(
                 parsed.title?.trim() ||
@@ -1123,6 +1136,8 @@ export function DatafyCampaignsPanel() {
         setContentKind("message");
         setBulletinParts([]);
         setBulletinAnalysis(null);
+        setBulletinDeliveryMode(null);
+        setCompleteAssessment(null);
         setPreviewPartIndex(0);
         setContentMode("existing");
         setTemplateKey("");
@@ -1280,32 +1295,43 @@ export function DatafyCampaignsPanel() {
     };
 
     const sendReadiness = useMemo(() => {
-        const hasTemplate = hasApprovedTemplateContent({
-            contentKind,
-            templateName:
-                contentKind === "bulletin"
-                    ? bulletinParts[0]?.templateName
-                    : contentMode === "custom"
-                      ? submittedTemplate?.templateName
-                      : selectedTemplate?.name,
-            templateApprovalStatus:
-                contentKind === "bulletin"
-                    ? bulletinParts[0]?.templateApprovalStatus
-                    : contentMode === "custom"
-                      ? submittedTemplate?.approvalStatus
-                      : selectedTemplate?.status,
-            messageParts: contentKind === "bulletin" ? bulletinParts : null,
-        });
+        const isCompleteBulletin =
+            contentKind === "bulletin" &&
+            bulletinDeliveryMode === "complete_single";
+        const hasTemplate = isCompleteBulletin
+            ? false
+            : hasApprovedTemplateContent({
+                  contentKind,
+                  templateName:
+                      contentKind === "bulletin"
+                          ? bulletinParts[0]?.templateName
+                          : contentMode === "custom"
+                            ? submittedTemplate?.templateName
+                            : selectedTemplate?.name,
+                  templateApprovalStatus:
+                      contentKind === "bulletin"
+                          ? bulletinParts[0]?.templateApprovalStatus
+                          : contentMode === "custom"
+                            ? submittedTemplate?.approvalStatus
+                            : selectedTemplate?.status,
+                  messageParts:
+                      contentKind === "bulletin" ? bulletinParts : null,
+              });
         return assessRealSendReadiness({
             purpose,
             consentEligibleCount: audience?.eligibleCount ?? 0,
             openWindowCount: audience?.openWindowCount ?? 0,
             hasApprovedTemplate: hasTemplate,
-            hasFreeformBody: Boolean(messageBody.trim()),
+            hasFreeformBody: Boolean(
+                isCompleteBulletin
+                    ? bulletinParts[0]?.bodyText?.trim() || messageBody.trim()
+                    : messageBody.trim()
+            ),
         });
     }, [
         audience?.eligibleCount,
         audience?.openWindowCount,
+        bulletinDeliveryMode,
         bulletinParts,
         contentKind,
         contentMode,
@@ -1369,28 +1395,68 @@ export function DatafyCampaignsPanel() {
         let vars = bodyVars;
 
         if (contentKind === "bulletin") {
+            if (!bulletinDeliveryMode) {
+                toast.error(
+                    "Escolha como enviar o boletim: mensagem única ou dividido por templates."
+                );
+                return;
+            }
             if (!bulletinParts.length) {
                 toast.error("Analise o boletim com ao menos uma carga/parte");
                 return;
             }
             const first = bulletinParts[0];
-            templateName = first.templateName || null;
-            templateLanguage = first.templateLanguage || "pt_BR";
-            templateCategory =
-                first.templateCategory ||
-                (purpose === "utility" ? "UTILITY" : "MARKETING");
-            templateApprovalStatus =
-                first.templateApprovalStatus || null;
-            contentSource = "bulletin_parts";
-            vars = [];
-            if (
-                !effectiveDryRun &&
-                bulletinParts.some((p) => !p.readyForRealSend)
-            ) {
-                toast.error(
-                    "Envio real bloqueado: falta template reutilizável APPROVED compatível para alguma parte (ou use simulação)."
-                );
-                return;
+            if (bulletinDeliveryMode === "complete_single") {
+                templateName = null;
+                templateLanguage = "pt_BR";
+                templateCategory = null;
+                templateApprovalStatus = null;
+                contentSource = "bulletin_complete_freeform";
+                vars = [];
+                if (!effectiveDryRun) {
+                    if (!purposeAllowsServiceWindowFreeform(purpose)) {
+                        toast.error(
+                            "Boletim completo (mensagem única) só é permitido em Utilidade/Transacional com janela 24h. Marketing exige templates APPROVED divididos."
+                        );
+                        return;
+                    }
+                    if (
+                        (first.charCount || 0) > META_FREEFORM_TEXT_MAX ||
+                        !first.readyForRealSend
+                    ) {
+                        toast.error(
+                            first.blockReason ||
+                                `Texto excede ${META_FREEFORM_TEXT_MAX} caracteres ou não está pronto para envio integral.`
+                        );
+                        return;
+                    }
+                    if (sendReadiness.modality !== "service_window") {
+                        toast.error(
+                            sendReadiness.blockReason ||
+                                "Envio integral exige destinatários com janela 24h aberta (Modalidade B)."
+                        );
+                        return;
+                    }
+                }
+            } else {
+                templateName = first.templateName || null;
+                templateLanguage = first.templateLanguage || "pt_BR";
+                templateCategory =
+                    first.templateCategory ||
+                    (purpose === "utility" ? "UTILITY" : "MARKETING");
+                templateApprovalStatus =
+                    first.templateApprovalStatus || null;
+                contentSource = "bulletin_parts";
+                vars = [];
+                if (
+                    !effectiveDryRun &&
+                    bulletinParts.some((p) => !p.readyForRealSend)
+                ) {
+                    toast.error(
+                        "Envio real bloqueado: falta template reutilizável APPROVED compatível para alguma parte (ou use simulação / mensagem única se elegível)."
+                    );
+                    return;
+                }
             }
         } else if (contentMode === "custom") {
             if (
@@ -1508,6 +1574,7 @@ export function DatafyCampaignsPanel() {
                                   title: bulletinAnalysis.title,
                                   loadCount: bulletinAnalysis.loadCount,
                                   partCount: bulletinParts.length,
+                                  deliveryMode: bulletinDeliveryMode,
                                   warnings: bulletinAnalysis.warnings,
                               }
                             : null,
@@ -1587,16 +1654,24 @@ export function DatafyCampaignsPanel() {
         void load();
     };
 
-    // Re-analyze bulletin and map to reusable APPROVED templates (6G)
+    // Re-analyze bulletin; delivery mode decides complete vs split templates
     useEffect(() => {
         if (contentKind !== "bulletin") {
             setBulletinAnalysis(null);
             setBulletinParts([]);
+            setCompleteAssessment(null);
             return;
         }
         const analysis = analyzeBulletin(deferredBulletinText);
         setBulletinAnalysis(analysis);
-        const parts = composeReusableBulletinParts(
+        const complete = assessCompleteBulletin(
+            deferredBulletinText,
+            analysis,
+            purpose
+        );
+        setCompleteAssessment(complete);
+
+        const splitParts = composeReusableBulletinParts(
             analysis,
             templates.map((t) => ({
                 name: t.name,
@@ -1612,16 +1687,43 @@ export function DatafyCampaignsPanel() {
                     : {}),
             }
         );
-        setBulletinParts(parts);
-        setPreviewPartIndex((idx) =>
-            Math.min(idx, Math.max(0, parts.length - 1))
+
+        const needsChoice = deliveryModeNeedsUserChoice(
+            analysis,
+            splitParts.length
         );
+        let mode = bulletinDeliveryMode;
+        if (!needsChoice && !mode && analysis.loadCount > 0) {
+            // Single load / single part: default to split templates (safe for marketing)
+            mode = "split_templates";
+        }
+
+        if (mode === "complete_single") {
+            setBulletinParts(
+                composeCompleteBulletinPart(
+                    deferredBulletinText,
+                    analysis,
+                    purpose
+                )
+            );
+            setPreviewPartIndex(0);
+        } else if (mode === "split_templates") {
+            setBulletinParts(splitParts);
+            setPreviewPartIndex((idx) =>
+                Math.min(idx, Math.max(0, splitParts.length - 1))
+            );
+        } else {
+            // Awaiting explicit choice — show analysis only, no silent split send path
+            setBulletinParts([]);
+            setPreviewPartIndex(0);
+        }
     }, [
         contentKind,
         deferredBulletinText,
         templates,
         purpose,
         bulletinLibrary,
+        bulletinDeliveryMode,
     ]);
 
     const activePreviewText = useMemo(() => {
@@ -2071,6 +2173,7 @@ export function DatafyCampaignsPanel() {
                                     onClick={() => {
                                         setContentKind("bulletin");
                                         setContentMode("custom");
+                                        setBulletinDeliveryMode(null);
                                         // Do not force UTILITY — load ads are usually MARKETING
                                         if (
                                             messageBody.startsWith("Olá, {{")
@@ -2155,12 +2258,10 @@ export function DatafyCampaignsPanel() {
                                                 </ul>
                                             )}
                                             <p>
-                                                Cargas preenchidas em templates
-                                                reutilizáveis (1/2/3 por
-                                                mensagem). Variáveis mudam todo
-                                                dia sem nova aprovação Meta. O
-                                                tamanho do campo de texto não
+                                                O tamanho do campo de texto não
                                                 equivale a uma mensagem Meta.
+                                                Escolha abaixo se envia o
+                                                boletim integral ou dividido.
                                             </p>
                                             {purpose === "utility" && (
                                                 <p className="text-amber-800">
@@ -2180,6 +2281,147 @@ export function DatafyCampaignsPanel() {
                                                         ⚠ {w}
                                                     </p>
                                                 ))}
+                                        </div>
+                                    )}
+                                {contentKind === "bulletin" &&
+                                    bulletinAnalysis &&
+                                    bulletinAnalysis.loadCount > 0 && (
+                                        <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
+                                            <div>
+                                                <p className="text-sm font-medium text-slate-800">
+                                                    Como enviar o boletim?
+                                                </p>
+                                                <p className="text-[11px] text-muted-foreground mt-0.5">
+                                                    Não dividimos automaticamente
+                                                    sem a sua escolha. Link de
+                                                    grupo fica só no texto.
+                                                </p>
+                                            </div>
+                                            <div className="grid gap-2 sm:grid-cols-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        setBulletinDeliveryMode(
+                                                            "complete_single"
+                                                        )
+                                                    }
+                                                    className={cn(
+                                                        "rounded-xl border p-3 text-left transition-all",
+                                                        bulletinDeliveryMode ===
+                                                            "complete_single"
+                                                            ? "border-emerald-600 bg-emerald-50/80 ring-1 ring-emerald-600/20"
+                                                            : "hover:border-foreground/20 hover:bg-muted/30"
+                                                    )}
+                                                >
+                                                    <p className="text-sm font-semibold">
+                                                        Boletim completo —
+                                                        mensagem única
+                                                    </p>
+                                                    <p className="text-[11px] text-muted-foreground mt-1 leading-snug">
+                                                        Texto original integral
+                                                        (até {META_FREEFORM_TEXT_MAX}{" "}
+                                                        chars). Só Modalidade B:
+                                                        Utilidade/Transacional +
+                                                        janela 24h.
+                                                    </p>
+                                                    {completeAssessment && (
+                                                        <p
+                                                            className={cn(
+                                                                "text-[11px] mt-1.5 font-medium",
+                                                                completeAssessment.contentReady
+                                                                    ? "text-emerald-800"
+                                                                    : "text-amber-800"
+                                                            )}
+                                                        >
+                                                            {completeAssessment.contentReady
+                                                                ? `${completeAssessment.charCount} chars · conteúdo elegível (ainda precisa janela aberta)`
+                                                                : completeAssessment.blockReasons[0] ||
+                                                                  "Indisponível nesta finalidade/tamanho"}
+                                                        </p>
+                                                    )}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        setBulletinDeliveryMode(
+                                                            "split_templates"
+                                                        )
+                                                    }
+                                                    className={cn(
+                                                        "rounded-xl border p-3 text-left transition-all",
+                                                        bulletinDeliveryMode ===
+                                                            "split_templates"
+                                                            ? "border-emerald-600 bg-emerald-50/80 ring-1 ring-emerald-600/20"
+                                                            : "hover:border-foreground/20 hover:bg-muted/30"
+                                                    )}
+                                                >
+                                                    <p className="text-sm font-semibold">
+                                                        Envio dividido por
+                                                        templates
+                                                    </p>
+                                                    <p className="text-[11px] text-muted-foreground mt-1 leading-snug">
+                                                        1–3 cargas por mensagem
+                                                        com templates APPROVED
+                                                        (corpo ≤{" "}
+                                                        {META_TEMPLATE_BODY_MAX}{" "}
+                                                        chars). Adequado a
+                                                        marketing.
+                                                    </p>
+                                                </button>
+                                            </div>
+                                            {!bulletinDeliveryMode &&
+                                                deliveryModeNeedsUserChoice(
+                                                    bulletinAnalysis,
+                                                    2
+                                                ) && (
+                                                    <p className="text-[11px] text-amber-800">
+                                                        Selecione uma modalidade
+                                                        para gerar a prévia e
+                                                        liberar o envio.
+                                                    </p>
+                                                )}
+                                            {bulletinDeliveryMode ===
+                                                "complete_single" &&
+                                                completeAssessment &&
+                                                !completeAssessment.contentReady && (
+                                                    <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-[11px] text-amber-950 space-y-1">
+                                                        {completeAssessment.blockReasons.map(
+                                                            (r) => (
+                                                                <p key={r}>
+                                                                    {r}
+                                                                </p>
+                                                            )
+                                                        )}
+                                                        {completeAssessment.explanations
+                                                            .slice(0, 2)
+                                                            .map((e) => (
+                                                                <p
+                                                                    key={e}
+                                                                    className="text-amber-900/80"
+                                                                >
+                                                                    {e}
+                                                                </p>
+                                                            ))}
+                                                        <p className="font-medium pt-1">
+                                                            Alternativa: use
+                                                            “Envio dividido por
+                                                            templates”.
+                                                        </p>
+                                                    </div>
+                                                )}
+                                            {bulletinDeliveryMode ===
+                                                "complete_single" &&
+                                                completeAssessment?.contentReady && (
+                                                    <p className="text-[11px] text-slate-600">
+                                                        Prévia = texto colado
+                                                        integral (
+                                                        {completeAssessment.charCount}
+                                                        /{META_FREEFORM_TEXT_MAX}{" "}
+                                                        chars ·{" "}
+                                                        {completeAssessment.loadCount}{" "}
+                                                        cargas · 1 mensagem).
+                                                    </p>
+                                                )}
                                         </div>
                                     )}
                                 {contentKind === "message" && (
@@ -3916,6 +4158,39 @@ export function DatafyCampaignsPanel() {
                                 <Button
                                     className="rounded-xl min-w-[110px]"
                                     onClick={() => {
+                                        if (step === 1 && contentKind === "bulletin") {
+                                            if (!messageBody.trim()) {
+                                                toast.error(
+                                                    "Cole o boletim completo"
+                                                );
+                                                return;
+                                            }
+                                            if (!bulletinDeliveryMode) {
+                                                toast.error(
+                                                    "Escolha: boletim completo (mensagem única) ou envio dividido por templates"
+                                                );
+                                                return;
+                                            }
+                                            if (
+                                                bulletinDeliveryMode ===
+                                                    "complete_single" &&
+                                                completeAssessment &&
+                                                !completeAssessment.contentReady
+                                            ) {
+                                                toast.error(
+                                                    completeAssessment
+                                                        .blockReasons[0] ||
+                                                        "Mensagem única indisponível — use envio dividido ou ajuste a finalidade"
+                                                );
+                                                return;
+                                            }
+                                            if (!bulletinParts.length) {
+                                                toast.error(
+                                                    "Prévia do boletim ainda não gerada"
+                                                );
+                                                return;
+                                            }
+                                        }
                                         if (step === 2) {
                                             handleStep2Next();
                                             return;

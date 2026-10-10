@@ -488,9 +488,17 @@ async function sendPartsSequentially(opts: {
                 messageId = pending.id;
             }
 
+            // Meta Cloud API free-form text max = 4096 — never silently truncate
+            if (freeformText.length > 4096) {
+                throw new DatafyApiError(
+                    `Texto livre excede 4096 caracteres (${freeformText.length}). Use boletim dividido ou reduza o conteúdo.`,
+                    400
+                );
+            }
             const res = await client.sendText(phoneNumberId, {
                 to: normalizeWaId(recipient.waId),
-                text: freeformText.slice(0, 4096),
+                text: freeformText,
+                previewUrl: /https?:\/\//i.test(freeformText),
             });
             wamid = res.messages?.[0]?.id || null;
         }

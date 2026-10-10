@@ -1,6 +1,15 @@
 /** Meta Cloud API template BODY limit (chars). */
 export const META_TEMPLATE_BODY_MAX = 1024;
 
+/**
+ * Meta Cloud API free-form text body limit (session / 24h window messages).
+ * @see https://developers.facebook.com/docs/whatsapp/cloud-api/messages/text-messages/
+ */
+export const META_FREEFORM_TEXT_MAX = 4096;
+
+/** How the bulletin is delivered per recipient. */
+export type BulletinDeliveryMode = "complete_single" | "split_templates";
+
 /** Reserve space for " — PARTE X/Y" suffixes when packing. */
 export const BULLETIN_PART_SAFETY_MARGIN = 48;
 

@@ -5,6 +5,12 @@ export * from "./templates";
 export * from "./constants";
 export * from "./field-map";
 export {
+    assessCompleteBulletin,
+    composeCompleteBulletinPart,
+    deliveryModeNeedsUserChoice,
+    type CompleteBulletinAssessment,
+} from "./complete-single";
+export {
     analyzeBulletinSafe,
     createBulletinDraft,
     updateBulletinDraft,
