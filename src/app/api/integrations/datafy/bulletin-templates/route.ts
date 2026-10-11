@@ -9,7 +9,10 @@ import {
 import { datafyProvider, DatafyApiError } from "@/modules/datafy";
 import { redactSecrets } from "@/modules/datafy/crypto-secrets";
 import { loadDatafyConfig } from "@/modules/datafy/config";
-import { buildBulletinTemplateSubmission } from "@/modules/datafy/campaigns/bulletin/library";
+import {
+    buildBulletinTemplateSubmission,
+    findBulletinSpecByName,
+} from "@/modules/datafy/campaigns/bulletin/library";
 import {
     createCustomTemplate,
     findManagedByTechnicalName,
@@ -330,12 +333,21 @@ export async function POST(request: NextRequest) {
                 );
             }
 
+            // Prefer code-library BODY for known builtins so stale DB rows
+            // (e.g. trailing "." only after {{n}}) cannot reintroduce Meta 2388299.
+            const librarySpec = findBulletinSpecByName(managed.technicalName);
+            const bodyForSubmit =
+                librarySpec?.bodyTextForApproval || managed.bodyText;
+            const examplesForSubmit = librarySpec?.exampleRow?.length
+                ? librarySpec.exampleRow
+                : (managed.exampleRow as string[]);
+
             const built = buildTemplateCreatePayload({
                 name: managed.technicalName,
                 language: "pt_BR",
                 category: managed.category as "MARKETING",
-                bodyText: managed.bodyText,
-                exampleRow: managed.exampleRow as string[],
+                bodyText: bodyForSubmit,
+                exampleRow: examplesForSubmit,
             });
             if (!built.ok) {
                 return NextResponse.json(
@@ -351,14 +363,16 @@ export async function POST(request: NextRequest) {
             const components: Array<Record<string, unknown>> = [
                 ...built.payload.components,
             ];
-            if (managed.headerText?.trim()) {
+            // Builtins from library: do not attach custom HEADER/FOOTER that
+            // could reintroduce dangling variables. Customs keep optional parts.
+            if (!librarySpec && managed.headerText?.trim()) {
                 components.unshift({
                     type: "HEADER",
                     format: "TEXT",
                     text: managed.headerText.trim(),
                 });
             }
-            if (managed.footerText?.trim()) {
+            if (!librarySpec && managed.footerText?.trim()) {
                 components.push({
                     type: "FOOTER",
                     text: managed.footerText.trim(),
@@ -376,6 +390,7 @@ export async function POST(request: NextRequest) {
             await markSubmitted(managed.technicalName, {
                 id: created.id,
                 status: created.status || "PENDING",
+                language: "pt_BR",
             });
 
             return NextResponse.json({

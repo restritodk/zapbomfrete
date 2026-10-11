@@ -37,6 +37,9 @@ export {
     formatMetaTemplateApiError,
     ensureBodyVariableBoundaries,
     validateTemplateBodyAndExamples,
+    bodyEndsWithVariable,
+    bodyStartsWithVariable,
+    significantBoundaryChars,
 } from "./template-submit-payload";
 export {
     syncTemplatesFromDatafy,

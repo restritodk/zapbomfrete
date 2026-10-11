@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { DatafyApiError } from "@/modules/datafy/client";
 import {
     BULLETIN_TEMPLATE_LIBRARY,
+    META_BODY_CLOSING_STATIC,
     buildBulletinTemplateSubmission,
 } from "./library";
 import {
+    bodyEndsWithVariable,
     buildTemplateCreatePayload,
     ensureBodyVariableBoundaries,
     formatMetaTemplateApiError,
@@ -18,8 +20,17 @@ describe("template submit payload — Meta BODY rules", () => {
             "*ATUALIZAÇÃO*\nOrigem: {{1}}\nDestino: {{2}}\nObs.: {{3}}";
         assert.match(raw.trim(), /\{\{\d+\}\}$/);
         const fixed = ensureBodyVariableBoundaries(raw);
-        assert.ok(!/\{\{\d+\}\}$/.test(fixed.trim()));
-        assert.ok(fixed.endsWith("."));
+        assert.equal(bodyEndsWithVariable(fixed), false);
+        assert.ok(fixed.includes(META_BODY_CLOSING_STATIC));
+    });
+
+    it("treats trailing punctuation after {{n}} as still ending with variable (2388299)", () => {
+        assert.equal(bodyEndsWithVariable("Mapa: {{12}}."), true);
+        assert.equal(bodyEndsWithVariable("Mapa: {{12}}!"), true);
+        assert.equal(
+            bodyEndsWithVariable(`Mapa: {{12}}\n${META_BODY_CLOSING_STATIC}`),
+            false
+        );
     });
 
     it("1 variable: valid payload with example", () => {

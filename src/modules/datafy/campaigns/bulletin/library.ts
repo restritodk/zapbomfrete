@@ -129,7 +129,11 @@ function loadBlockV2(startVar: number, cargaLabel: string): string {
     ].join("\n");
 }
 
-/** Descriptive labels + fewer vars — addresses Meta 2388293 density rejections. */
+/**
+ * Descriptive labels + fewer vars — addresses Meta 2388293 density rejections.
+ * Mid-block lines may end with {{n}}; the full template adds a closing static
+ * sentence so Meta 2388299 is satisfied (lone trailing "." is not enough).
+ */
 function loadBlockV3(startVar: number, cargaLabel: string): string {
     const n = startVar;
     return [
@@ -139,10 +143,13 @@ function loadBlockV3(startVar: number, cargaLabel: string): string {
         `Janela de embarque: {{${n + 2}}}`,
         `Veículo e quantidade: {{${n + 3}}}`,
         `Frete e pedágio: {{${n + 4}}}`,
-        // Meta rejects BODY that ends with a {{n}} placeholder — keep trailing static text
-        `Mapa e observações: {{${n + 5}}}.`,
+        `Mapa e observações: {{${n + 5}}}`,
     ].join("\n");
 }
+
+/** Closing static sentence required by Meta (2388299) — must be real words, not only punctuation. */
+export const META_BODY_CLOSING_STATIC =
+    "Confirme a disponibilidade da carga.";
 
 const EXAMPLE_LOAD_V1 = [
     "Rondonopolis/MT",
@@ -270,6 +277,8 @@ function makeV3(
             )
         );
     }
+    // Meta 2388299: BODY must not end with a variable (punctuation-only suffix is insufficient)
+    blocks.push("", META_BODY_CLOSING_STATIC);
     return {
         id,
         preferredName,

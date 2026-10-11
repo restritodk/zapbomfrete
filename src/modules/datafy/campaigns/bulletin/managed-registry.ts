@@ -130,19 +130,31 @@ function specFromBuiltin(spec: BulletinTemplateSpec): ManagedTemplateView {
 
 function viewFromDbRow(row: DbRow): ManagedTemplateView {
     const fieldMappings = parseFieldMappings(row.fieldMappings);
-    const exampleRow = exampleRowOf(row.exampleRow);
-    const variableCount = countPositionalVars(row.bodyText);
+    // Builtins: prefer code-library BODY so preview matches Meta submit
+    // (avoids stale DB bodies that end with {{n}}. only → Meta 2388299).
+    const builtinSpec =
+        row.kind === "builtin" && row.builtinId
+            ? BULLETIN_TEMPLATE_LIBRARY.find((s) => s.id === row.builtinId)
+            : null;
+    const bodyText = builtinSpec?.bodyTextForApproval || row.bodyText;
+    const exampleRow = builtinSpec?.exampleRow?.length
+        ? [...builtinSpec.exampleRow]
+        : exampleRowOf(row.exampleRow);
+    const mappedFields = builtinSpec
+        ? [...builtinSpec.slotFields]
+        : fieldMappings;
+    const variableCount = countPositionalVars(bodyText);
     const validation = validateTemplateDraft({
         technicalName: row.technicalName,
         displayName: row.displayName,
         category: row.category as "MARKETING",
         language: row.language,
-        headerText: row.headerText,
-        bodyText: row.bodyText,
-        footerText: row.footerText,
-        fieldMappings,
+        headerText: builtinSpec ? null : row.headerText,
+        bodyText,
+        footerText: builtinSpec ? null : row.footerText,
+        fieldMappings: mappedFields,
         exampleRow,
-        loadsPerMessage: row.loadsPerMessage,
+        loadsPerMessage: builtinSpec?.loadsPerMessage || row.loadsPerMessage,
         description: row.description,
     });
     return {
@@ -154,14 +166,14 @@ function viewFromDbRow(row: DbRow): ManagedTemplateView {
         displayName: row.displayName,
         category: row.category,
         language: row.language,
-        headerText: row.headerText,
-        bodyText: row.bodyText,
-        footerText: row.footerText,
-        fieldMappings,
+        headerText: builtinSpec ? null : row.headerText,
+        bodyText,
+        footerText: builtinSpec ? null : row.footerText,
+        fieldMappings: mappedFields,
         exampleRow,
-        loadsPerMessage: row.loadsPerMessage,
+        loadsPerMessage: builtinSpec?.loadsPerMessage || row.loadsPerMessage,
         variableCount,
-        bodyCharCount: row.bodyText.length,
+        bodyCharCount: bodyText.length,
         description: row.description || "",
         previewFilled: validation.previewFilled,
         hidden: row.hidden,
@@ -700,6 +712,9 @@ export async function markSubmitted(
             },
         });
     }
+    const builtin = BULLETIN_TEMPLATE_LIBRARY.find(
+        (s) => s.preferredName === technicalName
+    );
     return managedDb().datafyManagedTemplate.update({
         where: { id: row.id },
         data: {
@@ -707,6 +722,15 @@ export async function markSubmitted(
             origin: "local",
             inLibrary: true,
             language: (row as { language?: string }).language || language,
+            ...(builtin
+                ? {
+                      bodyText: builtin.bodyTextForApproval,
+                      exampleRow:
+                          builtin.exampleRow as unknown as Prisma.InputJsonValue,
+                      fieldMappings:
+                          builtin.slotFields as unknown as Prisma.InputJsonValue,
+                  }
+                : {}),
             remoteStatus: String(remote.status || "PENDING").toUpperCase(),
             remoteTemplateId: remote.id || row.remoteTemplateId,
             remoteRejectedReason: remote.rejected_reason ?? null,

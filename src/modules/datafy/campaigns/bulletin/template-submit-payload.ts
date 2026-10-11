@@ -4,11 +4,16 @@
  *
  * Meta rules enforced here:
  * - BODY must not start or end with a {{n}} placeholder
+ * - Trailing punctuation alone after {{n}} is NOT enough (2388299)
  * - example.body_text is [[...]] with one string per variable, in order
  * - examples non-empty; count must match variables
  */
 
-import { countPositionalVars, sanitizeTemplateParam } from "./library";
+import {
+    countPositionalVars,
+    META_BODY_CLOSING_STATIC,
+    sanitizeTemplateParam,
+} from "./library";
 import { META_TEMPLATE_BODY_MAX } from "./types";
 import type { DatafyApiError } from "@/modules/datafy/client";
 
@@ -34,19 +39,50 @@ export type PayloadValidation = {
     startsWithVariable: boolean;
 };
 
-const ENDS_WITH_VAR = /\{\{\d+\}\}\s*$/;
 const STARTS_WITH_VAR = /^\s*\{\{\d+\}\}/;
+
+/**
+ * Meta validators often strip trailing punctuation before checking 2388299.
+ * Treat `...{{12}}.` / `...{{12}}!` as still ending with a variable.
+ */
+export function bodyEndsWithVariable(bodyText: string): boolean {
+    const t = (bodyText || "").replace(/\r\n/g, "\n").replace(/\s+$/g, "");
+    if (!t) return false;
+    const withoutPunct = t.replace(/[.!?…,:;]+$/u, "").replace(/\s+$/g, "");
+    return /\{\{\d+\}\}$/.test(withoutPunct);
+}
+
+export function bodyStartsWithVariable(bodyText: string): boolean {
+    return STARTS_WITH_VAR.test(bodyText || "");
+}
+
+/** First / last non-whitespace character (for tests and diagnostics). */
+export function significantBoundaryChars(bodyText: string): {
+    first: string;
+    last: string;
+} {
+    const t = (bodyText || "").replace(/\r\n/g, "\n").trim();
+    return {
+        first: t.charAt(0) || "",
+        last: t.charAt(t.length - 1) || "",
+    };
+}
 
 /** Meta: body must not begin or end with a parameter placeholder. */
 export function ensureBodyVariableBoundaries(bodyText: string): string {
     let text = (bodyText || "").replace(/\r\n/g, "\n").trimEnd();
     if (!text.trim()) return text;
-    if (STARTS_WITH_VAR.test(text)) {
-        text = `Atualizacao: ${text.trimStart()}`;
+    if (bodyStartsWithVariable(text)) {
+        text = `Atualizacao de embarque:\n${text.trimStart()}`;
     }
-    if (ENDS_WITH_VAR.test(text)) {
-        // Trailing static text required by Meta (error_subcode ~2388299)
-        text = `${text}.`;
+    if (bodyEndsWithVariable(text)) {
+        // Meaningful static sentence — Meta may ignore lone trailing punctuation
+        const closer = META_BODY_CLOSING_STATIC;
+        if (text.includes(closer)) {
+            text = `${text}\nObrigado.`;
+        } else {
+            text = `${text}\n${closer}`;
+        }
     }
     return text;
 }
@@ -59,8 +95,8 @@ export function validateTemplateBodyAndExamples(
     const warnings: string[] = [];
     const fixed = ensureBodyVariableBoundaries(bodyText);
     const variableCount = countPositionalVars(fixed);
-    const startsWithVariable = STARTS_WITH_VAR.test(fixed);
-    const endsWithVariable = ENDS_WITH_VAR.test(fixed);
+    const startsWithVariable = bodyStartsWithVariable(fixed);
+    const endsWithVariable = bodyEndsWithVariable(fixed);
 
     if (!fixed.trim()) {
         errors.push("BODY vazio.");
@@ -77,7 +113,7 @@ export function validateTemplateBodyAndExamples(
     }
     if (endsWithVariable) {
         errors.push(
-            "O BODY não pode terminar com variável {{n}} (regra Meta). Adicione texto estático após a última variável."
+            "O BODY não pode terminar com variável {{n}} (regra Meta). Adicione texto estático significativo após a última variável (não apenas pontuação)."
         );
     }
 
@@ -213,12 +249,12 @@ export function formatMetaTemplateApiError(
             "Este modelo possui variáveis demais em relação ao texto fixo. É necessário ajustar a estrutura antes de enviá-lo novamente.";
     } else if (
         subcode === 2388299 ||
-        /end with a parameter|begin with a parameter|começar|terminar com variável/i.test(
+        /end with a parameter|begin with a parameter|start or end of the template|começar|terminar com variável/i.test(
             rawMessage
         )
     ) {
         guidance =
-            "O texto do BODY não pode começar nem terminar com {{n}}. Inclua texto fixo antes/depois da variável.";
+            "O texto do BODY não pode começar nem terminar com {{n}}. Inclua texto fixo significativo (palavras) antes/depois — pontuação sozinha não basta.";
     } else if (subcode === 2388043 || /invalid parameter/i.test(rawMessage)) {
         guidance =
             "Verifique BODY, example.body_text (uma string por variável), nome técnico (a-z0-9_) e se o nome+idioma já existe.";
