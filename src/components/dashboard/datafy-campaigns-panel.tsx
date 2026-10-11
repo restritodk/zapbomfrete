@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
+    CAMPAIGN_BUTTON_TITLE_UI_MAX,
     CONSENT_BUTTON_IDS,
     DEFAULT_CONSENT_BUTTON_TITLES,
     META_INTERACTIVE_REPLY_TITLE_MAX,
@@ -1770,7 +1771,7 @@ export function DatafyCampaignsPanel() {
                                               .trim()
                                               .slice(
                                                   0,
-                                                  META_INTERACTIVE_REPLY_TITLE_MAX
+                                                  CAMPAIGN_BUTTON_TITLE_UI_MAX
                                               ),
                                       },
                                       {
@@ -1779,7 +1780,7 @@ export function DatafyCampaignsPanel() {
                                               .trim()
                                               .slice(
                                                   0,
-                                                  META_INTERACTIVE_REPLY_TITLE_MAX
+                                                  CAMPAIGN_BUTTON_TITLE_UI_MAX
                                               ),
                                       },
                                       ...(consentBtnExtraEnabled &&
@@ -1791,7 +1792,7 @@ export function DatafyCampaignsPanel() {
                                                         .trim()
                                                         .slice(
                                                             0,
-                                                            META_INTERACTIVE_REPLY_TITLE_MAX
+                                                            CAMPAIGN_BUTTON_TITLE_UI_MAX
                                                         ),
                                                 },
                                             ]
@@ -2545,7 +2546,7 @@ export function DatafyCampaignsPanel() {
                                                         </div>
                                                         <Input
                                                             maxLength={
-                                                                META_INTERACTIVE_REPLY_TITLE_MAX
+                                                                CAMPAIGN_BUTTON_TITLE_UI_MAX
                                                             }
                                                             value={
                                                                 consentBtnGrant
@@ -2569,7 +2570,7 @@ export function DatafyCampaignsPanel() {
                                                             }
                                                             /
                                                             {
-                                                                META_INTERACTIVE_REPLY_TITLE_MAX
+                                                                CAMPAIGN_BUTTON_TITLE_UI_MAX
                                                             }
                                                         </p>
                                                     </div>
@@ -2590,7 +2591,7 @@ export function DatafyCampaignsPanel() {
                                                         </div>
                                                         <Input
                                                             maxLength={
-                                                                META_INTERACTIVE_REPLY_TITLE_MAX
+                                                                CAMPAIGN_BUTTON_TITLE_UI_MAX
                                                             }
                                                             value={
                                                                 consentBtnDeny
@@ -2614,7 +2615,7 @@ export function DatafyCampaignsPanel() {
                                                             }
                                                             /
                                                             {
-                                                                META_INTERACTIVE_REPLY_TITLE_MAX
+                                                                CAMPAIGN_BUTTON_TITLE_UI_MAX
                                                             }
                                                         </p>
                                                     </div>
@@ -2641,7 +2642,7 @@ export function DatafyCampaignsPanel() {
                                                         <div className="space-y-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
                                                             <Input
                                                                 maxLength={
-                                                                    META_INTERACTIVE_REPLY_TITLE_MAX
+                                                                    CAMPAIGN_BUTTON_TITLE_UI_MAX
                                                                 }
                                                                 value={
                                                                     consentBtnExtra
@@ -2660,6 +2661,10 @@ export function DatafyCampaignsPanel() {
                                                                 {
                                                                     CONSENT_BUTTON_IDS.EXTRA
                                                                 }{" "}
+                                                                · máx.{" "}
+                                                                {
+                                                                    CAMPAIGN_BUTTON_TITLE_UI_MAX
+                                                                }{" "}
                                                                 · não altera
                                                                 consentimento
                                                                 automaticamente
@@ -2667,6 +2672,25 @@ export function DatafyCampaignsPanel() {
                                                         </div>
                                                     )}
                                                 </div>
+
+                                                {(consentBtnGrant.length >
+                                                    META_INTERACTIVE_REPLY_TITLE_MAX ||
+                                                    consentBtnDeny.length >
+                                                        META_INTERACTIVE_REPLY_TITLE_MAX ||
+                                                    (consentBtnExtraEnabled &&
+                                                        consentBtnExtra.length >
+                                                            META_INTERACTIVE_REPLY_TITLE_MAX)) && (
+                                                    <p className="text-[11px] leading-relaxed text-amber-900 rounded-lg border border-amber-200/80 bg-amber-50/90 px-3 py-2">
+                                                        A Meta limita o título do
+                                                        botão interativo a{" "}
+                                                        {
+                                                            META_INTERACTIVE_REPLY_TITLE_MAX
+                                                        }{" "}
+                                                        caracteres no envio. Textos
+                                                        maiores serão enviados
+                                                        truncados nesse limite.
+                                                    </p>
+                                                )}
 
                                                 {messageBody.trim().length >
                                                     META_INTERACTIVE_BODY_MAX && (

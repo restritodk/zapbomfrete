@@ -47,6 +47,8 @@ export const CONSENT_BUTTON_IDS = {
 export const META_QUICK_REPLY_TEXT_MAX = 25;
 /** Meta interactive reply button title max (freeform / 24h window). */
 export const META_INTERACTIVE_REPLY_TITLE_MAX = 20;
+/** Limite do formulário Nova campanha (edição/UI). Envio interativo Meta ainda usa 20. */
+export const CAMPAIGN_BUTTON_TITLE_UI_MAX = 50;
 export const META_QUICK_REPLY_MAX_BUTTONS = 3;
 
 export const DEFAULT_CONSENT_BUTTON_TITLES = {

@@ -1,4 +1,5 @@
 import {
+    CAMPAIGN_BUTTON_TITLE_UI_MAX,
     CONSENT_BUTTON_IDS,
     DEFAULT_CONSENT_BUTTONS,
     META_INTERACTIVE_REPLY_TITLE_MAX,
@@ -20,7 +21,7 @@ export function defaultCampaignConsentButtons(): CampaignConsentButtons {
         purpose: "consent_offers",
         buttons: DEFAULT_CONSENT_BUTTONS.map((b) => ({
             id: b.payload,
-            title: b.text.slice(0, META_INTERACTIVE_REPLY_TITLE_MAX),
+            title: b.text.slice(0, CAMPAIGN_BUTTON_TITLE_UI_MAX),
         })),
     };
 }
@@ -42,7 +43,7 @@ export function parseCampaignConsentButtons(
         if (!title) continue;
         buttons.push({
             id: id || `btn_${buttons.length + 1}`,
-            title: title.slice(0, META_INTERACTIVE_REPLY_TITLE_MAX),
+            title: title.slice(0, CAMPAIGN_BUTTON_TITLE_UI_MAX),
         });
     }
     if (!buttons.length) {
@@ -67,9 +68,9 @@ export function validateCampaignConsentButtons(
     }
     for (const b of cfg.buttons) {
         if (!b.title.trim()) errors.push("Título do botão não pode ser vazio.");
-        if (b.title.length > META_INTERACTIVE_REPLY_TITLE_MAX) {
+        if (b.title.length > CAMPAIGN_BUTTON_TITLE_UI_MAX) {
             errors.push(
-                `Botão "${b.title.slice(0, 12)}…" excede ${META_INTERACTIVE_REPLY_TITLE_MAX} caracteres (limite Meta para reply).`
+                `Botão "${b.title.slice(0, 12)}…" excede ${CAMPAIGN_BUTTON_TITLE_UI_MAX} caracteres.`
             );
         }
     }

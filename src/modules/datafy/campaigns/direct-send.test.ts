@@ -12,7 +12,10 @@ import {
     toInteractiveSendButtons,
 } from "@/modules/crm/consent/campaign-buttons";
 import { classifyConsentReply } from "@/modules/crm/consent/classify";
-import { META_INTERACTIVE_REPLY_TITLE_MAX } from "@/modules/crm/consent/constants";
+import {
+    CAMPAIGN_BUTTON_TITLE_UI_MAX,
+    META_INTERACTIVE_REPLY_TITLE_MAX,
+} from "@/modules/crm/consent/constants";
 
 describe("Envio Direto — purpose gates", () => {
     it("allows freeform for utility and transactional only", () => {
@@ -131,11 +134,12 @@ describe("Envio Direto — consent interactive buttons", () => {
         assert.equal(cfg.enabled, true);
         assert.equal(validateCampaignConsentButtons(cfg).ok, true);
         for (const b of cfg.buttons) {
-            assert.ok(b.title.length <= META_INTERACTIVE_REPLY_TITLE_MAX);
+            assert.ok(b.title.length <= CAMPAIGN_BUTTON_TITLE_UI_MAX);
         }
         const send = toInteractiveSendButtons(cfg);
         assert.equal(send.length, 2);
         assert.equal(send[0].id, "consent_yes");
+        assert.ok(send[0].title.length <= META_INTERACTIVE_REPLY_TITLE_MAX);
     });
 
     it("rejects overlong interactive titles", () => {
@@ -144,18 +148,19 @@ describe("Envio Direto — consent interactive buttons", () => {
             buttons: [
                 {
                     id: "x",
-                    title: "x".repeat(META_INTERACTIVE_REPLY_TITLE_MAX + 1),
+                    title: "x".repeat(CAMPAIGN_BUTTON_TITLE_UI_MAX + 1),
                 },
             ],
         });
-        // parse truncates — validation on raw overlong before parse:
+        assert.equal(cfg.buttons[0]?.title.length, CAMPAIGN_BUTTON_TITLE_UI_MAX);
+        // validation on raw overlong before parse:
         const bad = {
             enabled: true,
             purpose: "consent_offers" as const,
             buttons: [
                 {
                     id: "x",
-                    title: "x".repeat(META_INTERACTIVE_REPLY_TITLE_MAX + 1),
+                    title: "x".repeat(CAMPAIGN_BUTTON_TITLE_UI_MAX + 1),
                 },
             ],
         };
