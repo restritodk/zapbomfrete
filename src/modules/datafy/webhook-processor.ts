@@ -98,26 +98,16 @@ async function upsertStatus(opts: {
 }
 
 async function processTemplateStatusUpdate(value: DatafyWebhookValue) {
-    const { normalizeMetaTemplateEvent } = await import(
-        "./campaigns/bulletin/meta-approval"
+    const { applyWebhookTemplateUpdate } = await import(
+        "./campaigns/bulletin/template-sync"
     );
-    const { markSubmitted } = await import(
-        "./campaigns/bulletin/managed-registry"
-    );
-    const parsed = normalizeMetaTemplateEvent({
+    return applyWebhookTemplateUpdate({
         event: value.event,
         message_template_id: value.message_template_id,
         message_template_name: value.message_template_name,
         message_template_language: value.message_template_language,
         reason: value.reason,
     });
-    if (!parsed.name || !parsed.status) return false;
-    await markSubmitted(parsed.name, {
-        id: parsed.templateId,
-        status: parsed.status,
-        rejected_reason: parsed.rejectedReason,
-    });
-    return true;
 }
 
 async function processValue(

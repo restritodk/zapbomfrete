@@ -38,3 +38,15 @@ export {
     ensureBodyVariableBoundaries,
     validateTemplateBodyAndExamples,
 } from "./template-submit-payload";
+export {
+    syncTemplatesFromDatafy,
+    listSyncedApprovals,
+    toApprovalDto,
+    importTemplateToLibrary,
+    applyWebhookTemplateUpdate,
+    parseTemplateComponents,
+    shouldApplyRemoteStatus,
+    reconcileTemplatesIfStale,
+    type SyncStats,
+    type ApprovalsCounters,
+} from "./template-sync";

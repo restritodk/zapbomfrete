@@ -50,6 +50,8 @@ interface NavItem {
     external?: boolean;
     superadminOnly?: boolean;
     allowedRoles?: string[];
+    /** Nested submenu (e.g. Criador de Boletins) */
+    children?: Array<{ href: string; label: string }>;
 }
 
 const navGroups: NavGroup[] = [
@@ -65,7 +67,22 @@ const navGroups: NavGroup[] = [
         items: [
             { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
             { href: "/dashboard/broadcast", label: "Disparo em massa", icon: Megaphone },
-            { href: "/dashboard/boletim", label: "Criador de boletins", icon: FileText },
+            {
+                href: "/dashboard/boletim",
+                label: "Criador de Boletins",
+                icon: FileText,
+                children: [
+                    { href: "/dashboard/boletim", label: "Criar boletim" },
+                    {
+                        href: "/dashboard/boletim/aprovacoes",
+                        label: "Aprovações Meta",
+                    },
+                    {
+                        href: "/dashboard/boletim/biblioteca",
+                        label: "Biblioteca de templates",
+                    },
+                ],
+            },
             { href: "/dashboard/sticker", label: "Criador de figurinhas", icon: ImageIcon },
         ],
     },
@@ -123,6 +140,9 @@ export function SidebarNav() {
 
     // Track collapsed groups — all expanded by default
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+    const [openSubmenus, setOpenSubmenus] = useState<Record<string, boolean>>({
+        "/dashboard/boletim": true,
+    });
 
     const toggleGroup = (label: string) => {
         setCollapsedGroups(prev => ({ ...prev, [label]: !prev[label] }));
@@ -130,7 +150,20 @@ export function SidebarNav() {
 
     const isActive = (href: string) => {
         if (href === "/dashboard") return pathname === "/dashboard";
+        if (href === "/dashboard/boletim") {
+            return (
+                pathname === "/dashboard/boletim" ||
+                pathname.startsWith("/dashboard/boletim/")
+            );
+        }
         return pathname.startsWith(href);
+    };
+
+    const isChildActive = (href: string) => {
+        if (href === "/dashboard/boletim") {
+            return pathname === "/dashboard/boletim";
+        }
+        return pathname === href || pathname.startsWith(`${href}/`);
     };
 
     return (
@@ -185,14 +218,85 @@ export function SidebarNav() {
 
                             {(!isGroupCollapsed || isCollapsed) && (
                                 <div className="space-y-0.5">
-                                    {visibleItems.map((item) => (
-                                        <NavLink
-                                            key={item.href}
-                                            item={item}
-                                            active={isActive(item.href)}
-                                            isCollapsed={isCollapsed}
-                                        />
-                                    ))}
+                                    {visibleItems.map((item) => {
+                                        if (item.children?.length && !isCollapsed) {
+                                            const open =
+                                                openSubmenus[item.href] ??
+                                                isActive(item.href);
+                                            return (
+                                                <div key={item.href} className="space-y-0.5">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            setOpenSubmenus((prev) => ({
+                                                                ...prev,
+                                                                [item.href]: !open,
+                                                            }))
+                                                        }
+                                                        className={`
+                                                            flex items-center justify-between w-full rounded-lg text-sm font-medium
+                                                            gap-3 px-3 py-2 transition-all duration-200
+                                                            ${
+                                                                isActive(item.href)
+                                                                    ? "text-primary bg-primary/10"
+                                                                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                                                            }
+                                                        `}
+                                                    >
+                                                        <span className="flex items-center gap-3 min-w-0">
+                                                            <item.icon
+                                                                size={17}
+                                                                className={`flex-shrink-0 ${
+                                                                    isActive(item.href)
+                                                                        ? "text-primary"
+                                                                        : "text-muted-foreground/70"
+                                                                }`}
+                                                            />
+                                                            <span className="truncate">
+                                                                {item.label}
+                                                            </span>
+                                                        </span>
+                                                        <ChevronDown
+                                                            size={14}
+                                                            className={`shrink-0 transition-transform duration-200 ${
+                                                                open ? "" : "-rotate-90"
+                                                            }`}
+                                                        />
+                                                    </button>
+                                                    {open && (
+                                                        <div className="ml-4 pl-3 border-l border-border/40 space-y-0.5">
+                                                            {item.children.map((child) => (
+                                                                <Link
+                                                                    key={child.href}
+                                                                    href={child.href}
+                                                                    className={`
+                                                                        block rounded-md px-2.5 py-1.5 text-[13px] transition-colors
+                                                                        ${
+                                                                            isChildActive(
+                                                                                child.href
+                                                                            )
+                                                                                ? "text-primary font-medium bg-primary/5"
+                                                                                : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                                                                        }
+                                                                    `}
+                                                                >
+                                                                    {child.label}
+                                                                </Link>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        }
+                                        return (
+                                            <NavLink
+                                                key={item.href}
+                                                item={item}
+                                                active={isActive(item.href)}
+                                                isCollapsed={isCollapsed}
+                                            />
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>

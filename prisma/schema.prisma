@@ -828,12 +828,15 @@ model DatafyBulletinDraft {
 
 /// Managed bulletin template library (builtins overrides + custom templates).
 /// Hiding a builtin persists across deploys. Meta is never changed by local delete.
+/// Synced with WABA via Datafy (local submit + Meta Manager imports).
 model DatafyManagedTemplate {
   id                   String    @id @default(cuid())
   organizationKey      String    @default("default")
-  /// builtin | custom
+  /// WABA id for isolation (empty string = legacy / unknown until sync).
+  wabaId               String    @default("")
+  /// builtin | custom | remote
   kind                 String
-  /// Library id for builtins (e.g. boletim_v2_1_carga). Null for custom.
+  /// Library id for builtins (e.g. boletim_v3_1_carga). Null for custom/remote.
   builtinId            String?
   /// Soft-hide from local library (builtins). Survives restart/deploy.
   hidden               Boolean   @default(false)
@@ -841,27 +844,57 @@ model DatafyManagedTemplate {
   technicalName        String
   displayName          String
   category             String    @default("MARKETING")
+  /// Official language from Meta/Datafy — do not coerce en → pt_BR.
   language             String    @default("pt_BR")
   headerText           String?   @db.Text
   bodyText             String    @db.Text
   footerText           String?   @db.Text
+  /// Full Meta components JSON when synced (HEADER/BODY/FOOTER…).
+  componentsJson       Json?
   /// Ordered field keys for {{1}}..{{n}} (origem, destino, frete, …)
   fieldMappings        Json
   exampleRow           Json
   loadsPerMessage      Int       @default(1)
   description          String?
+  /// local | meta_import | unknown
+  origin               String    @default("unknown")
+  /// Ready for Criador/compose (mapped). Remote imports start false.
+  inLibrary            Boolean   @default(false)
   remoteStatus         String?
   remoteTemplateId     String?
   remoteRejectedReason String?
   lastSubmittedAt      DateTime?
+  lastSyncedAt         DateTime?
+  /// Last status that already generated a panel notification (dedupe).
+  lastNotifiedStatus   String?
+  syncError            String?
   createdById          String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
   createdBy User? @relation("DatafyManagedTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
-  @@unique([organizationKey, technicalName])
+  @@unique([organizationKey, wabaId, technicalName, language])
   @@index([organizationKey, kind, hidden])
   @@index([organizationKey, builtinId])
+  @@index([organizationKey, wabaId, remoteStatus])
+  @@index([remoteTemplateId])
   @@index([deletedAt])
+}
+
+/// Sync lock / reconciliation bookkeeping per WABA (concurrency + last run).
+model DatafyTemplateSyncState {
+  id              String    @id @default(cuid())
+  organizationKey String    @default("default")
+  wabaId          String
+  lockedAt        DateTime?
+  lockOwner       String?
+  lastSyncAt      DateTime?
+  lastSyncError   String?   @db.Text
+  lastSyncStats   Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([organizationKey, wabaId])
+  @@index([lastSyncAt])
 }

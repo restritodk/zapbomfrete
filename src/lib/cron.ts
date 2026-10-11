@@ -99,6 +99,24 @@ export function initScheduler() {
             logger.error("Cron", "Scheduler error:", error);
         }
     });
+
+    // Meta template reconciliation via Datafy (every 30 min — not aggressive polling)
+    cron.schedule("*/30 * * * *", async () => {
+        try {
+            const { reconcileTemplatesIfStale } = await import(
+                "@/modules/datafy/campaigns/bulletin/template-sync"
+            );
+            const stats = await reconcileTemplatesIfStale(25 * 60 * 1000);
+            if (stats) {
+                logger.info(
+                    "Cron",
+                    `Template sync: fetched=${stats.fetched} imported=${stats.imported} updated=${stats.updated}`
+                );
+            }
+        } catch (error) {
+            logger.warn("Cron", "Template sync skipped/failed", error);
+        }
+    });
     
     logger.info("Cron", "Scheduler initialized");
 }

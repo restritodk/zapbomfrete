@@ -66,6 +66,10 @@ type DbRow = {
     remoteTemplateId: string | null;
     remoteRejectedReason: string | null;
     lastSubmittedAt: Date | null;
+    /** Present after approvals sync migration */
+    inLibrary?: boolean;
+    origin?: string;
+    wabaId?: string;
 };
 
 function managedDb() {
@@ -195,11 +199,20 @@ export async function listEffectiveManagedTemplates(): Promise<
 
     const byBuiltin = new Map<string, DbRow>();
     const customs: DbRow[] = [];
+    const libraryRemotes: DbRow[] = [];
     for (const r of rows) {
         if (r.kind === "builtin" && r.builtinId) {
             byBuiltin.set(r.builtinId, r);
         } else if (r.kind === "custom") {
             customs.push(r);
+        } else if (
+            (r.kind === "remote" || r.origin === "meta_import") &&
+            r.inLibrary !== false &&
+            Array.isArray(r.fieldMappings) &&
+            (r.fieldMappings as unknown[]).length > 0
+        ) {
+            // Only mapped Meta imports enter compose library
+            if (r.inLibrary) libraryRemotes.push(r);
         }
     }
 
@@ -215,6 +228,9 @@ export async function listEffectiveManagedTemplates(): Promise<
     }
     for (const c of customs) {
         if (!c.hidden) out.push(viewFromDbRow(c));
+    }
+    for (const r of libraryRemotes) {
+        if (!r.hidden) out.push(viewFromDbRow(r));
     }
     return out;
 }
@@ -628,11 +644,28 @@ export async function deleteOrHideManaged(viewId: string, userId: string) {
 
 export async function markSubmitted(
     technicalName: string,
-    remote: { id?: string | null; status?: string | null; rejected_reason?: string | null }
+    remote: {
+        id?: string | null;
+        status?: string | null;
+        rejected_reason?: string | null;
+        language?: string | null;
+        wabaId?: string | null;
+    }
 ) {
-    const row = await managedDb().datafyManagedTemplate.findFirst({
-        where: { organizationKey: ORG, technicalName, deletedAt: null },
-    });
+    const language = String(remote.language || "pt_BR").trim() || "pt_BR";
+    const wabaId = String(remote.wabaId || "").trim();
+    const row =
+        (await managedDb().datafyManagedTemplate.findFirst({
+            where: {
+                organizationKey: ORG,
+                technicalName,
+                language,
+                deletedAt: null,
+            },
+        })) ||
+        (await managedDb().datafyManagedTemplate.findFirst({
+            where: { organizationKey: ORG, technicalName, deletedAt: null },
+        }));
     if (!row) {
         // Create tracking stub for code builtin after submit
         const builtin = BULLETIN_TEMPLATE_LIBRARY.find(
@@ -642,13 +675,14 @@ export async function markSubmitted(
         return managedDb().datafyManagedTemplate.create({
             data: {
                 organizationKey: ORG,
+                wabaId,
                 kind: "builtin",
                 builtinId: builtin.id,
                 hidden: false,
                 technicalName: builtin.preferredName,
                 displayName: builtin.preferredName,
                 category: builtin.recommendedCategory,
-                language: "pt_BR",
+                language,
                 bodyText: builtin.bodyTextForApproval,
                 fieldMappings:
                     builtin.slotFields as unknown as Prisma.InputJsonValue,
@@ -656,20 +690,28 @@ export async function markSubmitted(
                     builtin.exampleRow as unknown as Prisma.InputJsonValue,
                 loadsPerMessage: builtin.loadsPerMessage,
                 description: builtin.description,
+                origin: "local",
+                inLibrary: true,
                 remoteStatus: String(remote.status || "PENDING").toUpperCase(),
                 remoteTemplateId: remote.id || null,
                 remoteRejectedReason: remote.rejected_reason || null,
                 lastSubmittedAt: new Date(),
+                lastSyncedAt: new Date(),
             },
         });
     }
     return managedDb().datafyManagedTemplate.update({
         where: { id: row.id },
         data: {
+            wabaId: wabaId || (row as { wabaId?: string }).wabaId || "",
+            origin: "local",
+            inLibrary: true,
+            language: (row as { language?: string }).language || language,
             remoteStatus: String(remote.status || "PENDING").toUpperCase(),
             remoteTemplateId: remote.id || row.remoteTemplateId,
             remoteRejectedReason: remote.rejected_reason ?? null,
             lastSubmittedAt: new Date(),
+            lastSyncedAt: new Date(),
             updatedAt: new Date(),
         },
     });
