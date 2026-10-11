@@ -124,6 +124,13 @@ type AudienceResult = {
     eligibleCount: number;
     excludedCount: number;
     exclusionBreakdown?: Record<string, number>;
+    consentSummary?: {
+        inCrm: number;
+        granted: number;
+        missingConsent: number;
+        deniedOrRevoked: number;
+        notInCrm: number;
+    };
     simulationEligibleCount?: number;
     openWindowCount?: number;
     needsTemplateCount?: number;
@@ -3477,8 +3484,52 @@ export function DatafyCampaignsPanel() {
                                             Selecionados:{" "}
                                             <strong>{audience.selected}</strong>
                                         </span>
+                                        {audience.consentSummary && (
+                                            <>
+                                                <span>
+                                                    No CRM:{" "}
+                                                    <strong>
+                                                        {
+                                                            audience
+                                                                .consentSummary
+                                                                .inCrm
+                                                        }
+                                                    </strong>
+                                                </span>
+                                                <span>
+                                                    Consentimento válido:{" "}
+                                                    <strong className="text-emerald-700">
+                                                        {
+                                                            audience
+                                                                .consentSummary
+                                                                .granted
+                                                        }
+                                                    </strong>
+                                                </span>
+                                                <span>
+                                                    Sem consentimento:{" "}
+                                                    <strong>
+                                                        {
+                                                            audience
+                                                                .consentSummary
+                                                                .missingConsent
+                                                        }
+                                                    </strong>
+                                                </span>
+                                                <span>
+                                                    Recusados/revogados:{" "}
+                                                    <strong className="text-amber-800">
+                                                        {
+                                                            audience
+                                                                .consentSummary
+                                                                .deniedOrRevoked
+                                                        }
+                                                    </strong>
+                                                </span>
+                                            </>
+                                        )}
                                         <span>
-                                            Aptos (autorizados):{" "}
+                                            Aptos para envio:{" "}
                                             <strong className="text-emerald-700">
                                                 {audience.eligibleCount}
                                             </strong>

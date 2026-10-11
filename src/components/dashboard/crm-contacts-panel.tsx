@@ -65,6 +65,9 @@ type CrmRow = {
     origin: string;
     active: boolean;
     consentStatus: string;
+    consentSource?: string | null;
+    consentAt?: string | null;
+    consentPurpose?: string | null;
     notes: string | null;
     lastInteractionAt: string | null;
     tags: Array<{ id: string; name: string; colorHex: string }>;
@@ -838,9 +841,41 @@ export function CrmContactsPanel() {
                                     .join(" / ") || "—"}
                             </p>
                             <p>Categoria: {viewData.contact.category || "—"}</p>
-                            <p>
-                                Consentimento: {viewData.contact.consentStatus}
-                            </p>
+                            <div className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2 space-y-1">
+                                <p className="font-medium">
+                                    Consentimento WhatsApp
+                                </p>
+                                <p>
+                                    Status:{" "}
+                                    {viewData.contact.consentStatus.replace(
+                                        "_",
+                                        " "
+                                    )}
+                                </p>
+                                <p>
+                                    Finalidade:{" "}
+                                    {viewData.contact.consentPurpose ||
+                                        "marketing_offers"}
+                                </p>
+                                <p>
+                                    Origem:{" "}
+                                    {viewData.contact.consentSource || "—"}
+                                </p>
+                                <p>
+                                    Última atualização:{" "}
+                                    {viewData.contact.consentAt
+                                        ? new Date(
+                                              viewData.contact.consentAt
+                                          ).toLocaleString("pt-BR")
+                                        : "—"}
+                                </p>
+                                <Link
+                                    href={`/dashboard/contatos/consentimentos`}
+                                    className="text-xs text-primary underline-offset-2 hover:underline"
+                                >
+                                    Abrir painel de consentimentos / histórico
+                                </Link>
+                            </div>
                             <p className="whitespace-pre-wrap">
                                 Observações: {viewData.contact.notes || "—"}
                             </p>

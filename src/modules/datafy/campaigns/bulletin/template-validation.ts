@@ -16,6 +16,8 @@ export type TemplateDraftInput = {
     headerText?: string | null;
     bodyText: string;
     footerText?: string | null;
+    /** Phase 9 — optional QUICK_REPLY buttons (consent etc.) */
+    buttons?: unknown;
     fieldMappings: string[];
     exampleRow: string[];
     loadsPerMessage?: number;

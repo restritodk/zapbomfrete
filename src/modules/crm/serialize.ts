@@ -25,6 +25,13 @@ export function serializeCrmContact(c: ContactWithTags) {
         consentSource: c.consentSource,
         consentAt: c.consentAt?.toISOString() ?? null,
         optedOutAt: c.optedOutAt?.toISOString() ?? null,
+        consentPurpose:
+            (c as { consentPurpose?: string | null }).consentPurpose ??
+            "marketing_offers",
+        consentWabaId:
+            (c as { consentWabaId?: string | null }).consentWabaId ?? null,
+        consentEvidence:
+            (c as { consentEvidence?: string | null }).consentEvidence ?? null,
         lastInteractionAt: c.lastInteractionAt?.toISOString() ?? null,
         createdAt: c.createdAt.toISOString(),
         updatedAt: c.updatedAt.toISOString(),

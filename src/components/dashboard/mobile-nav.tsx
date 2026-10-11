@@ -61,7 +61,12 @@ const navGroups: NavGroup[] = [
     {
         label: "Contatos",
         items: [
-            { href: "/dashboard/contacts", label: "Contatos", icon: UserCheck },
+            { href: "/dashboard/contacts", label: "Todos os contatos", icon: UserCheck },
+            {
+                href: "/dashboard/contatos/consentimentos",
+                label: "Consentimentos",
+                icon: UserCheck,
+            },
             { href: "/dashboard/groups", label: "Grupos", icon: Users },
             { href: "/dashboard/labels", label: "Etiquetas", icon: Tag },
         ],

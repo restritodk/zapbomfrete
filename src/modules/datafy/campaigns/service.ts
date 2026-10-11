@@ -528,7 +528,16 @@ export async function previewCampaignAudience(
         simulationRelaxConsent?: boolean;
     }
 ) {
-    const contacts = await resolveSegmentContacts(filter);
+    // Import/groups: associate phones to CRM as unknown (never granted) so
+    // exclusions show missing_consent instead of not_in_crm when possible.
+    const resolvedFilter: SegmentFilter = {
+        ...filter,
+        ensureCrmContacts:
+            filter.ensureCrmContacts === true ||
+            filter.source === "import" ||
+            filter.source === "groups",
+    };
+    const contacts = await resolveSegmentContacts(resolvedFilter);
     const preview = previewRecipients(contacts, opts);
     const windows = await countOpenServiceWindows(
         preview.eligibleAll.map((c) => c.waId)
@@ -538,6 +547,7 @@ export async function previewCampaignAudience(
         eligibleCount: preview.eligibleCount,
         excludedCount: preview.excludedCount,
         exclusionBreakdown: preview.exclusionBreakdown,
+        consentSummary: preview.consentSummary,
         simulationEligibleCount: preview.simulationEligibleCount,
         openWindowCount: windows.openWindowCount,
         needsTemplateCount: windows.needsTemplateCount,
@@ -568,7 +578,14 @@ export async function materializeRecipients(
         simulationRelaxConsent?: boolean;
     }
 ) {
-    const contacts = await resolveSegmentContacts(filter);
+    const contacts = await resolveSegmentContacts({
+        ...filter,
+        ensureCrmContacts:
+            filter.ensureCrmContacts === true ||
+            filter.source === "import" ||
+            filter.source === "groups" ||
+            (Array.isArray(filter.phones) && filter.phones.length > 0),
+    });
     const preview = previewRecipients(contacts, opts);
 
     await prisma.datafyCampaignRecipient.deleteMany({

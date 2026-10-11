@@ -3,6 +3,7 @@ import { normalizeBrazilianPhone } from "@/lib/phone-br";
 import { CRM_ORG_DEFAULT } from "@/modules/crm/constants";
 import {
     evaluateEligibility,
+    summarizeConsentAudience,
     type EligibilityContact,
     type EligibilityOpts,
 } from "./eligibility";
@@ -14,6 +15,11 @@ export type SegmentFilter = {
     source?: "import" | "crm" | "groups";
     /** Normalized phone digits from TXT/CSV or Baileys group extract */
     phones?: string[];
+    /**
+     * When true (default for import/groups), upsert missing phones into CRM
+     * as unknown consent — never grants marketing consent.
+     */
+    ensureCrmContacts?: boolean;
     contactIds?: string[];
     tagIds?: string[];
     category?: string | null;
@@ -32,7 +38,10 @@ export async function resolveSegmentContacts(filter: SegmentFilter) {
         filter.source === "groups" ||
         (Array.isArray(filter.phones) && filter.phones.length > 0)
     ) {
-        return resolveContactsFromPhones(filter.phones || []);
+        return resolveContactsFromPhones(filter.phones || [], {
+            // Explicit opt-in — never invent consent; only creates unknown CRM rows.
+            ensureCrmContacts: filter.ensureCrmContacts === true,
+        });
     }
 
     const where: Record<string, unknown> = {
@@ -76,11 +85,12 @@ export async function resolveSegmentContacts(filter: SegmentFilter) {
 
 /**
  * Resolve imported/group phones against CRM.
- * Numbers not in CRM become synthetic contacts with consentStatus=unknown
- * (import/group membership never grants marketing consent).
+ * When ensureCrmContacts is true, missing numbers are upserted as CRM contacts
+ * with consentStatus=unknown (never granted). Otherwise they stay synthetic.
  */
 export async function resolveContactsFromPhones(
-    rawPhones: string[]
+    rawPhones: string[],
+    opts?: { ensureCrmContacts?: boolean }
 ): Promise<EligibilityContact[]> {
     const normalized: string[] = [];
     const seen = new Set<string>();
@@ -92,13 +102,42 @@ export async function resolveContactsFromPhones(
     }
     if (!normalized.length) return [];
 
-    const existing = await prisma.crmContact.findMany({
+    let existing = await prisma.crmContact.findMany({
         where: {
             organizationKey: CRM_ORG_DEFAULT,
             waId: { in: normalized },
         },
     });
     const byWa = new Map(existing.map((c) => [c.waId, c]));
+
+    if (opts?.ensureCrmContacts) {
+        const missing = normalized.filter((wa) => !byWa.has(wa));
+        for (const waId of missing) {
+            try {
+                const created = await prisma.crmContact.create({
+                    data: {
+                        organizationKey: CRM_ORG_DEFAULT,
+                        waId,
+                        origin: "import",
+                        consentStatus: "unknown",
+                        consentPurpose: "marketing_offers",
+                    } as never,
+                });
+                byWa.set(waId, created);
+            } catch {
+                const again = await prisma.crmContact.findUnique({
+                    where: {
+                        organizationKey_waId: {
+                            organizationKey: CRM_ORG_DEFAULT,
+                            waId,
+                        },
+                    },
+                });
+                if (again) byWa.set(waId, again);
+            }
+        }
+        existing = Array.from(byWa.values());
+    }
 
     return normalized.map((waId) => {
         const c = byWa.get(waId);
@@ -195,11 +234,14 @@ export function previewRecipients(
         }).eligible.length;
     }
 
+    const consentSummary = summarizeConsentAudience(contacts);
+
     return {
         selected: contacts.length,
         eligibleCount: pass.eligible.length,
         excludedCount: pass.excluded.length,
         exclusionBreakdown: pass.exclusionBreakdown,
+        consentSummary,
         simulationEligibleCount,
         eligible: pass.eligible.slice(0, 50),
         excluded: pass.excluded.slice(0, 100),

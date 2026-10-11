@@ -57,6 +57,7 @@ model User {
   datafyCampaignsCreated DatafyCampaign[] @relation("DatafyCampaignCreatedBy")
   datafyBulletinDraftsCreated DatafyBulletinDraft[] @relation("DatafyBulletinDraftCreatedBy")
   datafyManagedTemplatesCreated DatafyManagedTemplate[] @relation("DatafyManagedTemplateCreatedBy")
+  crmConsentDecisionsAsActor CrmConsentDecision[] @relation("CrmConsentDecisionActor")
 }
 
 model Session {
@@ -548,11 +549,17 @@ model CrmContact {
   origin            String    @default("manual")
   notes             String?   @db.Text
   active            Boolean   @default(true)
-  /// unknown | granted | denied | opted_out
+  /// unknown | granted | denied | opted_out (opted_out = REVOKED)
   consentStatus     String    @default("unknown")
   consentSource     String?
   consentAt         DateTime?
   optedOutAt        DateTime?
+  /// marketing_offers | utility | other
+  consentPurpose    String    @default("marketing_offers")
+  /// WABA that recorded the latest decision (empty = org-wide / unknown).
+  consentWabaId     String?
+  consentEvidence   String?   @db.Text
+  lastConsentDecisionId String?
   lastInteractionAt DateTime?
   createdById       String?
   updatedById       String?
@@ -563,6 +570,7 @@ model CrmContact {
   updatedBy     User?                @relation("CrmContactUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   tags          CrmContactTag[]
   conversations DatafyConversation[]
+  consentDecisions CrmConsentDecision[]
 
   @@unique([organizationKey, waId])
   @@index([fullName])
@@ -574,6 +582,48 @@ model CrmContact {
   @@index([active])
   @@index([consentStatus])
   @@index([lastInteractionAt])
+  @@index([consentPurpose])
+}
+
+/// Immutable audit trail for WhatsApp marketing consent decisions (Phase 9).
+model CrmConsentDecision {
+  id              String   @id @default(cuid())
+  organizationKey String   @default("default")
+  wabaId          String   @default("")
+  crmContactId    String?
+  waId            String
+  purpose         String   @default("marketing_offers")
+  /// GRANTED | DENIED | REVOKED | UNKNOWN
+  decision        String
+  /// Resulting CrmContact.consentStatus after apply (may be unchanged if stale).
+  resultingStatus String
+  /// interactive_button | keyword_opt_out | manual_evidence | system
+  source          String
+  evidenceText    String?  @db.Text
+  evidencePayload Json?
+  buttonId        String?
+  buttonTitle     String?
+  relatedMessageId String?
+  templateName    String?
+  requestVersion  String?
+  datafyEventId   String?
+  /// Decision timestamp from provider (used for out-of-order guard).
+  decidedAt       DateTime
+  receivedAt      DateTime @default(now())
+  actorUserId     String?
+  /// Unique per inbound event (wamid+button / delivery).
+  idempotencyKey  String?  @unique
+  appliedToContact Boolean @default(true)
+  createdAt       DateTime @default(now())
+
+  crmContact CrmContact? @relation(fields: [crmContactId], references: [id], onDelete: SetNull)
+  actor      User?       @relation("CrmConsentDecisionActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationKey, waId, decidedAt])
+  @@index([crmContactId, decidedAt])
+  @@index([organizationKey, decision])
+  @@index([organizationKey, purpose, decidedAt])
+  @@index([relatedMessageId])
 }
 
 model CrmTag {
@@ -849,6 +899,8 @@ model DatafyManagedTemplate {
   headerText           String?   @db.Text
   bodyText             String    @db.Text
   footerText           String?   @db.Text
+  /// Optional Meta BUTTONS / QUICK_REPLY config for consent or CTAs.
+  buttonsJson          Json?
   /// Full Meta components JSON when synced (HEADER/BODY/FOOTER…).
   componentsJson       Json?
   /// Ordered field keys for {{1}}..{{n}} (origem, destino, frete, …)

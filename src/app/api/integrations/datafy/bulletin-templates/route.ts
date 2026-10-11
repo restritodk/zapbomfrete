@@ -31,6 +31,24 @@ import {
 
 export const dynamic = "force-dynamic";
 
+const buttonsSchema = z
+    .object({
+        enabled: z.boolean(),
+        purpose: z.string().optional(),
+        buttons: z
+            .array(
+                z.object({
+                    type: z.string().optional(),
+                    text: z.string().max(25),
+                    payload: z.string().max(64).optional(),
+                })
+            )
+            .max(3)
+            .optional(),
+    })
+    .optional()
+    .nullable();
+
 const createSchema = z.object({
     action: z.literal("create"),
     technicalName: z.string().min(3).max(64),
@@ -39,6 +57,7 @@ const createSchema = z.object({
     headerText: z.string().max(120).optional().nullable(),
     bodyText: z.string().min(1).max(2000),
     footerText: z.string().max(120).optional().nullable(),
+    buttons: buttonsSchema,
     fieldMappings: z.array(z.string()).min(1).max(60),
     exampleRow: z.array(z.string()).max(60),
     loadsPerMessage: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
@@ -63,6 +82,7 @@ const validateSchema = z.object({
     headerText: z.string().optional().nullable(),
     bodyText: z.string(),
     footerText: z.string().optional().nullable(),
+    buttons: buttonsSchema,
     fieldMappings: z.array(z.string()),
     exampleRow: z.array(z.string()),
     loadsPerMessage: z.number().optional(),
@@ -348,6 +368,7 @@ export async function POST(request: NextRequest) {
                 category: managed.category as "MARKETING",
                 bodyText: bodyForSubmit,
                 exampleRow: examplesForSubmit,
+                buttons: managed.buttons,
             });
             if (!built.ok) {
                 return NextResponse.json(

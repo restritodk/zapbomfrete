@@ -174,11 +174,20 @@ async function sendOneRecipient(
         return;
     }
 
-    // Re-check eligibility immediately before send
-    if (recipient.crmContactId) {
-        const contact = await prisma.crmContact.findUnique({
-            where: { id: recipient.crmContactId },
-        });
+    // Re-check consent/eligibility immediately before send (Phase 9)
+    {
+        const contact = recipient.crmContactId
+            ? await prisma.crmContact.findUnique({
+                  where: { id: recipient.crmContactId },
+              })
+            : await prisma.crmContact.findUnique({
+                  where: {
+                      organizationKey_waId: {
+                          organizationKey: "default",
+                          waId: recipient.waId,
+                      },
+                  },
+              });
         if (contact) {
             const elig = evaluateEligibility(contact, {
                 purpose: campaign.purpose,
@@ -186,15 +195,39 @@ async function sendOneRecipient(
                 simulationRelaxConsent: campaign.dryRun,
             });
             if (!elig.ok) {
+                const reason =
+                    elig.reason === "opted_out" || elig.reason === "denied"
+                        ? "consent_revoked_runtime"
+                        : elig.reason;
                 await prisma.datafyCampaignRecipient.update({
                     where: { id: recipient.id },
                     data: {
                         status: "skipped",
-                        skipReason: elig.reason,
+                        skipReason: reason,
+                        crmContactId: contact.id,
                     },
                 });
                 return;
             }
+            if (!recipient.crmContactId) {
+                await prisma.datafyCampaignRecipient.update({
+                    where: { id: recipient.id },
+                    data: { crmContactId: contact.id },
+                });
+            }
+        } else if (
+            campaign.requireConsent &&
+            (campaign.purpose === "marketing" || campaign.purpose === "other") &&
+            !campaign.dryRun
+        ) {
+            await prisma.datafyCampaignRecipient.update({
+                where: { id: recipient.id },
+                data: {
+                    status: "skipped",
+                    skipReason: "not_in_crm",
+                },
+            });
+            return;
         }
     }
 

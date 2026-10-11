@@ -16,16 +16,18 @@ import {
 } from "./library";
 import { META_TEMPLATE_BODY_MAX } from "./types";
 import type { DatafyApiError } from "@/modules/datafy/client";
+import {
+    buildButtonsComponent,
+    parseButtonsConfig,
+    validateButtonsConfig,
+    type TemplateButtonsConfig,
+} from "@/modules/crm/consent/buttons";
 
 export type TemplateCreatePayload = {
     name: string;
     language: string;
     category: "MARKETING" | "UTILITY" | "AUTHENTICATION";
-    components: Array<{
-        type: "BODY";
-        text: string;
-        example?: { body_text: string[][] };
-    }>;
+    components: Array<Record<string, unknown>>;
 };
 
 export type PayloadValidation = {
@@ -150,6 +152,8 @@ export function buildTemplateCreatePayload(opts: {
     category: "MARKETING" | "UTILITY" | "AUTHENTICATION";
     bodyText: string;
     exampleRow: string[];
+    /** Optional Meta BUTTONS (QUICK_REPLY) — consent or other. */
+    buttons?: TemplateButtonsConfig | null;
 }): { ok: true; payload: TemplateCreatePayload; warnings: string[] } | {
     ok: false;
     errors: string[];
@@ -167,6 +171,23 @@ export function buildTemplateCreatePayload(opts: {
         };
     }
 
+    const buttonsCfg = opts.buttons
+        ? parseButtonsConfig(opts.buttons)
+        : null;
+    const buttonsValidation = buttonsCfg?.enabled
+        ? validateButtonsConfig(buttonsCfg)
+        : { ok: true, errors: [] as string[], warnings: [] as string[] };
+    if (!buttonsValidation.ok) {
+        return {
+            ok: false,
+            errors: buttonsValidation.errors,
+            warnings: [
+                ...validation.warnings,
+                ...buttonsValidation.warnings,
+            ],
+        };
+    }
+
     const components: TemplateCreatePayload["components"] = [
         {
             type: "BODY",
@@ -181,11 +202,17 @@ export function buildTemplateCreatePayload(opts: {
         },
     ];
 
+    const buttonsComp = buildButtonsComponent(buttonsCfg);
+    if (buttonsComp) components.push(buttonsComp);
+
     // Omit parameter_format — POSITIONAL is Meta/Datafy default; sending it
     // is optional and some mirrors reject unknown fields.
     return {
         ok: true,
-        warnings: validation.warnings,
+        warnings: [
+            ...validation.warnings,
+            ...buttonsValidation.warnings,
+        ],
         payload: {
             name: opts.name,
             language: opts.language || "pt_BR",

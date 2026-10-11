@@ -259,6 +259,27 @@ export async function persistInboundFromWebhookValue(
             emitDatafyEvent("datafy.conversation", {
                 conversation: serializeConversation(conversation),
             });
+
+            // Phase 9: interactive buttons / opt-out keywords → CRM consent
+            try {
+                const { processInboundConsentMessage } = await import(
+                    "@/modules/crm/consent/decisions"
+                );
+                await processInboundConsentMessage({
+                    waId: from,
+                    wabaId: null,
+                    wamid,
+                    messageType: parsed.type,
+                    body: parsed.body,
+                    interactive:
+                        parsed.type === "interactive"
+                            ? (parsed.metadata as Record<string, unknown> | null)
+                            : null,
+                    timestamp: providerTimestamp,
+                });
+            } catch {
+                /* consent processing must not block chat persistence */
+            }
         } catch (e: unknown) {
             const code = (e as { code?: string })?.code;
             if (code === "P2002") continue; // race on wamid

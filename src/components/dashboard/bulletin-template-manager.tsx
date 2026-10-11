@@ -59,6 +59,12 @@ import { cn } from "@/lib/utils";
 import { FIELD_MAP_OPTIONS } from "@/modules/datafy/campaigns/bulletin/field-map";
 import { META_BODY_MAX } from "@/modules/datafy/campaigns/bulletin/template-validation";
 
+type ButtonsDraft = {
+    enabled: boolean;
+    grantText: string;
+    denyText: string;
+};
+
 type ManagedItem = {
     id: string;
     kind: "builtin" | "custom";
@@ -70,6 +76,11 @@ type ManagedItem = {
     headerText: string | null;
     bodyText: string;
     footerText: string | null;
+    buttons?: {
+        enabled: boolean;
+        purpose?: string;
+        buttons?: Array<{ text: string; payload?: string }>;
+    } | null;
     fieldMappings: string[];
     exampleRow: string[];
     loadsPerMessage: number;
@@ -92,6 +103,7 @@ type DraftForm = {
     headerText: string;
     bodyText: string;
     footerText: string;
+    buttons: ButtonsDraft;
     fieldMappings: string[];
     exampleRow: string[];
     loadsPerMessage: 1 | 2 | 3;
@@ -105,11 +117,52 @@ const emptyDraft = (): DraftForm => ({
     headerText: "",
     bodyText: "",
     footerText: "",
+    buttons: {
+        enabled: false,
+        grantText: "Sim, quero ofertas",
+        denyText: "Não quero receber",
+    },
     fieldMappings: ["origem", "destino", "frete"],
     exampleRow: ["Lucas do Rio Verde/MT", "Rondonópolis/MT", "R$ 280/t"],
     loadsPerMessage: 1,
     description: "",
 });
+
+function buttonsFromItem(item: ManagedItem): ButtonsDraft {
+    const b = item.buttons;
+    if (!b?.enabled) {
+        return {
+            enabled: false,
+            grantText: "Sim, quero ofertas",
+            denyText: "Não quero receber",
+        };
+    }
+    return {
+        enabled: true,
+        grantText: b.buttons?.[0]?.text || "Sim, quero ofertas",
+        denyText: b.buttons?.[1]?.text || "Não quero receber",
+    };
+}
+
+function buttonsPayload(d: ButtonsDraft) {
+    if (!d.enabled) return { enabled: false, purpose: "consent_offers", buttons: [] };
+    return {
+        enabled: true,
+        purpose: "consent_offers",
+        buttons: [
+            {
+                type: "QUICK_REPLY",
+                text: d.grantText.trim() || "Sim, quero ofertas",
+                payload: "consent_grant_offers",
+            },
+            {
+                type: "QUICK_REPLY",
+                text: d.denyText.trim() || "Não quero receber",
+                payload: "consent_deny_offers",
+            },
+        ],
+    };
+}
 
 function statusBadgeClass(status: string) {
     const s = status.toUpperCase();
@@ -231,6 +284,7 @@ export function BulletinTemplateManager({
             headerText: item.headerText || "",
             bodyText: item.bodyText,
             footerText: item.footerText || "",
+            buttons: buttonsFromItem(item),
             fieldMappings: [...item.fieldMappings],
             exampleRow: [...item.exampleRow],
             loadsPerMessage: (item.loadsPerMessage === 2
@@ -265,6 +319,7 @@ export function BulletinTemplateManager({
                 headerText: draft.headerText || null,
                 footerText: draft.footerText || null,
                 description: draft.description || null,
+                buttons: buttonsPayload(draft.buttons),
             };
             const res =
                 editorMode === "create"
@@ -615,6 +670,19 @@ export function BulletinTemplateManager({
                             <pre className="whitespace-pre-wrap rounded-xl border bg-slate-50 p-3 text-[13px] leading-relaxed font-sans">
                                 {previewItem.previewFilled}
                             </pre>
+                            {previewItem.buttons?.enabled &&
+                                previewItem.buttons.buttons?.length ? (
+                                <div className="flex flex-wrap gap-2">
+                                    {previewItem.buttons.buttons.map((b, i) => (
+                                        <span
+                                            key={i}
+                                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+                                        >
+                                            {b.text}
+                                        </span>
+                                    ))}
+                                </div>
+                            ) : null}
                             <details className="text-xs">
                                 <summary className="cursor-pointer text-slate-500">
                                     Corpo com variáveis
@@ -775,6 +843,82 @@ export function BulletinTemplateManager({
                                     }))
                                 }
                             />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2 rounded-xl border border-border/60 bg-muted/20 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                                <div>
+                                    <Label>Botões interativos</Label>
+                                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                                        Solicitar confirmação de recebimento de
+                                        ofertas (QUICK_REPLY · máx. 25 caracteres).
+                                        Templates APPROVED exigem nova versão.
+                                    </p>
+                                </div>
+                                <Button
+                                    type="button"
+                                    variant={
+                                        draft.buttons.enabled
+                                            ? "default"
+                                            : "outline"
+                                    }
+                                    size="sm"
+                                    onClick={() =>
+                                        setDraft((d) => ({
+                                            ...d,
+                                            buttons: {
+                                                ...d.buttons,
+                                                enabled: !d.buttons.enabled,
+                                            },
+                                        }))
+                                    }
+                                >
+                                    {draft.buttons.enabled
+                                        ? "Ativado"
+                                        : "Desativado"}
+                                </Button>
+                            </div>
+                            {draft.buttons.enabled && (
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">
+                                            Botão positivo
+                                        </Label>
+                                        <Input
+                                            maxLength={25}
+                                            value={draft.buttons.grantText}
+                                            onChange={(e) =>
+                                                setDraft((d) => ({
+                                                    ...d,
+                                                    buttons: {
+                                                        ...d.buttons,
+                                                        grantText:
+                                                            e.target.value,
+                                                    },
+                                                }))
+                                            }
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">
+                                            Botão negativo
+                                        </Label>
+                                        <Input
+                                            maxLength={25}
+                                            value={draft.buttons.denyText}
+                                            onChange={(e) =>
+                                                setDraft((d) => ({
+                                                    ...d,
+                                                    buttons: {
+                                                        ...d.buttons,
+                                                        denyText:
+                                                            e.target.value,
+                                                    },
+                                                }))
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                            )}
                         </div>
                         <div className="space-y-1.5 sm:col-span-2">
                             <Label>Descrição</Label>

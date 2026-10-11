@@ -81,17 +81,19 @@ export function skipReasonLabel(reason: string | null | undefined): string {
         case "inactive":
             return "Contato desativado";
         case "opted_out":
-            return "Opt-out / descadastro";
+            return "Recusado / revogado (opt-out)";
         case "denied":
-            return "Consentimento negado";
+            return "Consentimento recusado";
         case "missing_consent":
-            return "Consentimento ausente no CRM";
+            return "Sem consentimento válido";
         case "not_in_crm":
             return "Número não encontrado no CRM";
         case "duplicate":
             return "Número duplicado na campanha";
         case "no_service_window":
             return "Janela de atendimento fechada (precisa de template)";
+        case "consent_revoked_runtime":
+            return "Consentimento revogado durante a campanha";
         default:
             return reason || "Excluído";
     }
@@ -106,4 +108,39 @@ export const EXCLUSION_REASON_ORDER = [
     "inactive",
     "invalid_phone",
     "duplicate",
+    "consent_revoked_runtime",
 ] as const;
+
+/** Audience consent counters (independent of final eligibility). */
+export function summarizeConsentAudience(
+    contacts: EligibilityContact[]
+): {
+    inCrm: number;
+    granted: number;
+    missingConsent: number;
+    deniedOrRevoked: number;
+    notInCrm: number;
+} {
+    let inCrm = 0;
+    let granted = 0;
+    let missingConsent = 0;
+    let deniedOrRevoked = 0;
+    let notInCrm = 0;
+    for (const c of contacts) {
+        if (isNotInCrm(c)) {
+            notInCrm++;
+            continue;
+        }
+        inCrm++;
+        if (c.consentStatus === "granted") granted++;
+        else if (
+            c.consentStatus === "opted_out" ||
+            c.consentStatus === "denied"
+        ) {
+            deniedOrRevoked++;
+        } else {
+            missingConsent++;
+        }
+    }
+    return { inCrm, granted, missingConsent, deniedOrRevoked, notInCrm };
+}

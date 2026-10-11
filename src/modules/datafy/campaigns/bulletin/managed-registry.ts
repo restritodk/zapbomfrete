@@ -12,6 +12,10 @@ import {
     validateTemplateDraft,
     type TemplateDraftInput,
 } from "./template-validation";
+import {
+    parseButtonsConfig,
+    type TemplateButtonsConfig,
+} from "@/modules/crm/consent/buttons";
 
 const ORG = "default";
 
@@ -27,6 +31,7 @@ export type ManagedTemplateView = {
     headerText: string | null;
     bodyText: string;
     footerText: string | null;
+    buttons: TemplateButtonsConfig | null;
     fieldMappings: LoadSlotField[];
     exampleRow: string[];
     loadsPerMessage: number;
@@ -58,6 +63,7 @@ type DbRow = {
     headerText: string | null;
     bodyText: string;
     footerText: string | null;
+    buttonsJson?: unknown;
     fieldMappings: unknown;
     exampleRow: unknown;
     loadsPerMessage: number;
@@ -110,6 +116,7 @@ function specFromBuiltin(spec: BulletinTemplateSpec): ManagedTemplateView {
         headerText: null,
         bodyText: spec.bodyTextForApproval,
         footerText: null,
+        buttons: null,
         fieldMappings: [...spec.slotFields],
         exampleRow: [...spec.exampleRow],
         loadsPerMessage: spec.loadsPerMessage,
@@ -169,6 +176,7 @@ function viewFromDbRow(row: DbRow): ManagedTemplateView {
         headerText: builtinSpec ? null : row.headerText,
         bodyText,
         footerText: builtinSpec ? null : row.footerText,
+        buttons: parseButtonsConfig(row.buttonsJson),
         fieldMappings: mappedFields,
         exampleRow,
         loadsPerMessage: builtinSpec?.loadsPerMessage || row.loadsPerMessage,
@@ -395,6 +403,8 @@ export async function createCustomTemplate(
             headerText: input.headerText?.trim() || null,
             bodyText: input.bodyText.replace(/\r\n/g, "\n"),
             footerText: input.footerText?.trim() || null,
+            buttonsJson: (parseButtonsConfig(input.buttons) ||
+                null) as unknown as Prisma.InputJsonValue,
             fieldMappings: v.fieldMappings as unknown as Prisma.InputJsonValue,
             exampleRow: v.exampleRow as unknown as Prisma.InputJsonValue,
             loadsPerMessage: Number(input.loadsPerMessage || 1),
@@ -478,6 +488,12 @@ export async function updateManagedTemplate(
             headerText: merged.headerText?.trim() || null,
             bodyText: merged.bodyText.replace(/\r\n/g, "\n"),
             footerText: merged.footerText?.trim() || null,
+            ...(input.buttons !== undefined
+                ? {
+                      buttonsJson: (parseButtonsConfig(input.buttons) ||
+                          null) as unknown as Prisma.InputJsonValue,
+                  }
+                : {}),
             fieldMappings: v.fieldMappings as unknown as Prisma.InputJsonValue,
             exampleRow: v.exampleRow as unknown as Prisma.InputJsonValue,
             loadsPerMessage: Number(merged.loadsPerMessage || 1),
