@@ -10,6 +10,7 @@
 
 import { prisma } from "@/lib/prisma";
 import {
+    brazilianWaIdVariants,
     isWithinServiceWindow,
     normalizeWaId,
 } from "@/modules/datafy/chat/window";
@@ -191,8 +192,12 @@ export async function countOpenServiceWindows(
         return { openWindowCount: 0, needsTemplateCount: 0 };
     }
 
+    const lookupKeys = Array.from(
+        new Set(normalized.flatMap((w) => brazilianWaIdVariants(w)))
+    );
+
     const convos = await prisma.datafyConversation.findMany({
-        where: { waId: { in: normalized } },
+        where: { waId: { in: lookupKeys } },
         select: { waId: true, lastCustomerMessageAt: true },
     });
     const byWa = new Map(
@@ -201,9 +206,10 @@ export async function countOpenServiceWindows(
 
     let openWindowCount = 0;
     for (const wa of normalized) {
-        if (isWithinServiceWindow(byWa.get(wa) ?? null)) {
-            openWindowCount++;
-        }
+        const open = brazilianWaIdVariants(wa).some((key) =>
+            isWithinServiceWindow(byWa.get(key) ?? null)
+        );
+        if (open) openWindowCount++;
     }
     return {
         openWindowCount,
@@ -214,11 +220,13 @@ export async function countOpenServiceWindows(
 export async function recipientHasOpenServiceWindow(
     waId: string
 ): Promise<boolean> {
-    const normalized = normalizeWaId(waId);
-    if (!normalized) return false;
-    const convo = await prisma.datafyConversation.findFirst({
-        where: { waId: normalized },
+    const keys = brazilianWaIdVariants(waId);
+    if (!keys.length) return false;
+    const convos = await prisma.datafyConversation.findMany({
+        where: { waId: { in: keys } },
         select: { lastCustomerMessageAt: true },
     });
-    return isWithinServiceWindow(convo?.lastCustomerMessageAt ?? null);
+    return convos.some((c) =>
+        isWithinServiceWindow(c.lastCustomerMessageAt ?? null)
+    );
 }

@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+    brazilianWaIdVariants,
     isWithinServiceWindow,
     normalizeWaId,
     serviceWindowExpiresAt,
@@ -46,6 +47,13 @@ describe("WA id normalization", () => {
     it("strips non-digits", () => {
         assert.equal(normalizeWaId("+55 (11) 99999-8888"), "5511999998888");
         assert.equal(normalizeWaId("5511999998888"), "5511999998888");
+    });
+
+    it("expands BR mobile 9th-digit variants for window matching", () => {
+        assert.deepEqual(
+            new Set(brazilianWaIdVariants("5511987654321")),
+            new Set(["5511987654321", "551187654321"])
+        );
     });
 });
 

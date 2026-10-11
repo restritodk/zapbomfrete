@@ -65,11 +65,18 @@ import {
     type CompleteBulletinAssessment,
 } from "@/modules/datafy/campaigns/bulletin";
 import {
-    assessRealSendReadiness,
-    hasApprovedTemplateContent,
     META_INTERACTIVE_BODY_MAX,
     purposeAllowsServiceWindowFreeform,
 } from "@/modules/datafy/campaigns/send-readiness";
+import {
+    assessWizardSendReadiness,
+    canEnableStartDispatchButton,
+    isApprovedTemplateStatus,
+    pickFallbackApprovedTemplate,
+    resolveWizardHasApprovedTemplate,
+    shouldAutoPickFallbackTemplate,
+    templateKeyOf,
+} from "@/modules/datafy/campaigns/campaign-launch";
 import {
     buildEstimateCopy,
     CAMPAIGN_DELAY_SEC_MAX,
@@ -502,6 +509,8 @@ export function DatafyCampaignsPanel() {
     const [wizardOpen, setWizardOpen] = useState(false);
     const [step, setStep] = useState(1);
     const [saving, setSaving] = useState(false);
+    /** Prevents double-submit before React re-renders `saving`. */
+    const launchInFlightRef = useRef(false);
 
     // Wizard state
     const [name, setName] = useState("");
@@ -1163,13 +1172,33 @@ export function DatafyCampaignsPanel() {
             setShowExclusionDetails(
                 (json.data.excludedCount || 0) > 0
             );
+            const openWin = json.data.openWindowCount ?? 0;
+            if (
+                shouldAutoPickFallbackTemplate({
+                    purpose,
+                    contentMode,
+                    contentKind,
+                    bulletinDeliveryMode,
+                    eligibleCount: json.data.eligibleCount,
+                    openWindowCount: openWin,
+                    templateKey,
+                })
+            ) {
+                const pick = pickFallbackApprovedTemplate(templates, purpose);
+                if (pick) {
+                    setTemplateKey(templateKeyOf(pick));
+                    toast.message(
+                        `Fallback APPROVED: ${pick.name} (nenhuma janela 24h aberta).`
+                    );
+                }
+            }
             if (json.data.eligibleCount > 0) {
                 toast.success(
-                    `Cálculo concluído: ${json.data.eligibleCount} aptos · ${json.data.excludedCount} excluídos`
+                    `Cálculo concluído: ${json.data.eligibleCount} elegíveis · ${openWin} com janela 24h · ${json.data.excludedCount} excluídos`
                 );
             } else {
                 toast.message(
-                    `Cálculo concluído: nenhum apto · ${json.data.excludedCount} excluídos. Verifique consentimentos no CRM.`
+                    `Cálculo concluído: nenhum elegível · ${json.data.excludedCount} excluídos. Verifique opt-out/inativos no CRM.`
                 );
             }
         } catch {
@@ -1405,29 +1434,15 @@ export function DatafyCampaignsPanel() {
         const isCompleteBulletin =
             contentKind === "bulletin" &&
             bulletinDeliveryMode === "complete_single";
-        const isDirectFreeform =
-            contentMode === "direct" || isCompleteBulletin;
-        // Envio Direto / boletim completo: template APPROVED opcional (fora da janela)
-        const hasTemplate = isDirectFreeform
-            ? selectedTemplate?.status === "APPROVED"
-            : hasApprovedTemplateContent({
-                  contentKind,
-                  templateName:
-                      contentKind === "bulletin"
-                          ? bulletinParts[0]?.templateName
-                          : contentMode === "custom"
-                            ? submittedTemplate?.templateName
-                            : selectedTemplate?.name,
-                  templateApprovalStatus:
-                      contentKind === "bulletin"
-                          ? bulletinParts[0]?.templateApprovalStatus
-                          : contentMode === "custom"
-                            ? submittedTemplate?.approvalStatus
-                            : selectedTemplate?.status,
-                  messageParts:
-                      contentKind === "bulletin" ? bulletinParts : null,
-              });
-        return assessRealSendReadiness({
+        const hasTemplate = resolveWizardHasApprovedTemplate({
+            contentKind,
+            contentMode,
+            bulletinDeliveryMode,
+            selectedTemplate,
+            submittedTemplate,
+            bulletinParts,
+        });
+        return assessWizardSendReadiness({
             purpose,
             consentEligibleCount: audience?.eligibleCount ?? 0,
             openWindowCount: audience?.openWindowCount ?? 0,
@@ -1447,11 +1462,24 @@ export function DatafyCampaignsPanel() {
         contentMode,
         messageBody,
         purpose,
-        selectedTemplate?.name,
-        selectedTemplate?.status,
-        submittedTemplate?.approvalStatus,
-        submittedTemplate?.templateName,
+        selectedTemplate,
+        submittedTemplate,
     ]);
+
+    const canStartRealDispatch = canEnableStartDispatchButton({
+        saving,
+        simulationOnlyAudience,
+        realSendReady: sendReadiness.realSendReady,
+        technicallySendableCount: sendReadiness.technicallySendableCount,
+    });
+    const canScheduleRealDispatch = canEnableStartDispatchButton({
+        saving,
+        simulationOnlyAudience,
+        realSendReady: sendReadiness.realSendReady,
+        technicallySendableCount: sendReadiness.technicallySendableCount,
+        scheduledAtRequired: true,
+        scheduledAt,
+    });
 
     const previewConsentButtons = useMemo(() => {
         if (!consentButtonsEnabled) return null;
@@ -1476,6 +1504,9 @@ export function DatafyCampaignsPanel() {
         messageBody.trim().length > META_INTERACTIVE_BODY_MAX;
 
     const createCampaign = async (action: LaunchAction) => {
+        if (launchInFlightRef.current || saving) {
+            return;
+        }
         if (!name.trim()) {
             toast.error("Informe o nome");
             return;
@@ -1542,10 +1573,10 @@ export function DatafyCampaignsPanel() {
                 contentSource = "bulletin_complete_freeform";
                 vars = [];
                 // Template APPROVED opcional: quem está fora da janela 24h
-                if (selectedTemplate?.status === "APPROVED") {
-                    templateName = selectedTemplate.name;
-                    templateLanguage = selectedTemplate.language || "pt_BR";
-                    templateCategory = selectedTemplate.category || null;
+                if (isApprovedTemplateStatus(selectedTemplate?.status)) {
+                    templateName = selectedTemplate!.name;
+                    templateLanguage = selectedTemplate!.language || "pt_BR";
+                    templateCategory = selectedTemplate!.category || null;
                     templateApprovalStatus = "APPROVED";
                 } else {
                     templateName = null;
@@ -1620,10 +1651,10 @@ export function DatafyCampaignsPanel() {
             }
             contentSource = "freeform_window";
             vars = bodyVars;
-            if (selectedTemplate?.status === "APPROVED") {
-                templateName = selectedTemplate.name;
-                templateLanguage = selectedTemplate.language || "pt_BR";
-                templateCategory = selectedTemplate.category || null;
+            if (isApprovedTemplateStatus(selectedTemplate?.status)) {
+                templateName = selectedTemplate!.name;
+                templateLanguage = selectedTemplate!.language || "pt_BR";
+                templateCategory = selectedTemplate!.category || null;
                 templateApprovalStatus = "APPROVED";
             } else {
                 templateName = null;
@@ -1679,7 +1710,7 @@ export function DatafyCampaignsPanel() {
             }
         } else if (
             selectedTemplate &&
-            selectedTemplate.status === "APPROVED"
+            isApprovedTemplateStatus(selectedTemplate.status)
         ) {
             templateName = selectedTemplate.name;
             templateLanguage = selectedTemplate.language || "pt_BR";
@@ -1738,6 +1769,7 @@ export function DatafyCampaignsPanel() {
             if (!ok) return;
         }
 
+        launchInFlightRef.current = true;
         setSaving(true);
         setDryRun(effectiveDryRun);
         try {
@@ -1865,6 +1897,7 @@ export function DatafyCampaignsPanel() {
         } catch {
             toast.error("Erro ao criar campanha");
         } finally {
+            launchInFlightRef.current = false;
             setSaving(false);
         }
     };
@@ -4567,8 +4600,9 @@ export function DatafyCampaignsPanel() {
                                         </p>
                                     )}
                                     {(audience?.openWindowCount ?? 0) <= 0 &&
-                                        selectedTemplate?.status !==
-                                            "APPROVED" && (
+                                        !isApprovedTemplateStatus(
+                                            selectedTemplate?.status
+                                        ) && (
                                         <p className="text-amber-900 text-[12px] font-medium">
                                             Nenhum destinatário com janela aberta
                                             — selecione um template APPROVED já
@@ -4895,9 +4929,10 @@ export function DatafyCampaignsPanel() {
                                             ? bulletinDeliveryMode ===
                                               "complete_single"
                                                 ? `Boletim completo — Envio Direto${
-                                                      selectedTemplate?.status ===
-                                                      "APPROVED"
-                                                          ? ` + fallback ${selectedTemplate.name}`
+                                                      isApprovedTemplateStatus(
+                                                          selectedTemplate?.status
+                                                      )
+                                                          ? ` + fallback ${selectedTemplate!.name}`
                                                           : ""
                                                   }`
                                                 : bulletinParts
@@ -4908,9 +4943,10 @@ export function DatafyCampaignsPanel() {
                                                       .join(" · ") || "—"
                                             : contentMode === "direct"
                                               ? `Envio Direto (janela 24h)${
-                                                    selectedTemplate?.status ===
-                                                    "APPROVED"
-                                                        ? ` + fallback ${selectedTemplate.name}`
+                                                    isApprovedTemplateStatus(
+                                                        selectedTemplate?.status
+                                                    )
+                                                        ? ` + fallback ${selectedTemplate!.name}`
                                                         : ""
                                                 }${consentButtonsEnabled ? " · botões" : ""}`
                                               : contentMode === "existing"
@@ -5223,6 +5259,52 @@ export function DatafyCampaignsPanel() {
                                             handleStep2Next();
                                             return;
                                         }
+                                        if (step === 3) {
+                                            if (
+                                                contentMode === "direct" &&
+                                                purposeAllowsServiceWindowFreeform(
+                                                    purpose
+                                                )
+                                            ) {
+                                                let hasApproved =
+                                                    isApprovedTemplateStatus(
+                                                        selectedTemplate?.status
+                                                    );
+                                                if (
+                                                    !hasApproved &&
+                                                    !templateKey
+                                                ) {
+                                                    const pick =
+                                                        pickFallbackApprovedTemplate(
+                                                            templates,
+                                                            purpose
+                                                        );
+                                                    if (pick) {
+                                                        setTemplateKey(
+                                                            templateKeyOf(pick)
+                                                        );
+                                                        hasApproved = true;
+                                                        toast.message(
+                                                            `Fallback APPROVED: ${pick.name}`
+                                                        );
+                                                    }
+                                                }
+                                                const hasWindow =
+                                                    (audience?.openWindowCount ??
+                                                        0) > 0;
+                                                if (
+                                                    !sendReadiness.realSendReady &&
+                                                    !hasApproved &&
+                                                    !hasWindow
+                                                ) {
+                                                    toast.error(
+                                                        sendReadiness.blockReason ||
+                                                            "Selecione um template APPROVED ou recalcule a audiência com janela 24h."
+                                                    );
+                                                    return;
+                                                }
+                                            }
+                                        }
                                         setStep((s) => s + 1);
                                     }}
                                 >
@@ -5252,12 +5334,7 @@ export function DatafyCampaignsPanel() {
                                     {execMode === "schedule" ? (
                                         <Button
                                             type="button"
-                                            disabled={
-                                                saving ||
-                                                simulationOnlyAudience ||
-                                                !sendReadiness.realSendReady ||
-                                                !scheduledAt
-                                            }
+                                            disabled={!canScheduleRealDispatch}
                                             className="rounded-xl min-w-[150px] bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50"
                                             onClick={() =>
                                                 void createCampaign(
@@ -5265,8 +5342,10 @@ export function DatafyCampaignsPanel() {
                                                 )
                                             }
                                             title={
-                                                sendReadiness.blockReason ||
-                                                "Agendar disparo real na fila Datafy"
+                                                canScheduleRealDispatch
+                                                    ? "Agendar disparo real na fila Datafy"
+                                                    : sendReadiness.blockReason ||
+                                                      "Agendar disparo real na fila Datafy"
                                             }
                                         >
                                             {saving ? (
@@ -5278,18 +5357,16 @@ export function DatafyCampaignsPanel() {
                                     ) : (
                                         <Button
                                             type="button"
-                                            disabled={
-                                                saving ||
-                                                simulationOnlyAudience ||
-                                                !sendReadiness.realSendReady
-                                            }
+                                            disabled={!canStartRealDispatch}
                                             className="rounded-xl min-w-[150px] bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50"
                                             onClick={() =>
                                                 void createCampaign("real_now")
                                             }
                                             title={
-                                                sendReadiness.blockReason ||
-                                                "Iniciar disparo real via API Datafy"
+                                                canStartRealDispatch
+                                                    ? `Iniciar disparo de ${sendReadiness.technicallySendableCount} destinatário(s) elegíveis`
+                                                    : sendReadiness.blockReason ||
+                                                      "Iniciar disparo real via canal conectado"
                                             }
                                         >
                                             {saving ? (

@@ -30,3 +30,30 @@ export function serviceWindowExpiresAt(
 export function normalizeWaId(raw: string | null | undefined): string {
     return String(raw || "").replace(/\D/g, "");
 }
+
+/**
+ * BR mobile numbers may be stored with or without the 9th digit after DDD
+ * (55 + DD + 9 + 8 vs 55 + DD + 8). Return both forms so window / conversation
+ * lookups do not miss an open 24h session.
+ */
+export function brazilianWaIdVariants(
+    raw: string | null | undefined
+): string[] {
+    const n = normalizeWaId(raw);
+    if (!n || n.length < 10) return n ? [n] : [];
+    const out = new Set<string>([n]);
+    if (n.startsWith("55") && n.length === 13) {
+        const ddd = n.slice(2, 4);
+        const rest = n.slice(4);
+        if (rest.length === 9 && rest.startsWith("9")) {
+            out.add(`55${ddd}${rest.slice(1)}`);
+        }
+    } else if (n.startsWith("55") && n.length === 12) {
+        const ddd = n.slice(2, 4);
+        const rest = n.slice(4);
+        if (rest.length === 8) {
+            out.add(`55${ddd}9${rest}`);
+        }
+    }
+    return Array.from(out);
+}

@@ -7,6 +7,7 @@ import { datafyProvider } from "@/modules/datafy/provider";
 import { DatafyApiError } from "@/modules/datafy/client";
 import { redactSecrets } from "@/modules/datafy/crypto-secrets";
 import {
+    brazilianWaIdVariants,
     isWithinServiceWindow,
     normalizeWaId,
 } from "@/modules/datafy/chat/window";
@@ -129,16 +130,35 @@ async function unlock(campaignId: string) {
 }
 
 async function ensureConversation(waId: string, contactName: string | null) {
+    const keys = brazilianWaIdVariants(waId);
+    const canonical = normalizeWaId(waId);
+    if (keys.length) {
+        const existing = await prisma.datafyConversation.findFirst({
+            where: {
+                channelId: DATAFY_OFFICIAL_CHANNEL_ID,
+                waId: { in: keys },
+            },
+            orderBy: [{ lastCustomerMessageAt: "desc" }, { updatedAt: "desc" }],
+        });
+        if (existing) {
+            return prisma.datafyConversation.update({
+                where: { id: existing.id },
+                data: {
+                    contactName: contactName || undefined,
+                },
+            });
+        }
+    }
     return prisma.datafyConversation.upsert({
         where: {
             channelId_waId: {
                 channelId: DATAFY_OFFICIAL_CHANNEL_ID,
-                waId,
+                waId: canonical,
             },
         },
         create: {
             channelId: DATAFY_OFFICIAL_CHANNEL_ID,
-            waId,
+            waId: canonical,
             contactName,
             status: "open",
         },
