@@ -4,6 +4,7 @@ import {
     assessRealSendReadiness,
     hasApprovedTemplateContent,
     purposeAllowsServiceWindowFreeform,
+    resolveRecipientSendMode,
 } from "./send-readiness";
 
 describe("Send readiness modalities", () => {
@@ -106,5 +107,53 @@ describe("Send readiness modalities", () => {
             false
         );
         assert.equal(purposeAllowsServiceWindowFreeform("utility"), true);
+    });
+
+    it("accepts campaign-level APPROVED fallback on complete bulletin parts", () => {
+        assert.equal(
+            hasApprovedTemplateContent({
+                contentKind: "bulletin",
+                templateName: "aviso_utilidade",
+                templateApprovalStatus: "APPROVED",
+                messageParts: [
+                    {
+                        templateName: null,
+                        templateApprovalStatus: null,
+                        readyForRealSend: true,
+                    },
+                ],
+            }),
+            true
+        );
+    });
+
+    it("resolves hybrid freeform vs template per recipient window", () => {
+        assert.equal(
+            resolveRecipientSendMode({
+                hasApprovedTemplate: true,
+                purposeAllowsFreeform: true,
+                hasFreeformBody: true,
+                windowOpen: true,
+            }),
+            "freeform"
+        );
+        assert.equal(
+            resolveRecipientSendMode({
+                hasApprovedTemplate: true,
+                purposeAllowsFreeform: true,
+                hasFreeformBody: true,
+                windowOpen: false,
+            }),
+            "template"
+        );
+        assert.equal(
+            resolveRecipientSendMode({
+                hasApprovedTemplate: false,
+                purposeAllowsFreeform: true,
+                hasFreeformBody: true,
+                windowOpen: false,
+            }),
+            "skip_no_window"
+        );
     });
 });

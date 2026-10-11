@@ -53,21 +53,47 @@ export function hasApprovedTemplateContent(opts: {
     templateApprovalStatus?: string | null;
     messageParts?: TemplatePartLite[] | null;
 }): boolean {
+    const campaignLevelApproved =
+        Boolean(opts.templateName) &&
+        String(opts.templateApprovalStatus || "").toUpperCase() === "APPROVED";
+
     if (opts.contentKind === "bulletin" && opts.messageParts?.length) {
         // readyForRealSend must be true — APPROVED alone is not enough
         // (incomplete_fields / body overflow keep status APPROVED with ready=false)
-        return opts.messageParts.every(
+        const partsReady = opts.messageParts.every(
             (p) =>
                 Boolean(p.templateName) &&
                 String(p.templateApprovalStatus || "").toUpperCase() ===
                     "APPROVED" &&
                 p.readyForRealSend === true
         );
+        // Campaign-level APPROVED covers boletim completo + fallback fora da janela
+        return partsReady || campaignLevelApproved;
     }
-    return (
-        Boolean(opts.templateName) &&
-        String(opts.templateApprovalStatus || "").toUpperCase() === "APPROVED"
-    );
+    return campaignLevelApproved;
+}
+
+/** Meta Cloud API interactive body limit (reply buttons). */
+export const META_INTERACTIVE_BODY_MAX = 1024;
+
+/**
+ * Per-recipient send decision for utility/transactional hybrid campaigns.
+ * Prefer freeform when the 24h window is open; otherwise use APPROVED template.
+ */
+export type RecipientSendMode = "template" | "freeform" | "skip_no_window";
+
+export function resolveRecipientSendMode(opts: {
+    hasApprovedTemplate: boolean;
+    purposeAllowsFreeform: boolean;
+    hasFreeformBody: boolean;
+    windowOpen: boolean;
+}): RecipientSendMode {
+    const freeformOk =
+        opts.purposeAllowsFreeform && opts.hasFreeformBody;
+    if (freeformOk && opts.windowOpen) return "freeform";
+    if (opts.hasApprovedTemplate) return "template";
+    if (freeformOk && !opts.windowOpen) return "skip_no_window";
+    return "skip_no_window";
 }
 
 export function assessRealSendReadiness(opts: {

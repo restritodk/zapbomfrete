@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
     assessRealSendReadiness,
     purposeAllowsServiceWindowFreeform,
+    resolveRecipientSendMode,
 } from "./send-readiness";
 import {
     defaultCampaignConsentButtons,
@@ -82,6 +83,39 @@ describe("Envio Direto — purpose gates", () => {
         });
         assert.equal(a.modality, "template_approved");
         assert.equal(a.technicallySendableCount, 12);
+    });
+
+    it("utility freeform + APPROVED fallback → ready even with 0 windows", () => {
+        const a = assessRealSendReadiness({
+            purpose: "utility",
+            consentEligibleCount: 139,
+            openWindowCount: 0,
+            hasApprovedTemplate: true,
+            hasFreeformBody: true,
+        });
+        assert.equal(a.realSendReady, true);
+        assert.equal(a.technicallySendableCount, 139);
+    });
+
+    it("hybrid prefers freeform in open window and template outside", () => {
+        assert.equal(
+            resolveRecipientSendMode({
+                hasApprovedTemplate: true,
+                purposeAllowsFreeform: true,
+                hasFreeformBody: true,
+                windowOpen: true,
+            }),
+            "freeform"
+        );
+        assert.equal(
+            resolveRecipientSendMode({
+                hasApprovedTemplate: true,
+                purposeAllowsFreeform: true,
+                hasFreeformBody: true,
+                windowOpen: false,
+            }),
+            "template"
+        );
     });
 });
 

@@ -56,6 +56,7 @@ import {
 import {
     assessRealSendReadiness,
     hasApprovedTemplateContent,
+    META_INTERACTIVE_BODY_MAX,
     purposeAllowsServiceWindowFreeform,
 } from "@/modules/datafy/campaigns/send-readiness";
 import {
@@ -1348,8 +1349,11 @@ export function DatafyCampaignsPanel() {
         const isCompleteBulletin =
             contentKind === "bulletin" &&
             bulletinDeliveryMode === "complete_single";
-        const hasTemplate = isCompleteBulletin
-            ? false
+        const isDirectFreeform =
+            contentMode === "direct" || isCompleteBulletin;
+        // Envio Direto / boletim completo: template APPROVED opcional (fora da janela)
+        const hasTemplate = isDirectFreeform
+            ? selectedTemplate?.status === "APPROVED"
             : hasApprovedTemplateContent({
                   contentKind,
                   templateName:
@@ -1457,12 +1461,20 @@ export function DatafyCampaignsPanel() {
             }
             const first = bulletinParts[0];
             if (bulletinDeliveryMode === "complete_single") {
-                templateName = null;
-                templateLanguage = "pt_BR";
-                templateCategory = null;
-                templateApprovalStatus = null;
                 contentSource = "bulletin_complete_freeform";
                 vars = [];
+                // Template APPROVED opcional: quem está fora da janela 24h
+                if (selectedTemplate?.status === "APPROVED") {
+                    templateName = selectedTemplate.name;
+                    templateLanguage = selectedTemplate.language || "pt_BR";
+                    templateCategory = selectedTemplate.category || null;
+                    templateApprovalStatus = "APPROVED";
+                } else {
+                    templateName = null;
+                    templateLanguage = "pt_BR";
+                    templateCategory = null;
+                    templateApprovalStatus = null;
+                }
                 if (!effectiveDryRun) {
                     if (!purposeAllowsServiceWindowFreeform(purpose)) {
                         toast.error(
@@ -1480,10 +1492,19 @@ export function DatafyCampaignsPanel() {
                         );
                         return;
                     }
-                    if (sendReadiness.modality !== "service_window") {
+                    if (
+                        consentButtonsEnabled &&
+                        messageBody.trim().length > META_INTERACTIVE_BODY_MAX
+                    ) {
+                        toast.error(
+                            `Botões interativos exigem texto ≤ ${META_INTERACTIVE_BODY_MAX} caracteres. Remova os botões para enviar o boletim integral (${messageBody.trim().length} chars).`
+                        );
+                        return;
+                    }
+                    if (!sendReadiness.realSendReady) {
                         toast.error(
                             sendReadiness.blockReason ||
-                                "Envio integral exige destinatários com janela 24h aberta (Modalidade B)."
+                                "Envio integral exige janela 24h aberta ou um template APPROVED já existente para quem está fora da janela."
                         );
                         return;
                     }
@@ -1519,19 +1540,32 @@ export function DatafyCampaignsPanel() {
                 );
                 return;
             }
-            templateName = null;
-            templateLanguage = "pt_BR";
-            templateCategory = null;
-            templateApprovalStatus = null;
             contentSource = "freeform_window";
             vars = bodyVars;
+            if (selectedTemplate?.status === "APPROVED") {
+                templateName = selectedTemplate.name;
+                templateLanguage = selectedTemplate.language || "pt_BR";
+                templateCategory = selectedTemplate.category || null;
+                templateApprovalStatus = "APPROVED";
+            } else {
+                templateName = null;
+                templateLanguage = "pt_BR";
+                templateCategory = null;
+                templateApprovalStatus = null;
+            }
             if (
-                !effectiveDryRun &&
-                sendReadiness.modality !== "service_window"
+                consentButtonsEnabled &&
+                messageBody.trim().length > META_INTERACTIVE_BODY_MAX
             ) {
                 toast.error(
+                    `Botões interativos exigem texto ≤ ${META_INTERACTIVE_BODY_MAX} caracteres. Remova os botões para enviar o texto integral.`
+                );
+                return;
+            }
+            if (!effectiveDryRun && !sendReadiness.realSendReady) {
+                toast.error(
                     sendReadiness.blockReason ||
-                        "Envio Direto exige destinatários com janela 24h aberta."
+                        "Envio Direto exige janela 24h aberta ou um template APPROVED já existente para quem está fora da janela."
                 );
                 return;
             }
@@ -1643,8 +1677,10 @@ export function DatafyCampaignsPanel() {
                     contentSource,
                     contentKind,
                     messageBody,
-                    interactiveButtons:
+                                            interactiveButtons:
                         consentButtonsEnabled &&
+                        messageBody.trim().length <=
+                            META_INTERACTIVE_BODY_MAX &&
                         (contentMode === "direct" ||
                             contentSource === "freeform_window" ||
                             contentSource === "bulletin_complete_freeform")
@@ -2295,7 +2331,13 @@ export function DatafyCampaignsPanel() {
                                     className="rounded-xl"
                                     onClick={() => {
                                         setContentKind("bulletin");
-                                        setContentMode("custom");
+                                        setContentMode(
+                                            purposeAllowsServiceWindowFreeform(
+                                                purpose
+                                            )
+                                                ? "direct"
+                                                : "custom"
+                                        );
                                         setBulletinDeliveryMode(null);
                                         // Do not force UTILITY — load ads are usually MARKETING
                                         if (
@@ -2341,7 +2383,9 @@ export function DatafyCampaignsPanel() {
                                             : "Escreva a mensagem da campanha…"
                                     }
                                 />
-                                {contentKind === "message" && (
+                                {(contentKind === "message" ||
+                                    bulletinDeliveryMode ===
+                                        "complete_single") && (
                                     <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
@@ -2353,8 +2397,9 @@ export function DatafyCampaignsPanel() {
                                                     recebimento de ofertas.
                                                     Envio livre só na janela 24h
                                                     (Utilidade/Transacional).
-                                                    Marketing exige template
-                                                    APPROVED com botões.
+                                                    Corpo com botões ≤{" "}
+                                                    {META_INTERACTIVE_BODY_MAX}{" "}
+                                                    chars (limite Meta).
                                                 </p>
                                             </div>
                                             <label className="flex items-center gap-2 text-sm shrink-0 cursor-pointer">
@@ -2364,11 +2409,22 @@ export function DatafyCampaignsPanel() {
                                                     checked={
                                                         consentButtonsEnabled
                                                     }
-                                                    onChange={(e) =>
+                                                    onChange={(e) => {
+                                                        if (
+                                                            e.target.checked &&
+                                                            messageBody.trim()
+                                                                .length >
+                                                                META_INTERACTIVE_BODY_MAX
+                                                        ) {
+                                                            toast.error(
+                                                                `Texto com ${messageBody.trim().length} chars excede ${META_INTERACTIVE_BODY_MAX} para botões. Envie sem botões (texto integral) ou reduza o texto.`
+                                                            );
+                                                            return;
+                                                        }
                                                         setConsentButtonsEnabled(
                                                             e.target.checked
-                                                        )
-                                                    }
+                                                        );
+                                                    }}
                                                 />
                                                 Adicionar botões de
                                                 consentimento
@@ -2511,11 +2567,20 @@ export function DatafyCampaignsPanel() {
                                             <div className="grid gap-2 sm:grid-cols-2">
                                                 <button
                                                     type="button"
-                                                    onClick={() =>
+                                                    onClick={() => {
                                                         setBulletinDeliveryMode(
                                                             "complete_single"
-                                                        )
-                                                    }
+                                                        );
+                                                        if (
+                                                            purposeAllowsServiceWindowFreeform(
+                                                                purpose
+                                                            )
+                                                        ) {
+                                                            setContentMode(
+                                                                "direct"
+                                                            );
+                                                        }
+                                                    }}
                                                     className={cn(
                                                         "rounded-xl border p-3 text-left transition-all",
                                                         bulletinDeliveryMode ===
@@ -2526,14 +2591,15 @@ export function DatafyCampaignsPanel() {
                                                 >
                                                     <p className="text-sm font-semibold">
                                                         Boletim completo —
-                                                        mensagem única
+                                                        Envio Direto
                                                     </p>
                                                     <p className="text-[11px] text-muted-foreground mt-1 leading-snug">
                                                         Texto original integral
                                                         (até {META_FREEFORM_TEXT_MAX}{" "}
-                                                        chars). Só Modalidade B:
-                                                        Utilidade/Transacional +
-                                                        janela 24h.
+                                                        chars). Utilidade/Transacional
+                                                        com janela 24h; template
+                                                        APPROVED opcional para quem
+                                                        está fora da janela.
                                                     </p>
                                                     {completeAssessment && (
                                                         <p
@@ -3899,25 +3965,70 @@ export function DatafyCampaignsPanel() {
                                 <div className="space-y-4">
                                     {bulletinDeliveryMode ===
                                     "complete_single" ? (
-                                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-600 space-y-1.5">
-                                            <p>
-                                                Modalidade mensagem única: texto
-                                                livre integral (limite{" "}
-                                                {META_FREEFORM_TEXT_MAX}{" "}
-                                                caracteres). Não usa template
-                                                APPROVED nem o limite de{" "}
-                                                {META_TEMPLATE_BODY_MAX} do corpo
-                                                de template.
-                                            </p>
-                                            <p className="text-xs text-slate-500">
-                                                Configurar e revisar não autoriza
-                                                o disparo. Envio real exige
-                                                finalidade Utilidade/Transacional
-                                                e janela 24h aberta por
-                                                destinatário. Marketing comercial
-                                                deve usar envio dividido por
-                                                templates.
-                                            </p>
+                                        <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-3 text-sm text-emerald-950 space-y-3">
+                                            <div className="space-y-1.5">
+                                                <p className="font-medium">
+                                                    Envio Direto — boletim
+                                                    completo (mensagem única)
+                                                </p>
+                                                <p className="text-xs text-emerald-900/90">
+                                                    Texto integral (até{" "}
+                                                    {META_FREEFORM_TEXT_MAX}{" "}
+                                                    chars) via Datafy para quem
+                                                    tem janela 24h. Não exige
+                                                    submeter um template novo.
+                                                </p>
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                <Label>
+                                                    Template APPROVED já
+                                                    existente (opcional · fora da
+                                                    janela)
+                                                </Label>
+                                                <Select
+                                                    value={
+                                                        templateKey ||
+                                                        "__none__"
+                                                    }
+                                                    onValueChange={(v) =>
+                                                        setTemplateKey(
+                                                            v === "__none__"
+                                                                ? ""
+                                                                : v
+                                                        )
+                                                    }
+                                                >
+                                                    <SelectTrigger className="bg-white">
+                                                        <SelectValue placeholder="Nenhum — só janela 24h" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="__none__">
+                                                            Nenhum — só
+                                                            destinatários com
+                                                            janela
+                                                        </SelectItem>
+                                                        {templates.map((t) => (
+                                                            <SelectItem
+                                                                key={`${t.name}-${t.language}`}
+                                                                value={`${t.name}::${t.language}`}
+                                                            >
+                                                                {t.name} ·{" "}
+                                                                {t.language}
+                                                                {t.category
+                                                                    ? ` · ${t.category}`
+                                                                    : ""}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                                <p className="text-[11px] text-emerald-900/80">
+                                                    Com template selecionado, a
+                                                    fila envia freeform na janela
+                                                    aberta e o template APPROVED
+                                                    para os demais — sem nova
+                                                    aprovação.
+                                                </p>
+                                            </div>
                                             {completeAssessment?.realSendBlockReasons
                                                 .length ? (
                                                 <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-2.5 py-2 text-xs text-amber-950 space-y-1">
@@ -3972,7 +4083,7 @@ export function DatafyCampaignsPanel() {
                                             <p className="text-xs">
                                                 {bulletinDeliveryMode ===
                                                 "complete_single"
-                                                    ? "Você pode seguir na revisão e simulação. O disparo real só ocorre se finalidade, janela 24h e elegibilidade forem satisfeitas."
+                                                    ? "Você pode seguir na revisão. O disparo real exige janela 24h ou um template APPROVED já existente para quem está fora da janela."
                                                     : "Envio real fica bloqueado para as partes abaixo. Simulação ainda pode continuar. Não enviamos automaticamente um template novo por boletim."}
                                             </p>
                                         </div>
@@ -4153,28 +4264,63 @@ export function DatafyCampaignsPanel() {
                                         O texto da Etapa 1 será enviado como
                                         mensagem livre aos destinatários com
                                         <strong> janela de atendimento aberta</strong>{" "}
-                                        (últimas 24h). Não exige aprovação de
+                                        (últimas 24h). Não exige submissão de
                                         template novo.
                                     </p>
                                     <p className="text-[12px]">
-                                        Destinatários sem janela aberta serão
-                                        excluídos neste modo (motivo: janela
-                                        fechada). Para alcançá-los, use um
-                                        template APPROVED.
+                                        Opcional: selecione um template já
+                                        APPROVED para quem está fora da janela —
+                                        sem nova aprovação Meta.
                                     </p>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-emerald-950">
+                                            Template APPROVED (opcional · fora da
+                                            janela)
+                                        </Label>
+                                        <Select
+                                            value={templateKey || "__none__"}
+                                            onValueChange={(v) =>
+                                                setTemplateKey(
+                                                    v === "__none__" ? "" : v
+                                                )
+                                            }
+                                        >
+                                            <SelectTrigger className="bg-white">
+                                                <SelectValue placeholder="Nenhum — só janela 24h" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="__none__">
+                                                    Nenhum — só destinatários com
+                                                    janela
+                                                </SelectItem>
+                                                {templates.map((t) => (
+                                                    <SelectItem
+                                                        key={`${t.name}-${t.language}`}
+                                                        value={`${t.name}::${t.language}`}
+                                                    >
+                                                        {t.name} · {t.language}
+                                                        {t.category
+                                                            ? ` · ${t.category}`
+                                                            : ""}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
                                     {consentButtonsEnabled && (
                                         <p className="text-[12px]">
-                                            Botões de consentimento serão
-                                            anexados à mensagem interativa
-                                            (somente na janela 24h).
+                                            Botões de consentimento só na janela
+                                            24h (corpo ≤ {META_INTERACTIVE_BODY_MAX}{" "}
+                                            chars).
                                         </p>
                                     )}
-                                    {(audience?.openWindowCount ?? 0) <= 0 && (
+                                    {(audience?.openWindowCount ?? 0) <= 0 &&
+                                        selectedTemplate?.status !==
+                                            "APPROVED" && (
                                         <p className="text-amber-900 text-[12px] font-medium">
                                             Nenhum destinatário com janela aberta
-                                            na audiência atual — calcule a
-                                            audiência e/ou use template
-                                            APPROVED.
+                                            — selecione um template APPROVED já
+                                            existente ou recalcule a audiência.
                                         </p>
                                     )}
                                 </div>
@@ -4496,7 +4642,12 @@ export function DatafyCampaignsPanel() {
                                         {contentKind === "bulletin"
                                             ? bulletinDeliveryMode ===
                                               "complete_single"
-                                                ? "Boletim completo — mensagem única (Envio Direto)"
+                                                ? `Boletim completo — Envio Direto${
+                                                      selectedTemplate?.status ===
+                                                      "APPROVED"
+                                                          ? ` + fallback ${selectedTemplate.name}`
+                                                          : ""
+                                                  }`
                                                 : bulletinParts
                                                       .map(
                                                           (p) =>
@@ -4504,7 +4655,12 @@ export function DatafyCampaignsPanel() {
                                                       )
                                                       .join(" · ") || "—"
                                             : contentMode === "direct"
-                                              ? `Envio Direto (janela 24h)${consentButtonsEnabled ? " · com botões de consentimento" : ""}`
+                                              ? `Envio Direto (janela 24h)${
+                                                    selectedTemplate?.status ===
+                                                    "APPROVED"
+                                                        ? ` + fallback ${selectedTemplate.name}`
+                                                        : ""
+                                                }${consentButtonsEnabled ? " · botões" : ""}`
                                               : contentMode === "existing"
                                                 ? `${selectedTemplate?.name || "—"} · ${selectedTemplate?.status || "—"}`
                                                 : `${submittedTemplate?.templateName || "texto livre / pendente"} · ${submittedTemplate?.approvalStatus || "—"}`}

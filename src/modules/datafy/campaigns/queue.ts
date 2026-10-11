@@ -27,7 +27,9 @@ import { evaluateEligibility } from "./eligibility";
 import { partClientMessageId, resolveCampaignParts } from "./parts";
 import {
     hasApprovedTemplateContent,
+    META_INTERACTIVE_BODY_MAX,
     purposeAllowsServiceWindowFreeform,
+    resolveRecipientSendMode,
 } from "./send-readiness";
 import {
     META_FREEFORM_TEXT_MAX,
@@ -289,9 +291,11 @@ async function sendOneRecipient(
         templateApprovalStatus: fullCampaign.templateApprovalStatus,
         messageParts: parts,
     });
-    const allowWindow =
-        purposeAllowsServiceWindowFreeform(fullCampaign.purpose) &&
-        Boolean((fullCampaign.messageBody || "").trim());
+    const purposeAllowsFreeform = purposeAllowsServiceWindowFreeform(
+        fullCampaign.purpose
+    );
+    const hasFreeformBody = Boolean((fullCampaign.messageBody || "").trim());
+    const allowWindow = purposeAllowsFreeform && hasFreeformBody;
 
     if (!hasTemplate && !allowWindow) {
         await prisma.datafyCampaignRecipient.update({
@@ -317,19 +321,27 @@ async function sendOneRecipient(
         recipient.fullName
     );
 
-    if (!hasTemplate && allowWindow) {
-        if (!isWithinServiceWindow(conversation.lastCustomerMessageAt)) {
-            await prisma.datafyCampaignRecipient.update({
-                where: { id: recipient.id },
-                data: {
-                    status: "skipped",
-                    skipReason: "no_service_window",
-                    lastError:
-                        "Janela de atendimento fechada — destinatário precisa de template APPROVED",
-                },
-            });
-            return;
-        }
+    const windowOpen = isWithinServiceWindow(
+        conversation.lastCustomerMessageAt
+    );
+    const recipientMode = resolveRecipientSendMode({
+        hasApprovedTemplate: hasTemplate,
+        purposeAllowsFreeform,
+        hasFreeformBody,
+        windowOpen,
+    });
+
+    if (recipientMode === "skip_no_window") {
+        await prisma.datafyCampaignRecipient.update({
+            where: { id: recipient.id },
+            data: {
+                status: "skipped",
+                skipReason: "no_service_window",
+                lastError:
+                    "Janela de atendimento fechada — destinatário precisa de template APPROVED",
+            },
+        });
+        return;
     }
 
     try {
@@ -340,7 +352,7 @@ async function sendOneRecipient(
             conversationId: conversation.id,
             phoneNumberId,
             delayMs: campaign.delayMs,
-            sendMode: hasTemplate ? "template" : "freeform",
+            sendMode: recipientMode,
             purpose: fullCampaign.purpose,
         });
     } catch (e) {
@@ -401,6 +413,8 @@ async function sendPartsSequentially(opts: {
         delayMs?: number;
         messageBody?: string | null;
         interactiveButtons?: unknown;
+        templateName?: string | null;
+        templateLanguage?: string | null;
     };
     parts: CampaignMessagePart[];
     recipient: {
@@ -428,8 +442,12 @@ async function sendPartsSequentially(opts: {
 
     for (let i = nextIndex; i < parts.length; i++) {
         const part = parts[i];
+        const resolvedTemplateName =
+            part.templateName || campaign.templateName || null;
+        const resolvedTemplateLanguage =
+            part.templateLanguage || campaign.templateLanguage || "pt_BR";
         const useTemplate =
-            opts.sendMode === "template" && Boolean(part.templateName);
+            opts.sendMode === "template" && Boolean(resolvedTemplateName);
 
         if (!useTemplate && opts.sendMode === "template") {
             throw new DatafyApiError(
@@ -481,7 +499,7 @@ async function sendPartsSequentially(opts: {
         let messageId = existingMsg?.id;
         let wamid: string | null = null;
 
-        if (useTemplate && part.templateName) {
+        if (useTemplate && resolvedTemplateName) {
             const mapping =
                 part.variableMapping &&
                 Array.isArray(part.variableMapping.body) &&
@@ -516,8 +534,8 @@ async function sendPartsSequentially(opts: {
                         metadata: {
                             campaignId: campaign.id,
                             campaignRecipientId: recipient.id,
-                            templateName: part.templateName,
-                            languageCode: part.templateLanguage || "pt_BR",
+                            templateName: resolvedTemplateName,
+                            languageCode: resolvedTemplateLanguage,
                             partIndex: part.index,
                             components: components as Prisma.InputJsonValue,
                         } as Prisma.InputJsonValue,
@@ -528,8 +546,8 @@ async function sendPartsSequentially(opts: {
 
             const res = await client.sendTemplate(phoneNumberId, {
                 to: normalizeWaId(recipient.waId),
-                name: part.templateName,
-                languageCode: part.templateLanguage || "pt_BR",
+                name: resolvedTemplateName,
+                languageCode: resolvedTemplateLanguage,
                 components,
             });
             wamid = res.messages?.[0]?.id || null;
@@ -555,6 +573,16 @@ async function sendPartsSequentially(opts: {
             );
             const interactiveButtons = toInteractiveSendButtons(consentBtns);
             const useInteractive = interactiveButtons.length > 0;
+
+            if (
+                useInteractive &&
+                freeformText.length > META_INTERACTIVE_BODY_MAX
+            ) {
+                throw new DatafyApiError(
+                    `Botões interativos exigem corpo ≤ ${META_INTERACTIVE_BODY_MAX} caracteres (atual: ${freeformText.length}). Remova os botões para enviar o texto integral, ou reduza o texto.`,
+                    400
+                );
+            }
 
             if (!messageId) {
                 const pending = await prisma.datafyMessage.create({
@@ -584,7 +612,7 @@ async function sendPartsSequentially(opts: {
             const res = useInteractive
                 ? await client.sendInteractiveButtons(phoneNumberId, {
                       to: normalizeWaId(recipient.waId),
-                      bodyText: freeformText.slice(0, 1024),
+                      bodyText: freeformText,
                       buttons: interactiveButtons,
                   })
                 : await client.sendText(phoneNumberId, {

@@ -214,6 +214,13 @@ export class DatafyClient {
             footerText?: string | null;
         }
     ): Promise<DatafySendMessageResponse> {
+        const bodyText = String(body.bodyText || "");
+        if (bodyText.length > 1024) {
+            throw new DatafyApiError(
+                `Interactive body exceeds Meta limit of 1024 characters (${bodyText.length})`,
+                400
+            );
+        }
         const buttons = body.buttons.slice(0, 3).map((b) => ({
             type: "reply" as const,
             reply: {
@@ -232,7 +239,7 @@ export class DatafyClient {
                     type: "interactive",
                     interactive: {
                         type: "button",
-                        body: { text: body.bodyText.slice(0, 1024) },
+                        body: { text: bodyText },
                         ...(body.footerText?.trim()
                             ? { footer: { text: body.footerText.trim().slice(0, 60) } }
                             : {}),
