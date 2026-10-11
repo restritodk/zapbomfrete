@@ -4,6 +4,7 @@ import {
     CampaignError,
     startCampaign,
 } from "@/modules/datafy/campaigns/service";
+import { kickDatafyCampaignNow } from "@/modules/datafy/campaigns/queue";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,8 @@ export async function POST(
             confirm: Boolean(body?.confirm),
             dryRun: body?.dryRun === undefined ? undefined : Boolean(body.dryRun),
         });
+        // Disparo em tempo real — não espera o próximo tick do worker.
+        void kickDatafyCampaignNow(id);
         return NextResponse.json({ status: true, data: { campaign } });
     } catch (e) {
         if (e instanceof CampaignError) {

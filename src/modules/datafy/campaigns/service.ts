@@ -303,6 +303,14 @@ export async function createCampaign(
 
     const status: CampaignStatus = scheduledAt ? "scheduled" : "draft";
 
+    const partsForBody = Array.isArray(input.messageParts)
+        ? (input.messageParts as Array<{ bodyText?: string | null }>)
+        : [];
+    const messageBody =
+        input.messageBody?.trim() ||
+        partsForBody.find((p) => p.bodyText?.trim())?.bodyText?.trim() ||
+        null;
+
     const created = await prisma.datafyCampaign.create({
         data: {
             organizationKey: CAMPAIGN_ORG_DEFAULT,
@@ -322,7 +330,7 @@ export async function createCampaign(
             contentSource: input.contentSource || "existing_template",
             contentKind:
                 input.contentKind === "bulletin" ? "bulletin" : "message",
-            messageBody: input.messageBody?.trim() || null,
+            messageBody,
             interactiveButtons:
                 input.interactiveButtons === undefined
                     ? undefined
@@ -687,6 +695,7 @@ export async function assertCampaignRealSendAllowed(campaignId: string) {
               templateName?: string | null;
               templateApprovalStatus?: string | null;
               readyForRealSend?: boolean;
+              bodyText?: string | null;
           }>)
         : [];
     const hasTemplate = hasApprovedTemplateContent({
@@ -706,12 +715,16 @@ export async function assertCampaignRealSendAllowed(campaignId: string) {
     const windows = await countOpenServiceWindows(
         recipients.map((r) => r.waId)
     );
+    const hasFreeformBody = Boolean(
+        c.messageBody?.trim() ||
+            parts.some((p) => Boolean((p.bodyText || "").trim()))
+    );
     const assessment = assessRealSendReadiness({
         purpose: c.purpose,
         consentEligibleCount: Math.max(c.totalEligible, recipients.length),
         openWindowCount: windows.openWindowCount,
         hasApprovedTemplate: hasTemplate,
-        hasFreeformBody: Boolean(c.messageBody?.trim()),
+        hasFreeformBody,
     });
     if (!assessment.realSendReady) {
         throw new CampaignError(

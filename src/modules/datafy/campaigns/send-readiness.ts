@@ -92,7 +92,8 @@ export function resolveRecipientSendMode(opts: {
 }): RecipientSendMode {
     const freeformOk =
         opts.purposeAllowsFreeform && opts.hasFreeformBody;
-    // Utilidade/Transacional: texto livre dispara para todos os elegíveis
+    // Utilidade/Transacional: texto livre → disparo real imediato (Datafy).
+    // Janela 24h NÃO bloqueia mais este caminho.
     if (freeformOk) return "freeform";
     if (opts.hasApprovedTemplate) return "template";
     return "skip_no_window";

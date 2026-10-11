@@ -8,7 +8,6 @@ import { DatafyApiError } from "@/modules/datafy/client";
 import { redactSecrets } from "@/modules/datafy/crypto-secrets";
 import {
     brazilianWaIdVariants,
-    isWithinServiceWindow,
     normalizeWaId,
 } from "@/modules/datafy/chat/window";
 import { emitDatafyEvent } from "@/modules/datafy/chat/realtime";
@@ -314,17 +313,20 @@ async function sendOneRecipient(
     const purposeAllowsFreeform = purposeAllowsServiceWindowFreeform(
         fullCampaign.purpose
     );
-    const hasFreeformBody = Boolean((fullCampaign.messageBody || "").trim());
-    const allowWindow = purposeAllowsFreeform && hasFreeformBody;
+    // Boletim completo guarda o texto em messageParts; mensagem comum em messageBody.
+    const hasFreeformBody = Boolean(
+        (fullCampaign.messageBody || "").trim() ||
+            parts.some((p) => Boolean((p.bodyText || "").trim()))
+    );
 
-    if (!hasTemplate && !allowWindow) {
+    if (!hasTemplate && !(purposeAllowsFreeform && hasFreeformBody)) {
         await prisma.datafyCampaignRecipient.update({
             where: { id: recipient.id },
             data: {
                 status: "failed",
                 failedAt: new Date(),
                 lastError:
-                    "Sem template APPROVED e finalidade não permite resposta livre na janela 24h",
+                    "Sem texto livre (Utilidade/Transacional) e sem template APPROVED",
             },
         });
         return;
@@ -345,24 +347,28 @@ async function sendOneRecipient(
         recipient.fullName
     );
 
-    const windowOpen = isWithinServiceWindow(
-        conversation.lastCustomerMessageAt
-    );
-    const recipientMode = resolveRecipientSendMode({
+    // Utilidade/Transacional + texto → freeform imediato pelo número Datafy.
+    // Não bloquear por janela 24h (disparador real).
+    let recipientMode = resolveRecipientSendMode({
         hasApprovedTemplate: hasTemplate,
         purposeAllowsFreeform,
         hasFreeformBody,
-        windowOpen,
+        windowOpen: true,
     });
+    if (purposeAllowsFreeform && hasFreeformBody) {
+        recipientMode = "freeform";
+    } else if (hasTemplate) {
+        recipientMode = "template";
+    }
 
     if (recipientMode === "skip_no_window") {
         await prisma.datafyCampaignRecipient.update({
             where: { id: recipient.id },
             data: {
-                status: "skipped",
-                skipReason: "no_service_window",
+                status: "failed",
+                failedAt: new Date(),
                 lastError:
-                    "Janela de atendimento fechada — destinatário precisa de template APPROVED",
+                    "Sem conteúdo enviável (texto livre ou template APPROVED)",
             },
         });
         return;
@@ -953,6 +959,15 @@ export async function tickDatafyCampaigns() {
 
     for (const c of active) {
         await processCampaign(c.id);
+    }
+}
+
+/** Kick one campaign immediately after start (real-time, same Datafy number). */
+export async function kickDatafyCampaignNow(campaignId: string): Promise<void> {
+    try {
+        await processCampaign(campaignId);
+    } catch {
+        /* worker tick will retry */
     }
 }
 
