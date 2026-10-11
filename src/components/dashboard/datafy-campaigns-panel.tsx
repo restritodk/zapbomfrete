@@ -37,6 +37,8 @@ import {
     ThumbsUp,
     ThumbsDown,
     CirclePlus,
+    ShieldCheck,
+    Smartphone,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -98,6 +100,16 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
     Select,
     SelectContent,
@@ -460,7 +472,7 @@ function WhatsAppMessagePreview({
                 ) : (
                     <p className="mt-3 text-[10px] leading-relaxed text-slate-600/90 px-0.5">
                         {limit >= META_FREEFORM_TEXT_MAX
-                            ? `Prévia do texto livre (limite ${META_FREEFORM_TEXT_MAX} chars). Envio real exige janela 24h e finalidade permitida — não usa limite de template (${META_TEMPLATE_BODY_MAX}).`
+                            ? `Prévia do texto livre (limite ${META_FREEFORM_TEXT_MAX} chars). Disparo via número oficial Datafy.`
                             : `Prévia ilustrativa. Envio por template APPROVED (limite ${META_TEMPLATE_BODY_MAX} caracteres por parte).`}
                     </p>
                 )}
@@ -511,6 +523,20 @@ export function DatafyCampaignsPanel() {
     const [saving, setSaving] = useState(false);
     /** Prevents double-submit before React re-renders `saving`. */
     const launchInFlightRef = useRef(false);
+    const [confirmLaunchOpen, setConfirmLaunchOpen] = useState(false);
+    const [pendingLaunch, setPendingLaunch] = useState<{
+        action: LaunchAction;
+        body: Record<string, unknown>;
+        recipientN: number;
+        partN: number;
+        msgTotal: number;
+        effectiveDryRun: boolean;
+        isSchedule: boolean;
+        scheduledAt: string;
+    } | null>(null);
+    const [datafyDisplayPhone, setDatafyDisplayPhone] = useState<string | null>(
+        null
+    );
 
     // Wizard state
     const [name, setName] = useState("");
@@ -717,27 +743,23 @@ export function DatafyCampaignsPanel() {
             dryRun: camp.dryRun,
         });
         setProgressRows(
-            recipients
-                .filter((r) => r.status !== "skipped")
-                .map((r) => ({
-                    id: r.id,
-                    jid: r.waId,
-                    display:
-                        r.fullName ||
-                        formatPhoneDisplay(r.waId) ||
-                        r.waId,
-                    status: mapRecipientStatus(r.status),
-                    at:
-                        r.deliveredAt ||
-                        r.acceptedAt ||
-                        r.failedAt ||
-                        null,
-                    detail: recipientDetail(
-                        r.status,
-                        r.skipReason,
-                        r.lastError
-                    ),
-                }))
+            recipients.map((r) => ({
+                id: r.id,
+                jid: r.waId,
+                display:
+                    r.fullName || formatPhoneDisplay(r.waId) || r.waId,
+                status: mapRecipientStatus(r.status),
+                at:
+                    r.deliveredAt ||
+                    r.acceptedAt ||
+                    r.failedAt ||
+                    null,
+                detail: recipientDetail(
+                    r.status,
+                    r.skipReason,
+                    r.lastError
+                ),
+            }))
         );
 
         if (["completed", "completed_with_errors"].includes(camp.status)) {
@@ -1315,6 +1337,19 @@ export function DatafyCampaignsPanel() {
         setWizardOpen(true);
         void loadTemplates();
         void loadCrmAndTags();
+        void (async () => {
+            try {
+                const res = await fetch("/api/channels/datafy/stats");
+                const json = await res.json().catch(() => ({}));
+                if (res.ok) {
+                    setDatafyDisplayPhone(
+                        json.data?.channel?.displayPhoneNumber || null
+                    );
+                }
+            } catch {
+                /* optional display */
+            }
+        })();
     };
 
     const insertToken = (token: string) => {
@@ -1755,101 +1790,107 @@ export function DatafyCampaignsPanel() {
               audience.eligibleCount;
         const msgTotal = estimateMessageTotal(recipientN, partN);
 
-        {
-            const ok = window.confirm(
-                effectiveDryRun
-                    ? `Simulação: ${recipientN} destinatário(s) × ${partN} parte(s) ≈ ${msgTotal} mensagens (sem envio real). Continuar?`
-                    : isSchedule
-                      ? `Agendar disparo real para ${new Date(scheduledAt).toLocaleString("pt-BR")}: ${recipientN} destinatário(s) × ${partN} parte(s) ≈ ${msgTotal} msgs.\n\nO worker Datafy executará no horário. Continuar?`
-                      : `Envio real: ${recipientN} destinatário(s) tecnicamente autorizados × ${partN} parte(s) = ${msgTotal} mensagens previstas.\n\nConsentimento elegível: ${audience.eligibleCount}. Aceite pela API ≠ entrega. Continuar?`
-            );
-            if (!ok) return;
-        }
+        setPendingLaunch({
+            action,
+            recipientN,
+            partN,
+            msgTotal,
+            effectiveDryRun,
+            isSchedule,
+            scheduledAt,
+            body: {
+                name: name.trim(),
+                purpose,
+                templateName,
+                templateLanguage,
+                templateCategory,
+                templateComponents: selectedTemplate?.components || null,
+                templateApprovalStatus,
+                contentSource,
+                contentKind,
+                messageBody,
+                interactiveButtons:
+                    consentButtonsEnabled &&
+                    purposeAllowsServiceWindowFreeform(purpose) &&
+                    (contentMode === "direct" ||
+                        contentSource === "freeform_window" ||
+                        contentSource === "bulletin_complete_freeform")
+                        ? {
+                              enabled: true,
+                              purpose: "consent_offers",
+                              buttons: [
+                                  {
+                                      id: CONSENT_BUTTON_IDS.GRANT,
+                                      title: consentBtnGrant
+                                          .trim()
+                                          .slice(0, CAMPAIGN_BUTTON_TITLE_UI_MAX),
+                                  },
+                                  {
+                                      id: CONSENT_BUTTON_IDS.DENY,
+                                      title: consentBtnDeny
+                                          .trim()
+                                          .slice(0, CAMPAIGN_BUTTON_TITLE_UI_MAX),
+                                  },
+                                  ...(consentBtnExtraEnabled &&
+                                  consentBtnExtra.trim()
+                                      ? [
+                                            {
+                                                id: CONSENT_BUTTON_IDS.EXTRA,
+                                                title: consentBtnExtra
+                                                    .trim()
+                                                    .slice(
+                                                        0,
+                                                        CAMPAIGN_BUTTON_TITLE_UI_MAX
+                                                    ),
+                                            },
+                                        ]
+                                      : []),
+                              ],
+                          }
+                        : { enabled: false },
+                messageParts:
+                    contentKind === "bulletin" ? bulletinParts : null,
+                bulletinMeta:
+                    contentKind === "bulletin" && bulletinAnalysis
+                        ? {
+                              title: bulletinAnalysis.title,
+                              loadCount: bulletinAnalysis.loadCount,
+                              partCount: bulletinParts.length,
+                              deliveryMode: bulletinDeliveryMode,
+                              warnings: bulletinAnalysis.warnings,
+                          }
+                        : null,
+                headerImageUrl,
+                headerImageHandle,
+                variableMapping: { body: vars },
+                segmentFilter: finalFilter,
+                scheduledAt: isSchedule ? scheduledAt : null,
+                dryRun: effectiveDryRun,
+                requireConsent: consentForced,
+                delayMs,
+            },
+        });
+        setConfirmLaunchOpen(true);
+    };
+
+    const executeConfirmedLaunch = async () => {
+        if (!pendingLaunch || launchInFlightRef.current || saving) return;
+        const {
+            body,
+            effectiveDryRun,
+            isSchedule,
+            scheduledAt: sched,
+        } = pendingLaunch;
 
         launchInFlightRef.current = true;
         setSaving(true);
         setDryRun(effectiveDryRun);
+        setConfirmLaunchOpen(false);
         try {
             const res = await fetch("/api/channels/datafy/campaigns", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    name: name.trim(),
-                    purpose,
-                    templateName,
-                    templateLanguage,
-                    templateCategory,
-                    templateComponents: selectedTemplate?.components || null,
-                    templateApprovalStatus,
-                    contentSource,
-                    contentKind,
-                    messageBody,
-                    interactiveButtons:
-                        consentButtonsEnabled &&
-                        purposeAllowsServiceWindowFreeform(purpose) &&
-                        (contentMode === "direct" ||
-                            contentSource === "freeform_window" ||
-                            contentSource === "bulletin_complete_freeform")
-                            ? {
-                                  enabled: true,
-                                  purpose: "consent_offers",
-                                  buttons: [
-                                      {
-                                          id: CONSENT_BUTTON_IDS.GRANT,
-                                          title: consentBtnGrant
-                                              .trim()
-                                              .slice(
-                                                  0,
-                                                  CAMPAIGN_BUTTON_TITLE_UI_MAX
-                                              ),
-                                      },
-                                      {
-                                          id: CONSENT_BUTTON_IDS.DENY,
-                                          title: consentBtnDeny
-                                              .trim()
-                                              .slice(
-                                                  0,
-                                                  CAMPAIGN_BUTTON_TITLE_UI_MAX
-                                              ),
-                                      },
-                                      ...(consentBtnExtraEnabled &&
-                                      consentBtnExtra.trim()
-                                          ? [
-                                                {
-                                                    id: CONSENT_BUTTON_IDS.EXTRA,
-                                                    title: consentBtnExtra
-                                                        .trim()
-                                                        .slice(
-                                                            0,
-                                                            CAMPAIGN_BUTTON_TITLE_UI_MAX
-                                                        ),
-                                                },
-                                            ]
-                                          : []),
-                                  ],
-                              }
-                            : { enabled: false },
-                    messageParts:
-                        contentKind === "bulletin" ? bulletinParts : null,
-                    bulletinMeta:
-                        contentKind === "bulletin" && bulletinAnalysis
-                            ? {
-                                  title: bulletinAnalysis.title,
-                                  loadCount: bulletinAnalysis.loadCount,
-                                  partCount: bulletinParts.length,
-                                  deliveryMode: bulletinDeliveryMode,
-                                  warnings: bulletinAnalysis.warnings,
-                              }
-                            : null,
-                    headerImageUrl,
-                    headerImageHandle,
-                    variableMapping: { body: vars },
-                    segmentFilter: finalFilter,
-                    scheduledAt: isSchedule ? scheduledAt : null,
-                    dryRun: effectiveDryRun,
-                    requireConsent: consentForced,
-                    delayMs,
-                }),
+                body: JSON.stringify(body),
             });
             const json = await res.json().catch(() => ({}));
             if (!res.ok) {
@@ -1858,10 +1899,11 @@ export function DatafyCampaignsPanel() {
             }
             const camp = json.data.campaign as Campaign;
             setWizardOpen(false);
+            setPendingLaunch(null);
 
             if (isSchedule) {
                 toast.success(
-                    `Disparo real agendado para ${new Date(scheduledAt).toLocaleString("pt-BR")}`
+                    `Disparo real agendado para ${new Date(sched).toLocaleString("pt-BR")}`
                 );
                 void load();
                 return;
@@ -1887,7 +1929,7 @@ export function DatafyCampaignsPanel() {
             toast.success(
                 effectiveDryRun
                     ? "Simulação iniciada"
-                    : "Disparo real iniciado"
+                    : "Disparo iniciado pelo número Datafy"
             );
             openProgress(camp.id, camp.name);
             void load();
@@ -5316,6 +5358,117 @@ export function DatafyCampaignsPanel() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog
+                open={confirmLaunchOpen}
+                onOpenChange={(open) => {
+                    if (saving) return;
+                    setConfirmLaunchOpen(open);
+                    if (!open) setPendingLaunch(null);
+                }}
+            >
+                <AlertDialogContent className="max-w-md gap-0 overflow-hidden rounded-2xl border-slate-200/90 p-0 shadow-2xl sm:max-w-md">
+                    <div className="bg-gradient-to-br from-emerald-600 via-emerald-600 to-teal-700 px-6 py-5 text-white">
+                        <AlertDialogHeader className="gap-2 text-left">
+                            <div className="mb-1 flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 ring-1 ring-white/25">
+                                <ShieldCheck className="h-5 w-5" />
+                            </div>
+                            <AlertDialogTitle className="text-xl font-semibold tracking-tight text-white">
+                                {pendingLaunch?.effectiveDryRun
+                                    ? "Confirmar simulação"
+                                    : pendingLaunch?.isSchedule
+                                      ? "Confirmar agendamento"
+                                      : "Confirmar disparo"}
+                            </AlertDialogTitle>
+                            <AlertDialogDescription className="text-sm text-emerald-50/90">
+                                {pendingLaunch?.effectiveDryRun
+                                    ? "Nenhuma mensagem real será enviada."
+                                    : "As mensagens sairão pelo número oficial Datafy conectado."}
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                    </div>
+                    <div className="space-y-4 px-6 py-5">
+                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3.5 py-3">
+                            <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+                                <Smartphone className="h-3.5 w-3.5" />
+                                Número Datafy
+                            </p>
+                            <p className="mt-1 text-base font-semibold tabular-nums text-slate-900">
+                                {datafyDisplayPhone
+                                    ? formatPhoneDisplay(datafyDisplayPhone) ||
+                                      datafyDisplayPhone
+                                    : "Número oficial do canal Datafy"}
+                            </p>
+                        </div>
+                        <dl className="grid grid-cols-2 gap-3 text-sm">
+                            <div className="rounded-xl border border-slate-100 px-3 py-2.5">
+                                <dt className="text-xs text-slate-500">
+                                    Destinatários
+                                </dt>
+                                <dd className="mt-0.5 text-lg font-semibold tabular-nums text-slate-900">
+                                    {pendingLaunch?.recipientN ?? 0}
+                                </dd>
+                            </div>
+                            <div className="rounded-xl border border-slate-100 px-3 py-2.5">
+                                <dt className="text-xs text-slate-500">
+                                    Mensagens
+                                </dt>
+                                <dd className="mt-0.5 text-lg font-semibold tabular-nums text-slate-900">
+                                    {pendingLaunch?.msgTotal ?? 0}
+                                </dd>
+                            </div>
+                            <div className="col-span-2 rounded-xl border border-slate-100 px-3 py-2.5">
+                                <dt className="text-xs text-slate-500">
+                                    Intervalo
+                                </dt>
+                                <dd className="mt-0.5 font-medium text-slate-800">
+                                    {delaySeconds}s entre envios · canal Datafy
+                                </dd>
+                            </div>
+                            {pendingLaunch?.isSchedule && (
+                                <div className="col-span-2 rounded-xl border border-slate-100 px-3 py-2.5">
+                                    <dt className="text-xs text-slate-500">
+                                        Agendado para
+                                    </dt>
+                                    <dd className="mt-0.5 font-medium text-slate-800">
+                                        {pendingLaunch.scheduledAt
+                                            ? new Date(
+                                                  pendingLaunch.scheduledAt
+                                              ).toLocaleString("pt-BR")
+                                            : "—"}
+                                    </dd>
+                                </div>
+                            )}
+                        </dl>
+                    </div>
+                    <AlertDialogFooter className="gap-2 border-t border-slate-100 bg-slate-50/50 px-6 py-4 sm:space-x-0">
+                        <AlertDialogCancel
+                            disabled={saving}
+                            className="rounded-xl"
+                        >
+                            Cancelar
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                            disabled={saving}
+                            className="rounded-xl bg-emerald-600 hover:bg-emerald-700 focus:ring-emerald-600"
+                            onClick={(e) => {
+                                e.preventDefault();
+                                void executeConfirmedLaunch();
+                            }}
+                        >
+                            {saving ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : pendingLaunch?.effectiveDryRun ? (
+                                "Executar simulação"
+                            ) : pendingLaunch?.isSchedule ? (
+                                "Confirmar agendamento"
+                            ) : (
+                                "Iniciar disparo"
+                            )}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
 
             <BroadcastProgressModal
                 open={progressOpen}

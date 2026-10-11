@@ -25,6 +25,7 @@ import {
     assessRealSendReadiness,
     countOpenServiceWindows,
     hasApprovedTemplateContent,
+    purposeAllowsServiceWindowFreeform,
 } from "./send-readiness";
 
 export class CampaignError extends Error {
@@ -355,7 +356,11 @@ export async function createCampaign(
                 Math.min(50, input.batchSize ?? DEFAULT_CAMPAIGN_BATCH_SIZE)
             ),
             dryRun: Boolean(input.dryRun),
-            requireConsent: input.requireConsent !== false,
+            // Utilidade/Transacional: só exige consentimento se o usuário marcar o checkbox.
+            // Marketing continua exigindo por padrão.
+            requireConsent: purposeAllowsServiceWindowFreeform(purpose)
+                ? Boolean(input.requireConsent)
+                : input.requireConsent !== false,
             createdById: userId,
         },
         include: {
@@ -373,9 +378,12 @@ export async function createCampaign(
 
     if (input.segmentFilter) {
         const dryRun = Boolean(input.dryRun);
+        const requireConsent = purposeAllowsServiceWindowFreeform(purpose)
+            ? Boolean(input.requireConsent)
+            : input.requireConsent !== false;
         await materializeRecipients(created.id, input.segmentFilter, {
             purpose,
-            requireConsent: input.requireConsent !== false,
+            requireConsent,
             // Dry-run may include valid phones without marketing consent; never authorizes real send
             simulationRelaxConsent: dryRun,
         });

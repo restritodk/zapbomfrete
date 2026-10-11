@@ -330,10 +330,14 @@ async function sendOneRecipient(
         return;
     }
 
+    // Official Datafy Cloud number only — never Baileys session JIDs.
     const cfg = await loadDatafyConfig();
-    const phoneNumberId = cfg.phoneNumberId;
+    const phoneNumberId = cfg.phoneNumberId?.trim() || null;
     if (!cfg.enabled || !cfg.channelToken || !phoneNumberId) {
-        throw new DatafyApiError("Integração Datafy indisponível", 503);
+        throw new DatafyApiError(
+            "Integração Datafy indisponível: configure o phone_number_id do canal oficial antes de disparar.",
+            503
+        );
     }
 
     const conversation = await ensureConversation(
