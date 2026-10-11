@@ -201,6 +201,48 @@ export class DatafyClient {
         );
     }
 
+    /**
+     * POST /v1/{phone_number_id}/messages — interactive reply buttons (24h window).
+     * Official Cloud API shape via Datafy. Title max 20 chars; max 3 buttons.
+     */
+    sendInteractiveButtons(
+        phoneNumberId: string,
+        body: {
+            to: string;
+            bodyText: string;
+            buttons: Array<{ id: string; title: string }>;
+            footerText?: string | null;
+        }
+    ): Promise<DatafySendMessageResponse> {
+        const buttons = body.buttons.slice(0, 3).map((b) => ({
+            type: "reply" as const,
+            reply: {
+                id: String(b.id).slice(0, 256),
+                title: String(b.title).slice(0, 20),
+            },
+        }));
+        return this.request<DatafySendMessageResponse>(
+            "POST",
+            `/v1/${encodeURIComponent(phoneNumberId)}/messages`,
+            {
+                body: {
+                    messaging_product: "whatsapp",
+                    recipient_type: "individual",
+                    to: body.to,
+                    type: "interactive",
+                    interactive: {
+                        type: "button",
+                        body: { text: body.bodyText.slice(0, 1024) },
+                        ...(body.footerText?.trim()
+                            ? { footer: { text: body.footerText.trim().slice(0, 60) } }
+                            : {}),
+                        action: { buttons },
+                    },
+                },
+            }
+        );
+    }
+
     /** POST /v1/{phone_number_id}/messages — approved template. */
     sendTemplate(
         phoneNumberId: string,

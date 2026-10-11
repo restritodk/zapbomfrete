@@ -158,6 +158,7 @@ async function sendOneRecipient(
         delayMs: number;
         headerImageUrl?: string | null;
         messageBody?: string | null;
+        interactiveButtons?: unknown;
     },
     recipientId: string
 ) {
@@ -399,6 +400,7 @@ async function sendPartsSequentially(opts: {
         headerImageUrl: string | null;
         delayMs?: number;
         messageBody?: string | null;
+        interactiveButtons?: unknown;
     };
     parts: CampaignMessagePart[];
     recipient: {
@@ -538,26 +540,6 @@ async function sendPartsSequentially(opts: {
                     400
                 );
             }
-            if (!messageId) {
-                const pending = await prisma.datafyMessage.create({
-                    data: {
-                        conversationId,
-                        clientMessageId: cmid,
-                        direction: "outbound",
-                        type: "text",
-                        body: preview,
-                        status: "pending",
-                        metadata: {
-                            campaignId: campaign.id,
-                            campaignRecipientId: recipient.id,
-                            partIndex: part.index,
-                            sendMode: "service_window_freeform",
-                        } as Prisma.InputJsonValue,
-                    },
-                });
-                messageId = pending.id;
-            }
-
             // Meta Cloud API free-form text max — never silently truncate
             if (freeformText.length > META_FREEFORM_TEXT_MAX) {
                 throw new DatafyApiError(
@@ -565,11 +547,51 @@ async function sendPartsSequentially(opts: {
                     400
                 );
             }
-            const res = await client.sendText(phoneNumberId, {
-                to: normalizeWaId(recipient.waId),
-                text: freeformText,
-                previewUrl: /https?:\/\//i.test(freeformText),
-            });
+
+            const { parseCampaignConsentButtons, toInteractiveSendButtons } =
+                await import("@/modules/crm/consent/campaign-buttons");
+            const consentBtns = parseCampaignConsentButtons(
+                (campaign as { interactiveButtons?: unknown }).interactiveButtons
+            );
+            const interactiveButtons = toInteractiveSendButtons(consentBtns);
+            const useInteractive = interactiveButtons.length > 0;
+
+            if (!messageId) {
+                const pending = await prisma.datafyMessage.create({
+                    data: {
+                        conversationId,
+                        clientMessageId: cmid,
+                        direction: "outbound",
+                        type: useInteractive ? "interactive" : "text",
+                        body: preview,
+                        status: "pending",
+                        metadata: {
+                            campaignId: campaign.id,
+                            campaignRecipientId: recipient.id,
+                            partIndex: part.index,
+                            sendMode: useInteractive
+                                ? "service_window_interactive"
+                                : "service_window_freeform",
+                            interactiveButtons: useInteractive
+                                ? interactiveButtons
+                                : undefined,
+                        } as Prisma.InputJsonValue,
+                    },
+                });
+                messageId = pending.id;
+            }
+
+            const res = useInteractive
+                ? await client.sendInteractiveButtons(phoneNumberId, {
+                      to: normalizeWaId(recipient.waId),
+                      bodyText: freeformText.slice(0, 1024),
+                      buttons: interactiveButtons,
+                  })
+                : await client.sendText(phoneNumberId, {
+                      to: normalizeWaId(recipient.waId),
+                      text: freeformText,
+                      previewUrl: /https?:\/\//i.test(freeformText),
+                  });
             wamid = res.messages?.[0]?.id || null;
         }
 
@@ -721,6 +743,7 @@ async function processCampaign(campaignId: string) {
                     delayMs: true,
                     headerImageUrl: true,
                     messageBody: true,
+                    interactiveButtons: true,
                     contentKind: true,
                     messageParts: true,
                 },

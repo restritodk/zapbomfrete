@@ -38,14 +38,16 @@ export const CONSENT_BUTTON_IDS = {
     DENY: "consent_deny_offers",
 } as const;
 
-/** Meta QUICK_REPLY text max length. */
+/** Meta QUICK_REPLY (template) text max length. */
 export const META_QUICK_REPLY_TEXT_MAX = 25;
+/** Meta interactive reply button title max (freeform / 24h window). */
+export const META_INTERACTIVE_REPLY_TITLE_MAX = 20;
 export const META_QUICK_REPLY_MAX_BUTTONS = 3;
 
 export const DEFAULT_CONSENT_BUTTONS = [
     {
         type: "QUICK_REPLY" as const,
-        text: "Sim, quero ofertas",
+        text: "Sim, quero receber",
         payload: CONSENT_BUTTON_IDS.GRANT,
     },
     {

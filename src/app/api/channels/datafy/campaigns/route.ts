@@ -52,6 +52,22 @@ const createSchema = z.object({
     contentSource: z.string().max(40).optional(),
     contentKind: z.enum(["message", "bulletin"]).optional(),
     messageBody: z.string().max(100_000).nullable().optional(),
+    interactiveButtons: z
+        .object({
+            enabled: z.boolean(),
+            purpose: z.string().optional(),
+            buttons: z
+                .array(
+                    z.object({
+                        id: z.string().max(256),
+                        title: z.string().max(20),
+                    })
+                )
+                .max(3)
+                .optional(),
+        })
+        .nullable()
+        .optional(),
     messageParts: z.unknown().optional(),
     bulletinMeta: z.unknown().optional(),
     headerImageUrl: z.string().max(2000).nullable().optional(),

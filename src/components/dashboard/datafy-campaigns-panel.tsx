@@ -252,6 +252,7 @@ function WhatsAppMessagePreview({
     onPrevPart,
     onNextPart,
     warnings,
+    interactiveButtons,
 }: {
     previewText: string;
     imagePreview: string | null;
@@ -267,6 +268,7 @@ function WhatsAppMessagePreview({
     onPrevPart?: () => void;
     onNextPart?: () => void;
     warnings?: string[];
+    interactiveButtons?: Array<{ title: string }> | null;
 }) {
     const multi = (partCount || 0) > 1;
     const limit = charLimit > 0 ? charLimit : META_TEMPLATE_BODY_MAX;
@@ -382,6 +384,18 @@ function WhatsAppMessagePreview({
                             12:00
                         </p>
                     </div>
+                    {interactiveButtons && interactiveButtons.length > 0 ? (
+                        <div className="border-t border-slate-100 divide-y divide-slate-100">
+                            {interactiveButtons.map((b, i) => (
+                                <div
+                                    key={`${b.title}-${i}`}
+                                    className="px-3 py-2 text-center text-[13px] font-medium text-[#027eb5]"
+                                >
+                                    {b.title}
+                                </div>
+                            ))}
+                        </div>
+                    ) : null}
                 </div>
                 {warnings?.length ? (
                     <ul className="mt-3 space-y-1 text-[10px] text-amber-800">
@@ -459,9 +473,13 @@ export function DatafyCampaignsPanel() {
         useState<BulletinAnalysis | null>(null);
     const [previewPartIndex, setPreviewPartIndex] = useState(0);
     const deferredBulletinText = useDeferredValue(messageBody);
-    const [contentMode, setContentMode] = useState<"existing" | "custom">(
-        "existing"
-    );
+    const [contentMode, setContentMode] = useState<
+        "existing" | "custom" | "direct"
+    >("existing");
+    /** Phase 9 — interactive consent buttons on freeform (Envio Direto). */
+    const [consentButtonsEnabled, setConsentButtonsEnabled] = useState(false);
+    const [consentBtnGrant, setConsentBtnGrant] = useState("Sim, quero receber");
+    const [consentBtnDeny, setConsentBtnDeny] = useState("Não quero receber");
     const [templates, setTemplates] = useState<Template[]>([]);
     const [bulletinLibrary, setBulletinLibrary] = useState<
         BulletinTemplateSpec[] | null
@@ -1168,6 +1186,9 @@ export function DatafyCampaignsPanel() {
         setCompleteAssessment(null);
         setPreviewPartIndex(0);
         setContentMode("existing");
+        setConsentButtonsEnabled(false);
+        setConsentBtnGrant("Sim, quero receber");
+        setConsentBtnDeny("Não quero receber");
         setTemplateKey("");
         setBodyVars(["fullName"]);
         setHeaderImageUrl(null);
@@ -1487,6 +1508,33 @@ export function DatafyCampaignsPanel() {
                     return;
                 }
             }
+        } else if (contentMode === "direct") {
+            if (!messageBody.trim()) {
+                toast.error("Informe o texto da mensagem na Etapa 1");
+                return;
+            }
+            if (!purposeAllowsServiceWindowFreeform(purpose)) {
+                toast.error(
+                    "Envio Direto só está disponível para Utilidade ou Transacional."
+                );
+                return;
+            }
+            templateName = null;
+            templateLanguage = "pt_BR";
+            templateCategory = null;
+            templateApprovalStatus = null;
+            contentSource = "freeform_window";
+            vars = bodyVars;
+            if (
+                !effectiveDryRun &&
+                sendReadiness.modality !== "service_window"
+            ) {
+                toast.error(
+                    sendReadiness.blockReason ||
+                        "Envio Direto exige destinatários com janela 24h aberta."
+                );
+                return;
+            }
         } else if (contentMode === "custom") {
             if (
                 !effectiveDryRun &&
@@ -1534,7 +1582,7 @@ export function DatafyCampaignsPanel() {
             templateApprovalStatus = null;
             contentSource = "freeform_window";
         } else if (!effectiveDryRun) {
-            toast.error("Selecione um template APPROVED");
+            toast.error("Selecione um template APPROVED ou Envio Direto");
             return;
         } else if (!selectedTemplate && !messageBody.trim()) {
             toast.error("Informe um template ou texto para simular");
@@ -1595,6 +1643,30 @@ export function DatafyCampaignsPanel() {
                     contentSource,
                     contentKind,
                     messageBody,
+                    interactiveButtons:
+                        consentButtonsEnabled &&
+                        (contentMode === "direct" ||
+                            contentSource === "freeform_window" ||
+                            contentSource === "bulletin_complete_freeform")
+                            ? {
+                                  enabled: true,
+                                  purpose: "consent_offers",
+                                  buttons: [
+                                      {
+                                          id: "consent_grant_offers",
+                                          title: consentBtnGrant
+                                              .trim()
+                                              .slice(0, 20),
+                                      },
+                                      {
+                                          id: "consent_deny_offers",
+                                          title: consentBtnDeny
+                                              .trim()
+                                              .slice(0, 20),
+                                      },
+                                  ],
+                              }
+                            : { enabled: false },
                     messageParts:
                         contentKind === "bulletin" ? bulletinParts : null,
                     bulletinMeta:
@@ -2153,7 +2225,23 @@ export function DatafyCampaignsPanel() {
                                     </Label>
                                     <Select
                                         value={purpose}
-                                        onValueChange={setPurpose}
+                                        onValueChange={(v) => {
+                                            setPurpose(v);
+                                            if (
+                                                purposeAllowsServiceWindowFreeform(
+                                                    v
+                                                ) &&
+                                                contentKind === "message"
+                                            ) {
+                                                setContentMode("direct");
+                                                setRequireConsent(false);
+                                            } else if (v === "marketing") {
+                                                if (contentMode === "direct") {
+                                                    setContentMode("existing");
+                                                }
+                                                setRequireConsent(true);
+                                            }
+                                        }}
                                     >
                                         <SelectTrigger className="h-11 rounded-xl bg-white border-slate-200">
                                             <SelectValue />
@@ -2185,7 +2273,13 @@ export function DatafyCampaignsPanel() {
                                     className="rounded-xl"
                                     onClick={() => {
                                         setContentKind("message");
-                                        setContentMode("existing");
+                                        setContentMode(
+                                            purposeAllowsServiceWindowFreeform(
+                                                purpose
+                                            )
+                                                ? "direct"
+                                                : "existing"
+                                        );
                                     }}
                                 >
                                     Mensagem comum
@@ -2247,6 +2341,87 @@ export function DatafyCampaignsPanel() {
                                             : "Escreva a mensagem da campanha…"
                                     }
                                 />
+                                {contentKind === "message" && (
+                                    <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <p className="text-sm font-medium text-slate-800">
+                                                    Botões interativos
+                                                </p>
+                                                <p className="text-[11px] text-muted-foreground mt-0.5">
+                                                    Solicitar confirmação de
+                                                    recebimento de ofertas.
+                                                    Envio livre só na janela 24h
+                                                    (Utilidade/Transacional).
+                                                    Marketing exige template
+                                                    APPROVED com botões.
+                                                </p>
+                                            </div>
+                                            <label className="flex items-center gap-2 text-sm shrink-0 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    className="rounded border-slate-300"
+                                                    checked={
+                                                        consentButtonsEnabled
+                                                    }
+                                                    onChange={(e) =>
+                                                        setConsentButtonsEnabled(
+                                                            e.target.checked
+                                                        )
+                                                    }
+                                                />
+                                                Adicionar botões de
+                                                consentimento
+                                            </label>
+                                        </div>
+                                        {consentButtonsEnabled && (
+                                            <div className="grid gap-2 sm:grid-cols-2">
+                                                <div className="space-y-1">
+                                                    <Label className="text-xs">
+                                                        Botão 1 (máx. 20)
+                                                    </Label>
+                                                    <Input
+                                                        maxLength={20}
+                                                        value={consentBtnGrant}
+                                                        onChange={(e) =>
+                                                            setConsentBtnGrant(
+                                                                e.target.value
+                                                            )
+                                                        }
+                                                    />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <Label className="text-xs">
+                                                        Botão 2 (máx. 20)
+                                                    </Label>
+                                                    <Input
+                                                        maxLength={20}
+                                                        value={consentBtnDeny}
+                                                        onChange={(e) =>
+                                                            setConsentBtnDeny(
+                                                                e.target.value
+                                                            )
+                                                        }
+                                                    />
+                                                </div>
+                                                {!purposeAllowsServiceWindowFreeform(
+                                                    purpose
+                                                ) && (
+                                                    <p className="sm:col-span-2 text-[11px] text-amber-800">
+                                                        Com finalidade Marketing,
+                                                        os botões não são enviados
+                                                        como mensagem livre —
+                                                        selecione um template
+                                                        APPROVED que já os
+                                                        contenha, ou mude para
+                                                        Utilidade/Transacional
+                                                        com Envio Direto.
+                                                    </p>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                                 {contentKind === "bulletin" &&
                                     bulletinAnalysis && (
                                         <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600 space-y-1.5">
@@ -3529,17 +3704,49 @@ export function DatafyCampaignsPanel() {
                                             </>
                                         )}
                                         <span>
-                                            Aptos para envio:{" "}
-                                            <strong className="text-emerald-700">
+                                            Consentimento elegível (CRM):{" "}
+                                            <strong>
                                                 {audience.eligibleCount}
                                             </strong>
                                         </span>
                                         <span>
-                                            Excluídos:{" "}
+                                            Janela 24h aberta:{" "}
+                                            <strong className="text-sky-800">
+                                                {audience.openWindowCount ?? 0}
+                                            </strong>
+                                        </span>
+                                        <span>
+                                            Exigem template (sem janela):{" "}
+                                            <strong>
+                                                {audience.needsTemplateCount ??
+                                                    Math.max(
+                                                        0,
+                                                        audience.eligibleCount -
+                                                            (audience.openWindowCount ||
+                                                                0)
+                                                    )}
+                                            </strong>
+                                        </span>
+                                        <span>
+                                            Aptos técnicos (modo atual):{" "}
+                                            <strong className="text-emerald-700">
+                                                {sendReadiness.realSendReady
+                                                    ? sendReadiness.technicallySendableCount
+                                                    : 0}
+                                            </strong>
+                                        </span>
+                                        <span>
+                                            Excluídos / bloqueados:{" "}
                                             <strong className="text-amber-700">
                                                 {audience.excludedCount}
                                             </strong>
                                         </span>
+                                        <p className="basis-full text-[11px] text-slate-500">
+                                            “Consentimento elegível” não significa
+                                            envio imediato. Com Envio Direto, só
+                                            quem tem janela aberta recebe; os
+                                            demais precisam de template APPROVED.
+                                        </p>
                                         {(audience.simulationEligibleCount ||
                                             0) > audience.eligibleCount && (
                                             <span className="text-slate-500 text-xs self-center">
@@ -3895,6 +4102,22 @@ export function DatafyCampaignsPanel() {
                             ) : (
                                 <>
                             <div className="flex flex-wrap gap-2">
+                                {purposeAllowsServiceWindowFreeform(
+                                    purpose
+                                ) && (
+                                    <Button
+                                        type="button"
+                                        variant={
+                                            contentMode === "direct"
+                                                ? "default"
+                                                : "outline"
+                                        }
+                                        className="rounded-xl"
+                                        onClick={() => setContentMode("direct")}
+                                    >
+                                        Envio direto (janela 24h)
+                                    </Button>
+                                )}
                                 <Button
                                     type="button"
                                     variant={
@@ -3921,7 +4144,41 @@ export function DatafyCampaignsPanel() {
                                 </Button>
                             </div>
 
-                            {contentMode === "existing" ? (
+                            {contentMode === "direct" ? (
+                                <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 text-sm text-emerald-950">
+                                    <p className="font-medium">
+                                        Envio Direto via Datafy (Modalidade B)
+                                    </p>
+                                    <p>
+                                        O texto da Etapa 1 será enviado como
+                                        mensagem livre aos destinatários com
+                                        <strong> janela de atendimento aberta</strong>{" "}
+                                        (últimas 24h). Não exige aprovação de
+                                        template novo.
+                                    </p>
+                                    <p className="text-[12px]">
+                                        Destinatários sem janela aberta serão
+                                        excluídos neste modo (motivo: janela
+                                        fechada). Para alcançá-los, use um
+                                        template APPROVED.
+                                    </p>
+                                    {consentButtonsEnabled && (
+                                        <p className="text-[12px]">
+                                            Botões de consentimento serão
+                                            anexados à mensagem interativa
+                                            (somente na janela 24h).
+                                        </p>
+                                    )}
+                                    {(audience?.openWindowCount ?? 0) <= 0 && (
+                                        <p className="text-amber-900 text-[12px] font-medium">
+                                            Nenhum destinatário com janela aberta
+                                            na audiência atual — calcule a
+                                            audiência e/ou use template
+                                            APPROVED.
+                                        </p>
+                                    )}
+                                </div>
+                            ) : contentMode === "existing" ? (
                                 <div className="space-y-3">
                                     <Label>Template APPROVED *</Label>
                                     <Select
@@ -4234,18 +4491,31 @@ export function DatafyCampaignsPanel() {
                                     </p>
                                     <p className="sm:col-span-2">
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
-                                            Template aprovado
+                                            Modalidade / conteúdo
                                         </span>
                                         {contentKind === "bulletin"
-                                            ? bulletinParts
-                                                  .map(
-                                                      (p) =>
-                                                          `P${p.index + 1}: ${p.templateName || "—"} (${p.templateApprovalStatus || "—"})`
-                                                  )
-                                                  .join(" · ") || "—"
-                                            : contentMode === "existing"
-                                              ? `${selectedTemplate?.name || "—"} · ${selectedTemplate?.status || "—"}`
-                                              : `${submittedTemplate?.templateName || "texto livre / pendente"} · ${submittedTemplate?.approvalStatus || "—"}`}
+                                            ? bulletinDeliveryMode ===
+                                              "complete_single"
+                                                ? "Boletim completo — mensagem única (Envio Direto)"
+                                                : bulletinParts
+                                                      .map(
+                                                          (p) =>
+                                                              `P${p.index + 1}: ${p.templateName || "—"} (${p.templateApprovalStatus || "—"})`
+                                                      )
+                                                      .join(" · ") || "—"
+                                            : contentMode === "direct"
+                                              ? `Envio Direto (janela 24h)${consentButtonsEnabled ? " · com botões de consentimento" : ""}`
+                                              : contentMode === "existing"
+                                                ? `${selectedTemplate?.name || "—"} · ${selectedTemplate?.status || "—"}`
+                                                : `${submittedTemplate?.templateName || "texto livre / pendente"} · ${submittedTemplate?.approvalStatus || "—"}`}
+                                    </p>
+                                    <p>
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Aptos técnicos neste modo
+                                        </span>
+                                        {sendReadiness.technicallySendableCount}{" "}
+                                        de {audience?.eligibleCount ?? 0} com
+                                        consentimento elegível
                                     </p>
                                     <p>
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
@@ -4385,6 +4655,18 @@ export function DatafyCampaignsPanel() {
                                             warnings={
                                                 bulletinAnalysis?.warnings
                                             }
+                                            interactiveButtons={
+                                                consentButtonsEnabled
+                                                    ? [
+                                                          {
+                                                              title: consentBtnGrant,
+                                                          },
+                                                          {
+                                                              title: consentBtnDeny,
+                                                          },
+                                                      ]
+                                                    : null
+                                            }
                                         />
                                     </div>
                                 )}
@@ -4414,18 +4696,22 @@ export function DatafyCampaignsPanel() {
                                         : previewText.length
                                 }
                                 charLimit={
-                                    contentKind === "bulletin" &&
-                                    bulletinDeliveryMode === "complete_single"
+                                    (contentKind === "bulletin" &&
+                                        bulletinDeliveryMode ===
+                                            "complete_single") ||
+                                    contentMode === "direct"
                                         ? META_FREEFORM_TEXT_MAX
                                         : META_TEMPLATE_BODY_MAX
                                 }
                                 deliveryHint={
-                                    contentKind === "bulletin" &&
-                                    bulletinDeliveryMode ===
-                                        "complete_single" &&
-                                    completeAssessment
-                                        ? `${completeAssessment.loadCount} cargas · 1 mensagem (texto livre)`
-                                        : null
+                                    contentMode === "direct"
+                                        ? "Envio Direto · janela 24h (Utilidade/Transacional)"
+                                        : contentKind === "bulletin" &&
+                                            bulletinDeliveryMode ===
+                                                "complete_single" &&
+                                            completeAssessment
+                                          ? `${completeAssessment.loadCount} cargas · 1 mensagem (texto livre)`
+                                          : null
                                 }
                                 loadCountInPart={
                                     contentKind === "bulletin"
@@ -4447,6 +4733,14 @@ export function DatafyCampaignsPanel() {
                                     )
                                 }
                                 warnings={bulletinAnalysis?.warnings}
+                                interactiveButtons={
+                                    consentButtonsEnabled
+                                        ? [
+                                              { title: consentBtnGrant },
+                                              { title: consentBtnDeny },
+                                          ]
+                                        : null
+                                }
                             />
                         </aside>
                     </div>

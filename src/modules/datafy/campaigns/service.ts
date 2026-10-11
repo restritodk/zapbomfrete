@@ -276,6 +276,7 @@ export type CreateCampaignInput = {
     batchSize?: number;
     dryRun?: boolean;
     requireConsent?: boolean;
+    interactiveButtons?: unknown;
 };
 
 export async function createCampaign(
@@ -321,6 +322,10 @@ export async function createCampaign(
             contentKind:
                 input.contentKind === "bulletin" ? "bulletin" : "message",
             messageBody: input.messageBody?.trim() || null,
+            interactiveButtons:
+                input.interactiveButtons === undefined
+                    ? undefined
+                    : (input.interactiveButtons as Prisma.InputJsonValue),
             messageParts:
                 input.messageParts === undefined
                     ? undefined

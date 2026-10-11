@@ -26,10 +26,12 @@ export type ClassifiedConsentReply =
     | { kind: "none" };
 
 const GRANT_TITLES = [
+    normalizeConsentText("Sim, quero receber"),
     normalizeConsentText("Sim, quero ofertas"),
     normalizeConsentText("Sim, quero receber ofertas"),
     normalizeConsentText("Quero receber ofertas"),
     normalizeConsentText("Sim quero ofertas"),
+    normalizeConsentText("Sim quero receber"),
 ];
 
 const DENY_TITLES = [

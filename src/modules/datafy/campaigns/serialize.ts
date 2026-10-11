@@ -27,6 +27,8 @@ export function serializeCampaign(c: CampaignWithMeta) {
         contentSource: c.contentSource,
         contentKind: c.contentKind || "message",
         messageBody: c.messageBody,
+        interactiveButtons:
+            (c as { interactiveButtons?: unknown }).interactiveButtons ?? null,
         messageParts: c.messageParts ?? null,
         bulletinMeta: c.bulletinMeta ?? null,
         headerImageUrl: c.headerImageUrl,

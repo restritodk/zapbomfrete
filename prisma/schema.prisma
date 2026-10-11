@@ -730,6 +730,8 @@ model DatafyCampaign {
   contentSource      String    @default("existing_template")
   /// User-authored body text (campaign copy / template body source).
   messageBody        String?   @db.Text
+  /// Optional interactive reply buttons (Phase 9 consent) for freeform sends.
+  interactiveButtons Json?
   /// message | bulletin
   contentKind        String    @default("message")
   /// Ordered bulletin/message parts (CampaignMessagePart[]). Null = legacy single body.
