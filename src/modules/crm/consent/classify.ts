@@ -26,6 +26,7 @@ export type ClassifiedConsentReply =
     | { kind: "none" };
 
 const GRANT_TITLES = [
+    normalizeConsentText("Tenho interesse"),
     normalizeConsentText("Sim, quero receber"),
     normalizeConsentText("Sim, quero ofertas"),
     normalizeConsentText("Sim, quero receber ofertas"),
@@ -35,6 +36,8 @@ const GRANT_TITLES = [
 ];
 
 const DENY_TITLES = [
+    normalizeConsentText("Não tenho interesse"),
+    normalizeConsentText("Nao tenho interesse"),
     normalizeConsentText("Não quero receber"),
     normalizeConsentText("Nao quero receber"),
     normalizeConsentText("Não quero ofertas"),
@@ -52,7 +55,11 @@ export function classifyConsentReply(opts: {
     previousStatus?: string | null;
 }): ClassifiedConsentReply {
     const id = String(opts.buttonId || "").trim().toLowerCase();
-    if (id === CONSENT_BUTTON_IDS.GRANT || id === "consent_yes") {
+    if (
+        id === CONSENT_BUTTON_IDS.GRANT ||
+        id === CONSENT_BUTTON_IDS.GRANT_LEGACY ||
+        id === "consent_yes"
+    ) {
         return {
             kind: "grant",
             decision: CONSENT_DECISION.GRANTED,
@@ -61,6 +68,7 @@ export function classifyConsentReply(opts: {
     }
     if (
         id === CONSENT_BUTTON_IDS.DENY ||
+        id === CONSENT_BUTTON_IDS.DENY_LEGACY ||
         id === "consent_no" ||
         id === "consent_deny"
     ) {

@@ -124,8 +124,8 @@ describe("Envio Direto — consent interactive buttons", () => {
         const cfg = parseCampaignConsentButtons({
             enabled: true,
             buttons: [
-                { id: "consent_grant_offers", title: "Sim, quero receber" },
-                { id: "consent_deny_offers", title: "Não quero receber" },
+                { id: "consent_yes", title: "Tenho interesse" },
+                { id: "consent_no", title: "Não tenho interesse" },
             ],
         });
         assert.equal(cfg.enabled, true);
@@ -135,7 +135,7 @@ describe("Envio Direto — consent interactive buttons", () => {
         }
         const send = toInteractiveSendButtons(cfg);
         assert.equal(send.length, 2);
-        assert.equal(send[0].id, "consent_grant_offers");
+        assert.equal(send[0].id, "consent_yes");
     });
 
     it("rejects overlong interactive titles", () => {
@@ -168,11 +168,27 @@ describe("Envio Direto — consent interactive buttons", () => {
         assert.equal(toInteractiveSendButtons(d).length, 0);
     });
 
-    it("classifies Sim, quero receber as grant", () => {
-        const r = classifyConsentReply({
-            buttonTitle: "Sim, quero receber",
-            previousStatus: "unknown",
-        });
-        assert.equal(r.kind, "grant");
+    it("classifies Tenho interesse / consent_yes as grant", () => {
+        assert.equal(
+            classifyConsentReply({
+                buttonTitle: "Tenho interesse",
+                previousStatus: "unknown",
+            }).kind,
+            "grant"
+        );
+        assert.equal(
+            classifyConsentReply({
+                buttonId: "consent_yes",
+                previousStatus: "unknown",
+            }).kind,
+            "grant"
+        );
+        assert.equal(
+            classifyConsentReply({
+                buttonId: "consent_grant_offers",
+                previousStatus: "unknown",
+            }).kind,
+            "grant"
+        );
     });
 });

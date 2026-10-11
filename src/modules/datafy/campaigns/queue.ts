@@ -573,16 +573,9 @@ async function sendPartsSequentially(opts: {
             );
             const interactiveButtons = toInteractiveSendButtons(consentBtns);
             const useInteractive = interactiveButtons.length > 0;
-
-            if (
+            const detachedInteractive =
                 useInteractive &&
-                freeformText.length > META_INTERACTIVE_BODY_MAX
-            ) {
-                throw new DatafyApiError(
-                    `Botões interativos exigem corpo ≤ ${META_INTERACTIVE_BODY_MAX} caracteres (atual: ${freeformText.length}). Remova os botões para enviar o texto integral, ou reduza o texto.`,
-                    400
-                );
-            }
+                freeformText.length > META_INTERACTIVE_BODY_MAX;
 
             if (!messageId) {
                 const pending = await prisma.datafyMessage.create({
@@ -590,16 +583,21 @@ async function sendPartsSequentially(opts: {
                         conversationId,
                         clientMessageId: cmid,
                         direction: "outbound",
-                        type: useInteractive ? "interactive" : "text",
+                        type:
+                            useInteractive && !detachedInteractive
+                                ? "interactive"
+                                : "text",
                         body: preview,
                         status: "pending",
                         metadata: {
                             campaignId: campaign.id,
                             campaignRecipientId: recipient.id,
                             partIndex: part.index,
-                            sendMode: useInteractive
-                                ? "service_window_interactive"
-                                : "service_window_freeform",
+                            sendMode: detachedInteractive
+                                ? "service_window_freeform_plus_interactive"
+                                : useInteractive
+                                  ? "service_window_interactive"
+                                  : "service_window_freeform",
                             interactiveButtons: useInteractive
                                 ? interactiveButtons
                                 : undefined,
@@ -609,18 +607,43 @@ async function sendPartsSequentially(opts: {
                 messageId = pending.id;
             }
 
-            const res = useInteractive
-                ? await client.sendInteractiveButtons(phoneNumberId, {
-                      to: normalizeWaId(recipient.waId),
-                      bodyText: freeformText,
-                      buttons: interactiveButtons,
-                  })
-                : await client.sendText(phoneNumberId, {
-                      to: normalizeWaId(recipient.waId),
-                      text: freeformText,
-                      previewUrl: /https?:\/\//i.test(freeformText),
-                  });
-            wamid = res.messages?.[0]?.id || null;
+            if (detachedInteractive) {
+                // Full bulletin/text first; buttons in a separate interactive balloon.
+                const resText = await client.sendText(phoneNumberId, {
+                    to: normalizeWaId(recipient.waId),
+                    text: freeformText,
+                    previewUrl: /https?:\/\//i.test(freeformText),
+                });
+                const resInt = await client.sendInteractiveButtons(
+                    phoneNumberId,
+                    {
+                        to: normalizeWaId(recipient.waId),
+                        bodyText: "Toque em uma opção para responder:",
+                        buttons: interactiveButtons,
+                    }
+                );
+                wamid =
+                    resInt.messages?.[0]?.id ||
+                    resText.messages?.[0]?.id ||
+                    null;
+            } else if (useInteractive) {
+                const res = await client.sendInteractiveButtons(
+                    phoneNumberId,
+                    {
+                        to: normalizeWaId(recipient.waId),
+                        bodyText: freeformText,
+                        buttons: interactiveButtons,
+                    }
+                );
+                wamid = res.messages?.[0]?.id || null;
+            } else {
+                const res = await client.sendText(phoneNumberId, {
+                    to: normalizeWaId(recipient.waId),
+                    text: freeformText,
+                    previewUrl: /https?:\/\//i.test(freeformText),
+                });
+                wamid = res.messages?.[0]?.id || null;
+            }
         }
 
         await prisma.datafyMessage.update({

@@ -33,7 +33,17 @@ import {
     ChevronUp,
     ChevronLeft,
     ChevronRight,
+    MousePointerClick,
+    ThumbsUp,
+    ThumbsDown,
+    CirclePlus,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import {
+    CONSENT_BUTTON_IDS,
+    DEFAULT_CONSENT_BUTTON_TITLES,
+    META_INTERACTIVE_REPLY_TITLE_MAX,
+} from "@/modules/crm/consent/constants";
 import { useSession } from "@/components/dashboard/session-provider";
 import {
     analyzeBulletin,
@@ -254,6 +264,7 @@ function WhatsAppMessagePreview({
     onNextPart,
     warnings,
     interactiveButtons,
+    interactiveDetached,
 }: {
     previewText: string;
     imagePreview: string | null;
@@ -270,11 +281,15 @@ function WhatsAppMessagePreview({
     onNextPart?: () => void;
     warnings?: string[];
     interactiveButtons?: Array<{ title: string }> | null;
+    /** When true, buttons cannot ride on the same balloon (body > Meta interactive 1024). */
+    interactiveDetached?: boolean;
 }) {
     const multi = (partCount || 0) > 1;
     const limit = charLimit > 0 ? charLimit : META_TEMPLATE_BODY_MAX;
     const overLimit =
         typeof partCharCount === "number" && partCharCount > limit;
+    const showButtons =
+        interactiveButtons && interactiveButtons.length > 0 && !interactiveDetached;
     return (
         <div
             className={cn(
@@ -385,12 +400,12 @@ function WhatsAppMessagePreview({
                             12:00
                         </p>
                     </div>
-                    {interactiveButtons && interactiveButtons.length > 0 ? (
+                    {showButtons ? (
                         <div className="border-t border-slate-100 divide-y divide-slate-100">
-                            {interactiveButtons.map((b, i) => (
+                            {interactiveButtons!.map((b, i) => (
                                 <div
                                     key={`${b.title}-${i}`}
-                                    className="px-3 py-2 text-center text-[13px] font-medium text-[#027eb5]"
+                                    className="px-3 py-2.5 text-center text-[13px] font-medium text-[#027eb5]"
                                 >
                                     {b.title}
                                 </div>
@@ -398,6 +413,36 @@ function WhatsAppMessagePreview({
                         </div>
                     ) : null}
                 </div>
+                {interactiveDetached &&
+                interactiveButtons &&
+                interactiveButtons.length > 0 ? (
+                    <div className="mt-2.5 max-w-[92%] space-y-1.5">
+                        <p className="text-[10px] font-medium text-slate-600 px-0.5">
+                            Mensagem interativa separada (corpo ≤{" "}
+                            {META_INTERACTIVE_BODY_MAX} chars — limite Meta)
+                        </p>
+                        <div className="rounded-xl rounded-tl-sm bg-white shadow-sm overflow-hidden">
+                            <div className="px-3 py-2">
+                                <p className="text-[13px] leading-relaxed text-slate-800">
+                                    Toque em uma opção para responder:
+                                </p>
+                                <p className="text-[10px] text-slate-400 text-right mt-1.5 tabular-nums">
+                                    12:00
+                                </p>
+                            </div>
+                            <div className="border-t border-slate-100 divide-y divide-slate-100">
+                                {interactiveButtons.map((b, i) => (
+                                    <div
+                                        key={`det-${b.title}-${i}`}
+                                        className="px-3 py-2.5 text-center text-[13px] font-medium text-[#027eb5]"
+                                    >
+                                        {b.title}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
                 {warnings?.length ? (
                     <ul className="mt-3 space-y-1 text-[10px] text-amber-800">
                         {warnings.slice(0, 4).map((w) => (
@@ -477,10 +522,18 @@ export function DatafyCampaignsPanel() {
     const [contentMode, setContentMode] = useState<
         "existing" | "custom" | "direct"
     >("existing");
-    /** Phase 9 — interactive consent buttons on freeform (Envio Direto). */
+    /** Phase 9 — interactive reply / consent buttons (Step 1). */
     const [consentButtonsEnabled, setConsentButtonsEnabled] = useState(false);
-    const [consentBtnGrant, setConsentBtnGrant] = useState("Sim, quero receber");
-    const [consentBtnDeny, setConsentBtnDeny] = useState("Não quero receber");
+    const [consentBtnGrant, setConsentBtnGrant] = useState<string>(
+        DEFAULT_CONSENT_BUTTON_TITLES.grant
+    );
+    const [consentBtnDeny, setConsentBtnDeny] = useState<string>(
+        DEFAULT_CONSENT_BUTTON_TITLES.deny
+    );
+    const [consentBtnExtraEnabled, setConsentBtnExtraEnabled] = useState(false);
+    const [consentBtnExtra, setConsentBtnExtra] = useState<string>(
+        DEFAULT_CONSENT_BUTTON_TITLES.extra
+    );
     const [templates, setTemplates] = useState<Template[]>([]);
     const [bulletinLibrary, setBulletinLibrary] = useState<
         BulletinTemplateSpec[] | null
@@ -1188,8 +1241,10 @@ export function DatafyCampaignsPanel() {
         setPreviewPartIndex(0);
         setContentMode("existing");
         setConsentButtonsEnabled(false);
-        setConsentBtnGrant("Sim, quero receber");
-        setConsentBtnDeny("Não quero receber");
+        setConsentBtnGrant(DEFAULT_CONSENT_BUTTON_TITLES.grant);
+        setConsentBtnDeny(DEFAULT_CONSENT_BUTTON_TITLES.deny);
+        setConsentBtnExtraEnabled(false);
+        setConsentBtnExtra(DEFAULT_CONSENT_BUTTON_TITLES.extra);
         setTemplateKey("");
         setBodyVars(["fullName"]);
         setHeaderImageUrl(null);
@@ -1397,6 +1452,28 @@ export function DatafyCampaignsPanel() {
         submittedTemplate?.templateName,
     ]);
 
+    const previewConsentButtons = useMemo(() => {
+        if (!consentButtonsEnabled) return null;
+        const buttons = [
+            { title: consentBtnGrant.trim() || DEFAULT_CONSENT_BUTTON_TITLES.grant },
+            { title: consentBtnDeny.trim() || DEFAULT_CONSENT_BUTTON_TITLES.deny },
+        ];
+        if (consentBtnExtraEnabled && consentBtnExtra.trim()) {
+            buttons.push({ title: consentBtnExtra.trim() });
+        }
+        return buttons;
+    }, [
+        consentButtonsEnabled,
+        consentBtnGrant,
+        consentBtnDeny,
+        consentBtnExtraEnabled,
+        consentBtnExtra,
+    ]);
+
+    const interactiveDetachedPreview =
+        Boolean(consentButtonsEnabled) &&
+        messageBody.trim().length > META_INTERACTIVE_BODY_MAX;
+
     const createCampaign = async (action: LaunchAction) => {
         if (!name.trim()) {
             toast.error("Informe o nome");
@@ -1494,10 +1571,10 @@ export function DatafyCampaignsPanel() {
                     }
                     if (
                         consentButtonsEnabled &&
-                        messageBody.trim().length > META_INTERACTIVE_BODY_MAX
+                        (!consentBtnGrant.trim() || !consentBtnDeny.trim())
                     ) {
                         toast.error(
-                            `Botões interativos exigem texto ≤ ${META_INTERACTIVE_BODY_MAX} caracteres. Remova os botões para enviar o boletim integral (${messageBody.trim().length} chars).`
+                            "Preencha os textos dos botões 1 e 2 ou desative os botões."
                         );
                         return;
                     }
@@ -1555,10 +1632,10 @@ export function DatafyCampaignsPanel() {
             }
             if (
                 consentButtonsEnabled &&
-                messageBody.trim().length > META_INTERACTIVE_BODY_MAX
+                (!consentBtnGrant.trim() || !consentBtnDeny.trim())
             ) {
                 toast.error(
-                    `Botões interativos exigem texto ≤ ${META_INTERACTIVE_BODY_MAX} caracteres. Remova os botões para enviar o texto integral.`
+                    "Preencha os textos dos botões 1 e 2 ou desative os botões."
                 );
                 return;
             }
@@ -1677,10 +1754,9 @@ export function DatafyCampaignsPanel() {
                     contentSource,
                     contentKind,
                     messageBody,
-                                            interactiveButtons:
+                    interactiveButtons:
                         consentButtonsEnabled &&
-                        messageBody.trim().length <=
-                            META_INTERACTIVE_BODY_MAX &&
+                        purposeAllowsServiceWindowFreeform(purpose) &&
                         (contentMode === "direct" ||
                             contentSource === "freeform_window" ||
                             contentSource === "bulletin_complete_freeform")
@@ -1689,17 +1765,37 @@ export function DatafyCampaignsPanel() {
                                   purpose: "consent_offers",
                                   buttons: [
                                       {
-                                          id: "consent_grant_offers",
+                                          id: CONSENT_BUTTON_IDS.GRANT,
                                           title: consentBtnGrant
                                               .trim()
-                                              .slice(0, 20),
+                                              .slice(
+                                                  0,
+                                                  META_INTERACTIVE_REPLY_TITLE_MAX
+                                              ),
                                       },
                                       {
-                                          id: "consent_deny_offers",
+                                          id: CONSENT_BUTTON_IDS.DENY,
                                           title: consentBtnDeny
                                               .trim()
-                                              .slice(0, 20),
+                                              .slice(
+                                                  0,
+                                                  META_INTERACTIVE_REPLY_TITLE_MAX
+                                              ),
                                       },
+                                      ...(consentBtnExtraEnabled &&
+                                      consentBtnExtra.trim()
+                                          ? [
+                                                {
+                                                    id: CONSENT_BUTTON_IDS.EXTRA,
+                                                    title: consentBtnExtra
+                                                        .trim()
+                                                        .slice(
+                                                            0,
+                                                            META_INTERACTIVE_REPLY_TITLE_MAX
+                                                        ),
+                                                },
+                                            ]
+                                          : []),
                                   ],
                               }
                             : { enabled: false },
@@ -2383,101 +2479,233 @@ export function DatafyCampaignsPanel() {
                                             : "Escreva a mensagem da campanha…"
                                     }
                                 />
-                                {(contentKind === "message" ||
-                                    bulletinDeliveryMode ===
-                                        "complete_single") && (
-                                    <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div>
-                                                <p className="text-sm font-medium text-slate-800">
-                                                    Botões interativos
-                                                </p>
-                                                <p className="text-[11px] text-muted-foreground mt-0.5">
-                                                    Solicitar confirmação de
-                                                    recebimento de ofertas.
-                                                    Envio livre só na janela 24h
-                                                    (Utilidade/Transacional).
-                                                    Corpo com botões ≤{" "}
-                                                    {META_INTERACTIVE_BODY_MAX}{" "}
-                                                    chars (limite Meta).
-                                                </p>
-                                            </div>
-                                            <label className="flex items-center gap-2 text-sm shrink-0 cursor-pointer">
-                                                <input
-                                                    type="checkbox"
-                                                    className="rounded border-slate-300"
-                                                    checked={
-                                                        consentButtonsEnabled
-                                                    }
-                                                    onChange={(e) => {
-                                                        if (
-                                                            e.target.checked &&
-                                                            messageBody.trim()
-                                                                .length >
-                                                                META_INTERACTIVE_BODY_MAX
-                                                        ) {
-                                                            toast.error(
-                                                                `Texto com ${messageBody.trim().length} chars excede ${META_INTERACTIVE_BODY_MAX} para botões. Envie sem botões (texto integral) ou reduza o texto.`
-                                                            );
-                                                            return;
-                                                        }
-                                                        setConsentButtonsEnabled(
-                                                            e.target.checked
-                                                        );
-                                                    }}
-                                                />
-                                                Adicionar botões de
-                                                consentimento
-                                            </label>
+                                <div
+                                    data-testid="campaign-consent-buttons"
+                                    className="rounded-2xl border border-[#d6e6f8] bg-gradient-to-b from-white to-[#f3f8fd] p-4 shadow-sm space-y-3"
+                                >
+                                    <div className="flex items-start gap-3">
+                                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#0969E8]/10 text-[#0969E8]">
+                                            <MousePointerClick className="h-5 w-5" />
                                         </div>
-                                        {consentButtonsEnabled && (
-                                            <div className="grid gap-2 sm:grid-cols-2">
-                                                <div className="space-y-1">
-                                                    <Label className="text-xs">
-                                                        Botão 1 (máx. 20)
-                                                    </Label>
-                                                    <Input
-                                                        maxLength={20}
-                                                        value={consentBtnGrant}
-                                                        onChange={(e) =>
-                                                            setConsentBtnGrant(
-                                                                e.target.value
-                                                            )
-                                                        }
-                                                    />
+                                        <div className="min-w-0 flex-1 space-y-0.5">
+                                            <p className="text-sm font-semibold text-slate-900 tracking-tight">
+                                                Botões de resposta e
+                                                consentimento
+                                            </p>
+                                            <p className="text-[12px] leading-relaxed text-slate-500">
+                                                Adicione botões para que seus
+                                                destinatários possam responder
+                                                diretamente à mensagem.
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-col items-end gap-1 shrink-0 pt-0.5">
+                                            <Switch
+                                                checked={consentButtonsEnabled}
+                                                onCheckedChange={(on) => {
+                                                    setConsentButtonsEnabled(on);
+                                                    if (!on) {
+                                                        setConsentBtnExtraEnabled(
+                                                            false
+                                                        );
+                                                    }
+                                                }}
+                                                aria-label="Adicionar botões à mensagem"
+                                            />
+                                            <span className="text-[10px] font-medium text-slate-500 max-w-[7.5rem] text-right leading-tight">
+                                                Adicionar botões à mensagem
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        className={cn(
+                                            "grid transition-[grid-template-rows,opacity] duration-300 ease-out",
+                                            consentButtonsEnabled
+                                                ? "grid-rows-[1fr] opacity-100"
+                                                : "grid-rows-[0fr] opacity-0"
+                                        )}
+                                    >
+                                        <div className="overflow-hidden min-h-0">
+                                            <div className="space-y-3 pt-1">
+                                                <div className="grid gap-2.5 sm:grid-cols-2">
+                                                    <div
+                                                        className={cn(
+                                                            "rounded-xl border bg-white p-3 space-y-2 transition-colors",
+                                                            consentBtnGrant.trim()
+                                                                ? "border-emerald-200/80"
+                                                                : "border-red-200"
+                                                        )}
+                                                    >
+                                                        <div className="flex items-center gap-1.5 text-emerald-700">
+                                                            <ThumbsUp className="h-3.5 w-3.5" />
+                                                            <Label className="text-xs font-medium text-emerald-900">
+                                                                Botão 1 —
+                                                                Resposta positiva
+                                                            </Label>
+                                                        </div>
+                                                        <Input
+                                                            maxLength={
+                                                                META_INTERACTIVE_REPLY_TITLE_MAX
+                                                            }
+                                                            value={
+                                                                consentBtnGrant
+                                                            }
+                                                            onChange={(e) =>
+                                                                setConsentBtnGrant(
+                                                                    e.target
+                                                                        .value
+                                                                )
+                                                            }
+                                                            className="h-10 rounded-lg"
+                                                        />
+                                                        <p className="text-[10px] text-slate-400 tabular-nums">
+                                                            ID:{" "}
+                                                            {
+                                                                CONSENT_BUTTON_IDS.GRANT
+                                                            }{" "}
+                                                            ·{" "}
+                                                            {
+                                                                consentBtnGrant.length
+                                                            }
+                                                            /
+                                                            {
+                                                                META_INTERACTIVE_REPLY_TITLE_MAX
+                                                            }
+                                                        </p>
+                                                    </div>
+                                                    <div
+                                                        className={cn(
+                                                            "rounded-xl border bg-white p-3 space-y-2 transition-colors",
+                                                            consentBtnDeny.trim()
+                                                                ? "border-slate-200"
+                                                                : "border-red-200"
+                                                        )}
+                                                    >
+                                                        <div className="flex items-center gap-1.5 text-slate-600">
+                                                            <ThumbsDown className="h-3.5 w-3.5" />
+                                                            <Label className="text-xs font-medium text-slate-800">
+                                                                Botão 2 —
+                                                                Resposta negativa
+                                                            </Label>
+                                                        </div>
+                                                        <Input
+                                                            maxLength={
+                                                                META_INTERACTIVE_REPLY_TITLE_MAX
+                                                            }
+                                                            value={
+                                                                consentBtnDeny
+                                                            }
+                                                            onChange={(e) =>
+                                                                setConsentBtnDeny(
+                                                                    e.target
+                                                                        .value
+                                                                )
+                                                            }
+                                                            className="h-10 rounded-lg"
+                                                        />
+                                                        <p className="text-[10px] text-slate-400 tabular-nums">
+                                                            ID:{" "}
+                                                            {
+                                                                CONSENT_BUTTON_IDS.DENY
+                                                            }{" "}
+                                                            ·{" "}
+                                                            {
+                                                                consentBtnDeny.length
+                                                            }
+                                                            /
+                                                            {
+                                                                META_INTERACTIVE_REPLY_TITLE_MAX
+                                                            }
+                                                        </p>
+                                                    </div>
                                                 </div>
-                                                <div className="space-y-1">
-                                                    <Label className="text-xs">
-                                                        Botão 2 (máx. 20)
-                                                    </Label>
-                                                    <Input
-                                                        maxLength={20}
-                                                        value={consentBtnDeny}
-                                                        onChange={(e) =>
-                                                            setConsentBtnDeny(
-                                                                e.target.value
-                                                            )
-                                                        }
-                                                    />
+
+                                                <div className="rounded-xl border border-dashed border-slate-200 bg-white/70 p-3 space-y-2">
+                                                    <label className="flex items-center gap-2 cursor-pointer">
+                                                        <Switch
+                                                            checked={
+                                                                consentBtnExtraEnabled
+                                                            }
+                                                            onCheckedChange={
+                                                                setConsentBtnExtraEnabled
+                                                            }
+                                                            aria-label="Terceiro botão opcional"
+                                                        />
+                                                        <span className="text-xs font-medium text-slate-700 inline-flex items-center gap-1.5">
+                                                            <CirclePlus className="h-3.5 w-3.5 text-[#0969E8]" />
+                                                            Terceiro botão
+                                                            opcional
+                                                        </span>
+                                                    </label>
+                                                    {consentBtnExtraEnabled && (
+                                                        <div className="space-y-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
+                                                            <Input
+                                                                maxLength={
+                                                                    META_INTERACTIVE_REPLY_TITLE_MAX
+                                                                }
+                                                                value={
+                                                                    consentBtnExtra
+                                                                }
+                                                                onChange={(e) =>
+                                                                    setConsentBtnExtra(
+                                                                        e.target
+                                                                            .value
+                                                                    )
+                                                                }
+                                                                className="h-10 rounded-lg"
+                                                                placeholder="Texto do 3º botão"
+                                                            />
+                                                            <p className="text-[10px] text-slate-400">
+                                                                ID:{" "}
+                                                                {
+                                                                    CONSENT_BUTTON_IDS.EXTRA
+                                                                }{" "}
+                                                                · não altera
+                                                                consentimento
+                                                                automaticamente
+                                                            </p>
+                                                        </div>
+                                                    )}
                                                 </div>
+
+                                                {messageBody.trim().length >
+                                                    META_INTERACTIVE_BODY_MAX && (
+                                                    <p className="text-[11px] leading-relaxed text-amber-900 rounded-lg border border-amber-200/80 bg-amber-50/90 px-3 py-2">
+                                                        Texto com{" "}
+                                                        {
+                                                            messageBody.trim()
+                                                                .length
+                                                        }{" "}
+                                                        chars: a Meta limita o
+                                                        corpo interativo a{" "}
+                                                        {
+                                                            META_INTERACTIVE_BODY_MAX
+                                                        }{" "}
+                                                        chars. O boletim/mensagem
+                                                        será enviado integral e
+                                                        os botões em uma mensagem
+                                                        interativa separada
+                                                        (janela 24h).
+                                                    </p>
+                                                )}
                                                 {!purposeAllowsServiceWindowFreeform(
                                                     purpose
                                                 ) && (
-                                                    <p className="sm:col-span-2 text-[11px] text-amber-800">
-                                                        Com finalidade Marketing,
-                                                        os botões não são enviados
-                                                        como mensagem livre —
-                                                        selecione um template
-                                                        APPROVED que já os
-                                                        contenha, ou mude para
+                                                    <p className="text-[11px] leading-relaxed text-amber-900 rounded-lg border border-amber-200/80 bg-amber-50/90 px-3 py-2">
+                                                        Marketing: botões livres
+                                                        não são anexados no
+                                                        envio. Use um template
+                                                        APPROVED que já contenha
+                                                        QUICK_REPLY, ou mude para
                                                         Utilidade/Transacional
                                                         com Envio Direto.
                                                     </p>
                                                 )}
                                             </div>
-                                        )}
+                                        </div>
                                     </div>
-                                )}
+                                </div>
+
                                 {contentKind === "bulletin" &&
                                     bulletinAnalysis && (
                                         <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600 space-y-1.5">
@@ -4700,6 +4928,31 @@ export function DatafyCampaignsPanel() {
                                             ? `Programada (${scheduledAt || "—"}) — sem animação`
                                             : "Imediata — com animação de disparo"}
                                     </p>
+                                    <p className="sm:col-span-2">
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Botões de resposta
+                                        </span>
+                                        {consentButtonsEnabled &&
+                                        purposeAllowsServiceWindowFreeform(
+                                            purpose
+                                        ) &&
+                                        (contentMode === "direct" ||
+                                            bulletinDeliveryMode ===
+                                                "complete_single")
+                                            ? `${consentBtnGrant || "—"} · ${consentBtnDeny || "—"}${
+                                                  consentBtnExtraEnabled &&
+                                                  consentBtnExtra.trim()
+                                                      ? ` · ${consentBtnExtra}`
+                                                      : ""
+                                              }${
+                                                  interactiveDetachedPreview
+                                                      ? " (mensagem interativa separada)"
+                                                      : ""
+                                              }`
+                                            : consentButtonsEnabled
+                                              ? "Ativados na Etapa 1, mas a modalidade atual não envia botões livres (use Envio Direto / boletim completo em Utilidade/Transacional, ou template QUICK_REPLY)."
+                                              : "Desativados"}
+                                    </p>
                                 </div>
                                 <div
                                     className={cn(
@@ -4812,16 +5065,10 @@ export function DatafyCampaignsPanel() {
                                                 bulletinAnalysis?.warnings
                                             }
                                             interactiveButtons={
-                                                consentButtonsEnabled
-                                                    ? [
-                                                          {
-                                                              title: consentBtnGrant,
-                                                          },
-                                                          {
-                                                              title: consentBtnDeny,
-                                                          },
-                                                      ]
-                                                    : null
+                                                previewConsentButtons
+                                            }
+                                            interactiveDetached={
+                                                interactiveDetachedPreview
                                             }
                                         />
                                     </div>
@@ -4889,14 +5136,8 @@ export function DatafyCampaignsPanel() {
                                     )
                                 }
                                 warnings={bulletinAnalysis?.warnings}
-                                interactiveButtons={
-                                    consentButtonsEnabled
-                                        ? [
-                                              { title: consentBtnGrant },
-                                              { title: consentBtnDeny },
-                                          ]
-                                        : null
-                                }
+                                interactiveButtons={previewConsentButtons}
+                                interactiveDetached={interactiveDetachedPreview}
                             />
                         </aside>
                     </div>

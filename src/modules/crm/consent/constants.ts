@@ -33,9 +33,14 @@ export const CONSENT_SOURCE = {
     SYSTEM: "system",
 } as const;
 
+/** Stable internal IDs — never user-editable. Legacy aliases kept for webhooks. */
 export const CONSENT_BUTTON_IDS = {
-    GRANT: "consent_grant_offers",
-    DENY: "consent_deny_offers",
+    GRANT: "consent_yes",
+    DENY: "consent_no",
+    EXTRA: "consent_extra",
+    /** Phase 9 legacy payloads still accepted by the classifier */
+    GRANT_LEGACY: "consent_grant_offers",
+    DENY_LEGACY: "consent_deny_offers",
 } as const;
 
 /** Meta QUICK_REPLY (template) text max length. */
@@ -44,15 +49,21 @@ export const META_QUICK_REPLY_TEXT_MAX = 25;
 export const META_INTERACTIVE_REPLY_TITLE_MAX = 20;
 export const META_QUICK_REPLY_MAX_BUTTONS = 3;
 
+export const DEFAULT_CONSENT_BUTTON_TITLES = {
+    grant: "Tenho interesse",
+    deny: "Não tenho interesse",
+    extra: "Falar com atendente",
+} as const;
+
 export const DEFAULT_CONSENT_BUTTONS = [
     {
         type: "QUICK_REPLY" as const,
-        text: "Sim, quero receber",
+        text: DEFAULT_CONSENT_BUTTON_TITLES.grant,
         payload: CONSENT_BUTTON_IDS.GRANT,
     },
     {
         type: "QUICK_REPLY" as const,
-        text: "Não quero receber",
+        text: DEFAULT_CONSENT_BUTTON_TITLES.deny,
         payload: CONSENT_BUTTON_IDS.DENY,
     },
 ];
