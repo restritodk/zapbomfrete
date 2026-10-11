@@ -35,7 +35,7 @@ describe("Send readiness modalities", () => {
         assert.match(a.blockReason || "", /template APPROVED|marketing/i);
     });
 
-    it("allows utility freeform inside open window (B)", () => {
+    it("allows utility freeform for all eligible (immediate dispatch)", () => {
         const a = assessRealSendReadiness({
             purpose: "utility",
             consentEligibleCount: 8,
@@ -45,11 +45,12 @@ describe("Send readiness modalities", () => {
         });
         assert.equal(a.realSendReady, true);
         assert.equal(a.modality, "service_window");
-        assert.equal(a.technicallySendableCount, 3);
-        assert.equal(a.needsTemplateCount, 5);
+        assert.equal(a.technicallySendableCount, 8);
+        assert.equal(a.needsTemplateCount, 0);
+        assert.match(a.statusLabel, /Aprovado/i);
     });
 
-    it("blocks utility without window and without template", () => {
+    it("utility without window still approved when freeform body exists", () => {
         const a = assessRealSendReadiness({
             purpose: "utility",
             consentEligibleCount: 2,
@@ -57,8 +58,8 @@ describe("Send readiness modalities", () => {
             hasApprovedTemplate: false,
             hasFreeformBody: true,
         });
-        assert.equal(a.realSendReady, false);
-        assert.match(a.blockReason || "", /janela/i);
+        assert.equal(a.realSendReady, true);
+        assert.equal(a.technicallySendableCount, 2);
     });
 
     it("distinguishes consent eligible from technical readiness", () => {
@@ -127,7 +128,7 @@ describe("Send readiness modalities", () => {
         );
     });
 
-    it("resolves hybrid freeform vs template per recipient window", () => {
+    it("resolves utility freeform for every eligible recipient", () => {
         assert.equal(
             resolveRecipientSendMode({
                 hasApprovedTemplate: true,
@@ -144,7 +145,7 @@ describe("Send readiness modalities", () => {
                 hasFreeformBody: true,
                 windowOpen: false,
             }),
-            "template"
+            "freeform"
         );
         assert.equal(
             resolveRecipientSendMode({
@@ -153,7 +154,7 @@ describe("Send readiness modalities", () => {
                 hasFreeformBody: true,
                 windowOpen: false,
             }),
-            "skip_no_window"
+            "freeform"
         );
     });
 });

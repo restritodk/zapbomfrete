@@ -25,7 +25,7 @@ describe("Envio Direto — purpose gates", () => {
         assert.equal(purposeAllowsServiceWindowFreeform("other"), false);
     });
 
-    it("utility with body + open window → realSendReady (Modalidade B)", () => {
+    it("utility with body → realSendReady for all eligible", () => {
         const a = assessRealSendReadiness({
             purpose: "utility",
             consentEligibleCount: 10,
@@ -35,11 +35,11 @@ describe("Envio Direto — purpose gates", () => {
         });
         assert.equal(a.modality, "service_window");
         assert.equal(a.realSendReady, true);
-        assert.equal(a.technicallySendableCount, 4);
-        assert.equal(a.needsTemplateCount, 6);
+        assert.equal(a.technicallySendableCount, 10);
+        assert.equal(a.needsTemplateCount, 0);
     });
 
-    it("utility with body but zero windows → blocked", () => {
+    it("utility with body and zero windows → approved for immediate send", () => {
         const a = assessRealSendReadiness({
             purpose: "utility",
             consentEligibleCount: 10,
@@ -47,9 +47,10 @@ describe("Envio Direto — purpose gates", () => {
             hasApprovedTemplate: false,
             hasFreeformBody: true,
         });
-        assert.equal(a.realSendReady, false);
-        assert.equal(a.modality, "none");
-        assert.match(a.blockReason || "", /janela/i);
+        assert.equal(a.realSendReady, true);
+        assert.equal(a.modality, "service_window");
+        assert.equal(a.technicallySendableCount, 10);
+        assert.match(a.statusLabel, /Aprovado/i);
     });
 
     it("transactional mirrors utility freeform readiness", () => {
@@ -76,7 +77,7 @@ describe("Envio Direto — purpose gates", () => {
         assert.equal(a.purposeAllowsServiceWindow, false);
     });
 
-    it("approved template enables all consent-eligible (Modalidade A)", () => {
+    it("utility freeform takes priority over template when both present", () => {
         const a = assessRealSendReadiness({
             purpose: "utility",
             consentEligibleCount: 12,
@@ -84,8 +85,9 @@ describe("Envio Direto — purpose gates", () => {
             hasApprovedTemplate: true,
             hasFreeformBody: true,
         });
-        assert.equal(a.modality, "template_approved");
+        assert.equal(a.modality, "service_window");
         assert.equal(a.technicallySendableCount, 12);
+        assert.equal(a.realSendReady, true);
     });
 
     it("utility freeform + APPROVED fallback → ready even with 0 windows", () => {
@@ -100,7 +102,7 @@ describe("Envio Direto — purpose gates", () => {
         assert.equal(a.technicallySendableCount, 139);
     });
 
-    it("hybrid prefers freeform in open window and template outside", () => {
+    it("utility freeform sends immediately even without open window", () => {
         assert.equal(
             resolveRecipientSendMode({
                 hasApprovedTemplate: true,
@@ -117,7 +119,16 @@ describe("Envio Direto — purpose gates", () => {
                 hasFreeformBody: true,
                 windowOpen: false,
             }),
-            "template"
+            "freeform"
+        );
+        assert.equal(
+            resolveRecipientSendMode({
+                hasApprovedTemplate: false,
+                purposeAllowsFreeform: true,
+                hasFreeformBody: true,
+                windowOpen: false,
+            }),
+            "freeform"
         );
     });
 });

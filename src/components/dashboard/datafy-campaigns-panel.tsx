@@ -1587,17 +1587,14 @@ export function DatafyCampaignsPanel() {
                 if (!effectiveDryRun) {
                     if (!purposeAllowsServiceWindowFreeform(purpose)) {
                         toast.error(
-                            "Boletim completo (mensagem única) só é permitido em Utilidade/Transacional com janela 24h. Marketing exige templates APPROVED divididos."
+                            "Boletim completo (mensagem única) só é permitido em Utilidade ou Transacional. Marketing exige templates APPROVED divididos."
                         );
                         return;
                     }
-                    if (
-                        (first.charCount || 0) > META_FREEFORM_TEXT_MAX ||
-                        !first.readyForRealSend
-                    ) {
+                    if ((first.charCount || 0) > META_FREEFORM_TEXT_MAX) {
                         toast.error(
                             first.blockReason ||
-                                `Texto excede ${META_FREEFORM_TEXT_MAX} caracteres ou não está pronto para envio integral.`
+                                `Texto excede ${META_FREEFORM_TEXT_MAX} caracteres.`
                         );
                         return;
                     }
@@ -1613,7 +1610,7 @@ export function DatafyCampaignsPanel() {
                     if (!sendReadiness.realSendReady) {
                         toast.error(
                             sendReadiness.blockReason ||
-                                "Envio integral exige janela 24h aberta ou um template APPROVED já existente para quem está fora da janela."
+                                "Calcule a audiência com destinatários elegíveis antes de disparar."
                         );
                         return;
                     }
@@ -1674,7 +1671,7 @@ export function DatafyCampaignsPanel() {
             if (!effectiveDryRun && !sendReadiness.realSendReady) {
                 toast.error(
                     sendReadiness.blockReason ||
-                        "Envio Direto exige janela 24h aberta ou um template APPROVED já existente para quem está fora da janela."
+                        "Calcule a audiência com destinatários elegíveis antes de disparar."
                 );
                 return;
             }
@@ -4079,7 +4076,7 @@ export function DatafyCampaignsPanel() {
                                             </strong>
                                         </span>
                                         <span>
-                                            Aptos técnicos (modo atual):{" "}
+                                            Aptos para disparo:{" "}
                                             <strong className="text-emerald-700">
                                                 {sendReadiness.realSendReady
                                                     ? sendReadiness.technicallySendableCount
@@ -4093,10 +4090,11 @@ export function DatafyCampaignsPanel() {
                                             </strong>
                                         </span>
                                         <p className="basis-full text-[11px] text-slate-500">
-                                            “Consentimento elegível” não significa
-                                            envio imediato. Com Envio Direto, só
-                                            quem tem janela aberta recebe; os
-                                            demais precisam de template APPROVED.
+                                            {purposeAllowsServiceWindowFreeform(
+                                                purpose
+                                            )
+                                                ? "Utilidade/Transacional: com texto na Etapa 1, todos os elegíveis podem avançar para o disparo imediato."
+                                                : "Marketing exige template APPROVED para envio real."}
                                         </p>
                                         {(audience.simulationEligibleCount ||
                                             0) > audience.eligibleCount && (
@@ -4259,16 +4257,14 @@ export function DatafyCampaignsPanel() {
                                                 <p className="text-xs text-emerald-900/90">
                                                     Texto integral (até{" "}
                                                     {META_FREEFORM_TEXT_MAX}{" "}
-                                                    chars) via Datafy para quem
-                                                    tem janela 24h. Não exige
-                                                    submeter um template novo.
+                                                    chars) — disparo imediato
+                                                    para os destinatários
+                                                    elegíveis. Não exige template.
                                                 </p>
                                             </div>
                                             <div className="space-y-1.5">
                                                 <Label>
-                                                    Template APPROVED já
-                                                    existente (opcional · fora da
-                                                    janela)
+                                                    Template APPROVED (opcional)
                                                 </Label>
                                                 <Select
                                                     value={
@@ -4284,13 +4280,12 @@ export function DatafyCampaignsPanel() {
                                                     }
                                                 >
                                                     <SelectTrigger className="bg-white">
-                                                        <SelectValue placeholder="Nenhum — só janela 24h" />
+                                                        <SelectValue placeholder="Nenhum — envio do texto livre" />
                                                     </SelectTrigger>
                                                     <SelectContent>
                                                         <SelectItem value="__none__">
-                                                            Nenhum — só
-                                                            destinatários com
-                                                            janela
+                                                            Nenhum — envio do
+                                                            texto livre
                                                         </SelectItem>
                                                         {templates.map((t) => (
                                                             <SelectItem
@@ -4306,13 +4301,6 @@ export function DatafyCampaignsPanel() {
                                                         ))}
                                                     </SelectContent>
                                                 </Select>
-                                                <p className="text-[11px] text-emerald-900/80">
-                                                    Com template selecionado, a
-                                                    fila envia freeform na janela
-                                                    aberta e o template APPROVED
-                                                    para os demais — sem nova
-                                                    aprovação.
-                                                </p>
                                             </div>
                                             {completeAssessment?.realSendBlockReasons
                                                 .length ? (
@@ -4356,20 +4344,19 @@ export function DatafyCampaignsPanel() {
                                     )}
                                     {bulletinParts.some(
                                         (p) => !p.readyForRealSend
-                                    ) && (
+                                    ) &&
+                                        bulletinDeliveryMode !==
+                                            "complete_single" && (
                                         <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-sm text-amber-950 space-y-1">
                                             <p className="font-medium inline-flex items-center gap-1.5">
                                                 <AlertTriangle className="h-4 w-4 shrink-0" />
-                                                {bulletinDeliveryMode ===
-                                                "complete_single"
-                                                    ? "Envio real ainda não autorizado"
-                                                    : "Falta modelo compatível ou há bloqueio"}
+                                                Falta modelo compatível ou há
+                                                bloqueio
                                             </p>
                                             <p className="text-xs">
-                                                {bulletinDeliveryMode ===
-                                                "complete_single"
-                                                    ? "Você pode seguir na revisão. O disparo real exige janela 24h ou um template APPROVED já existente para quem está fora da janela."
-                                                    : "Envio real fica bloqueado para as partes abaixo. Simulação ainda pode continuar. Não enviamos automaticamente um template novo por boletim."}
+                                                Envio real fica bloqueado para as
+                                                partes abaixo. Simulação ainda
+                                                pode continuar.
                                             </p>
                                         </div>
                                     )}
@@ -4448,8 +4435,8 @@ export function DatafyCampaignsPanel() {
                                             ) : bulletinDeliveryMode ===
                                               "complete_single" ? (
                                                 <p className="text-xs text-slate-600">
-                                                    Sem template — mensagem de
-                                                    texto livre (Modalidade B).
+                                                    Texto livre — pronto para
+                                                    disparo imediato.
                                                 </p>
                                             ) : (
                                                 <p className="text-xs text-amber-900">
@@ -4543,24 +4530,16 @@ export function DatafyCampaignsPanel() {
                             {contentMode === "direct" ? (
                                 <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 text-sm text-emerald-950">
                                     <p className="font-medium">
-                                        Envio Direto via Datafy (Modalidade B)
+                                        Envio Direto — disparo imediato
                                     </p>
                                     <p>
                                         O texto da Etapa 1 será enviado como
-                                        mensagem livre aos destinatários com
-                                        <strong> janela de atendimento aberta</strong>{" "}
-                                        (últimas 24h). Não exige submissão de
-                                        template novo.
-                                    </p>
-                                    <p className="text-[12px]">
-                                        Opcional: selecione um template já
-                                        APPROVED para quem está fora da janela —
-                                        sem nova aprovação Meta.
+                                        mensagem livre aos destinatários
+                                        elegíveis. Não exige template.
                                     </p>
                                     <div className="space-y-1.5">
                                         <Label className="text-emerald-950">
-                                            Template APPROVED (opcional · fora da
-                                            janela)
+                                            Template APPROVED (opcional)
                                         </Label>
                                         <Select
                                             value={templateKey || "__none__"}
@@ -4571,12 +4550,11 @@ export function DatafyCampaignsPanel() {
                                             }
                                         >
                                             <SelectTrigger className="bg-white">
-                                                <SelectValue placeholder="Nenhum — só janela 24h" />
+                                                <SelectValue placeholder="Nenhum — envio do texto livre" />
                                             </SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="__none__">
-                                                    Nenhum — só destinatários com
-                                                    janela
+                                                    Nenhum — envio do texto livre
                                                 </SelectItem>
                                                 {templates.map((t) => (
                                                     <SelectItem
@@ -4594,19 +4572,9 @@ export function DatafyCampaignsPanel() {
                                     </div>
                                     {consentButtonsEnabled && (
                                         <p className="text-[12px]">
-                                            Botões de consentimento só na janela
-                                            24h (corpo ≤ {META_INTERACTIVE_BODY_MAX}{" "}
+                                            Botões de consentimento no envio
+                                            (corpo ≤ {META_INTERACTIVE_BODY_MAX}{" "}
                                             chars).
-                                        </p>
-                                    )}
-                                    {(audience?.openWindowCount ?? 0) <= 0 &&
-                                        !isApprovedTemplateStatus(
-                                            selectedTemplate?.status
-                                        ) && (
-                                        <p className="text-amber-900 text-[12px] font-medium">
-                                            Nenhum destinatário com janela aberta
-                                            — selecione um template APPROVED já
-                                            existente ou recalcule a audiência.
                                         </p>
                                     )}
                                 </div>
@@ -4955,11 +4923,11 @@ export function DatafyCampaignsPanel() {
                                     </p>
                                     <p>
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
-                                            Aptos técnicos neste modo
+                                            Aptos para disparo
                                         </span>
                                         {sendReadiness.technicallySendableCount}{" "}
-                                        de {audience?.eligibleCount ?? 0} com
-                                        consentimento elegível
+                                        de {audience?.eligibleCount ?? 0}{" "}
+                                        elegíveis
                                     </p>
                                     <p>
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
@@ -5035,10 +5003,9 @@ export function DatafyCampaignsPanel() {
                                         </p>
                                     )}
                                 <p className="text-xs text-slate-500">
-                                    “Apto” por consentimento ≠ autorizado a
-                                    receber agora. Envio real exige Modalidade A
-                                    (template APPROVED) ou, fora de marketing,
-                                    Modalidade B (janela 24h).
+                                    {purposeAllowsServiceWindowFreeform(purpose)
+                                        ? "Utilidade/Transacional aprovado para disparo imediato dos elegíveis com o texto da campanha."
+                                        : "Marketing exige template APPROVED para envio real."}
                                 </p>
                             </div>
                         </div>
@@ -5259,51 +5226,18 @@ export function DatafyCampaignsPanel() {
                                             handleStep2Next();
                                             return;
                                         }
-                                        if (step === 3) {
-                                            if (
-                                                contentMode === "direct" &&
-                                                purposeAllowsServiceWindowFreeform(
-                                                    purpose
-                                                )
-                                            ) {
-                                                let hasApproved =
-                                                    isApprovedTemplateStatus(
-                                                        selectedTemplate?.status
-                                                    );
-                                                if (
-                                                    !hasApproved &&
-                                                    !templateKey
-                                                ) {
-                                                    const pick =
-                                                        pickFallbackApprovedTemplate(
-                                                            templates,
-                                                            purpose
-                                                        );
-                                                    if (pick) {
-                                                        setTemplateKey(
-                                                            templateKeyOf(pick)
-                                                        );
-                                                        hasApproved = true;
-                                                        toast.message(
-                                                            `Fallback APPROVED: ${pick.name}`
-                                                        );
-                                                    }
-                                                }
-                                                const hasWindow =
-                                                    (audience?.openWindowCount ??
-                                                        0) > 0;
-                                                if (
-                                                    !sendReadiness.realSendReady &&
-                                                    !hasApproved &&
-                                                    !hasWindow
-                                                ) {
-                                                    toast.error(
-                                                        sendReadiness.blockReason ||
-                                                            "Selecione um template APPROVED ou recalcule a audiência com janela 24h."
-                                                    );
-                                                    return;
-                                                }
-                                            }
+                                        if (
+                                            step === 3 &&
+                                            purposeAllowsServiceWindowFreeform(
+                                                purpose
+                                            ) &&
+                                            !messageBody.trim() &&
+                                            contentKind !== "bulletin"
+                                        ) {
+                                            toast.error(
+                                                "Informe o texto da mensagem na Etapa 1"
+                                            );
+                                            return;
                                         }
                                         setStep((s) => s + 1);
                                     }}

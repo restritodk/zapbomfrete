@@ -78,8 +78,9 @@ export function hasApprovedTemplateContent(opts: {
 export const META_INTERACTIVE_BODY_MAX = 1024;
 
 /**
- * Per-recipient send decision for utility/transactional hybrid campaigns.
- * Prefer freeform when the 24h window is open; otherwise use APPROVED template.
+ * Per-recipient send decision for utility/transactional campaigns.
+ * Freeform body on utility/transactional → send immediately (disparador).
+ * APPROVED template remains available as alternative.
  */
 export type RecipientSendMode = "template" | "freeform" | "skip_no_window";
 
@@ -91,9 +92,9 @@ export function resolveRecipientSendMode(opts: {
 }): RecipientSendMode {
     const freeformOk =
         opts.purposeAllowsFreeform && opts.hasFreeformBody;
-    if (freeformOk && opts.windowOpen) return "freeform";
+    // Utilidade/Transacional: texto livre dispara para todos os elegíveis
+    if (freeformOk) return "freeform";
     if (opts.hasApprovedTemplate) return "template";
-    if (freeformOk && !opts.windowOpen) return "skip_no_window";
     return "skip_no_window";
 }
 
@@ -109,10 +110,6 @@ export function assessRealSendReadiness(opts: {
         consentEligibleCount,
         Math.max(0, opts.openWindowCount | 0)
     );
-    const needsTemplateCount = Math.max(
-        0,
-        consentEligibleCount - openWindowCount
-    );
     const purposeAllowsServiceWindow = purposeAllowsServiceWindowFreeform(
         opts.purpose
     );
@@ -122,48 +119,44 @@ export function assessRealSendReadiness(opts: {
     let technicallySendableCount = 0;
     let blockReason: string | null = null;
     let statusLabel = "Envio real indisponível";
+    let needsTemplateCount = Math.max(
+        0,
+        consentEligibleCount - openWindowCount
+    );
 
     if (consentEligibleCount <= 0) {
         blockReason =
-            "Nenhum destinatário com consentimento válido para envio real. “Apto” aqui exige autorização no CRM — não implica disponibilidade técnica.";
-        statusLabel = "Bloqueado — sem consentimento elegível";
+            "Nenhum destinatário elegível para envio. Importe números válidos ou selecione contatos no CRM.";
+        statusLabel = "Bloqueado — sem destinatários elegíveis";
+    } else if (
+        purposeAllowsServiceWindow &&
+        opts.hasFreeformBody
+    ) {
+        // Utilidade / Transacional + texto (Envio Direto / boletim completo):
+        // aprovado para disparo imediato de todos os elegíveis.
+        modality = "service_window";
+        realSendReady = true;
+        technicallySendableCount = consentEligibleCount;
+        needsTemplateCount = 0;
+        statusLabel = "Aprovado — Envio Direto (Utilidade/Transacional)";
+        blockReason = null;
     } else if (opts.hasApprovedTemplate) {
         modality = "template_approved";
         realSendReady = true;
         technicallySendableCount = consentEligibleCount;
-        statusLabel =
-            "Pronto — Modalidade A (template APPROVED via API Datafy)";
-    } else if (
-        purposeAllowsServiceWindow &&
-        opts.hasFreeformBody &&
-        openWindowCount > 0
-    ) {
-        modality = "service_window";
-        realSendReady = true;
-        technicallySendableCount = openWindowCount;
-        statusLabel =
-            "Pronto — Modalidade B (janela 24h · resposta livre). Campanhas comerciais (marketing) não usam esta via.";
-        if (needsTemplateCount > 0) {
-            statusLabel += ` ${needsTemplateCount} destinatário(s) sem janela ficarão bloqueados no envio.`;
-        }
-    } else if (!opts.hasApprovedTemplate && !purposeAllowsServiceWindow) {
+        needsTemplateCount = 0;
+        statusLabel = "Aprovado — template APPROVED";
+    } else if (!purposeAllowsServiceWindow) {
         blockReason =
-            "Modalidade C — sem template APPROVED. Divulgação comercial exige template aprovado; a janela de atendimento não contorna regras de marketing.";
+            "Marketing exige template APPROVED para envio real.";
         statusLabel = "Bloqueado — falta template APPROVED (marketing)";
-    } else if (!opts.hasApprovedTemplate && purposeAllowsServiceWindow) {
-        if (!opts.hasFreeformBody) {
-            blockReason =
-                "Modalidade C — sem template APPROVED e sem texto livre para resposta na janela 24h.";
-        } else if (openWindowCount <= 0) {
-            blockReason =
-                "Modalidade C — sem template APPROVED e nenhum destinatário com janela de atendimento aberta (últimas 24h).";
-        } else {
-            blockReason = "Modalidade C — envio real indisponível.";
-        }
-        statusLabel = "Bloqueado — sem autorização técnica";
+    } else if (!opts.hasFreeformBody) {
+        blockReason =
+            "Informe o texto da mensagem na Etapa 1 para liberar o disparo.";
+        statusLabel = "Bloqueado — sem texto da mensagem";
     } else {
-        blockReason = "Modalidade C — envio real indisponível.";
-        statusLabel = "Bloqueado — sem autorização técnica";
+        blockReason = "Envio real indisponível.";
+        statusLabel = "Bloqueado";
     }
 
     return {

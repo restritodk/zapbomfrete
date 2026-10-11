@@ -84,7 +84,7 @@ export function assessCompleteBulletin(
         );
     } else {
         explanations.push(
-            `Modalidade B: texto livre até ${META_FREEFORM_TEXT_MAX} chars (limite operacional), somente para destinatários com janela de atendimento aberta (últimas 24h). Quem estiver fora da janela será bloqueado no envio real.`
+            `Envio Direto: texto livre até ${META_FREEFORM_TEXT_MAX} chars para Utilidade/Transacional — disparo imediato dos destinatários elegíveis.`
         );
     }
 
@@ -92,7 +92,7 @@ export function assessCompleteBulletin(
         "O link de grupo permanece só no texto — não adiciona participantes automaticamente."
     );
     explanations.push(
-        "Preparar/revisar a campanha não autoriza o disparo — o envio real só ocorre se todas as regras Meta forem satisfeitas."
+        "Na revisão, use Iniciar disparo para enviar imediatamente aos elegíveis."
     );
 
     const sizeReady = Boolean(text) && withinFreeformLimit;
