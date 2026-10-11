@@ -235,7 +235,12 @@ export function managedToSpecs(
               ? 3
               : 1) as 1 | 2 | 3,
         variableCount: v.variableCount,
-        generation: v.kind === "builtin" && v.builtinId?.includes("v2") ? 2 : 1,
+        generation:
+            v.kind === "builtin" && v.builtinId?.includes("v3")
+                ? 3
+                : v.kind === "builtin" && v.builtinId?.includes("v2")
+                  ? 2
+                  : 1,
         slotFields: v.fieldMappings,
         recommendedCategory:
             v.category === "UTILITY" ? "UTILITY" : "MARKETING",
@@ -251,7 +256,7 @@ export type ClientLibrarySpec = {
     preferredName: string;
     loadsPerMessage: 1 | 2 | 3;
     variableCount: number;
-    generation: 1 | 2;
+    generation: 1 | 2 | 3;
     slotFields: LoadSlotField[];
     recommendedCategory: "MARKETING" | "UTILITY";
     description: string;

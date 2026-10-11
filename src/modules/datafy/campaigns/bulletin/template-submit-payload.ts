@@ -204,6 +204,14 @@ export function formatMetaTemplateApiError(
 
     let guidance: string | null = null;
     if (
+        subcode === 2388293 ||
+        /too many variables for its length|Parameters words ratio exceeds limit/i.test(
+            rawMessage
+        )
+    ) {
+        guidance =
+            "Este modelo possui variáveis demais em relação ao texto fixo. É necessário ajustar a estrutura antes de enviá-lo novamente.";
+    } else if (
         subcode === 2388299 ||
         /end with a parameter|begin with a parameter|começar|terminar com variável/i.test(
             rawMessage

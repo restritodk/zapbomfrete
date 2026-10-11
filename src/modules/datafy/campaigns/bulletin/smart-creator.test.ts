@@ -14,7 +14,7 @@ import {
 } from "./templates";
 import {
     BULLETIN_TEMPLATE_LIBRARY,
-    buildV2BulletinTemplateSubmissions,
+    buildV3BulletinTemplateSubmissions,
 } from "./library";
 import { COTTON_8_LOADS_RAW, buildNLoadsBulletin } from "./fixtures/cotton-8-loads";
 
@@ -29,7 +29,9 @@ function approvedAll() {
 }
 
 function approvedV1Only() {
-    return approvedAll().filter((t) => !t.name.includes("v2"));
+    return approvedAll().filter(
+        (t) => !t.name.includes("v2") && !t.name.includes("v3")
+    );
 }
 
 describe("Smart creator — import volumes", () => {
@@ -158,8 +160,8 @@ describe("Smart creator — template packing & gates", () => {
         assert.equal(totalLoads, 8);
         assert.ok(parts.every((p) => p.templateName?.includes("boletim")));
         assert.equal(allPartsReadyForRealSend(parts), true);
-        // Prefer v2 when available
-        assert.ok(parts.some((p) => p.libraryTemplateId?.includes("v2")));
+        // Prefer v3 when available (same coverage, newer generation)
+        assert.ok(parts.some((p) => p.libraryTemplateId?.includes("v3")));
     });
 
     it("falls back to v1 when only legacy APPROVED", () => {
@@ -182,13 +184,13 @@ describe("Smart creator — template packing & gates", () => {
         assert.equal(allPartsReadyForRealSend(parts), false);
     });
 
-    it("v2 BODY submissions stay within Meta 1024", () => {
-        const v2 = buildV2BulletinTemplateSubmissions();
-        assert.equal(v2.length, 3);
-        for (const s of v2) {
+    it("v3 BODY submissions stay within Meta 1024 and are ready to submit", () => {
+        const v3 = buildV3BulletinTemplateSubmissions();
+        assert.equal(v3.length, 3);
+        for (const s of v3) {
             assert.ok(s.bodyCharCount <= 1024, s.name);
             assert.equal(s.checks.readyForManualSubmit, true);
-            assert.equal(s.generation, 2);
+            assert.equal(s.generation, 3);
         }
     });
 

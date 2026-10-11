@@ -150,6 +150,10 @@ function cardFromSubmission(
         canSubmit = false;
         submitBlockReason =
             "Já PENDING na Meta — aguarde aprovação ou atualize o status.";
+    } else if (uiStatus === "rejected") {
+        canSubmit = false;
+        submitBlockReason =
+            "Rejeitado pela Meta — ajuste a estrutura (ou use outro nome técnico) antes de enviar novamente. Não há reenvio automático.";
     } else if (!sub.checks.readyForManualSubmit) {
         canSubmit = false;
         submitBlockReason =
@@ -203,8 +207,8 @@ export function buildMetaApprovalProposal(
     const loadCount = draft.loads.length;
     const singleBalloon = assessSingleBalloonTemplate(fullText, loadCount);
 
-    // Prefer v2 library models for new approvals; include v1 as alternatives
-    const specs = BULLETIN_TEMPLATE_LIBRARY.filter((s) => s.generation === 2);
+    // Prefer v3 for new Meta approvals (v2 often rejected for density 2388293)
+    const specs = BULLETIN_TEMPLATE_LIBRARY.filter((s) => s.generation === 3);
     const fallback = BULLETIN_TEMPLATE_LIBRARY.filter((s) => s.generation === 1);
     const chosen = specs.length ? specs : fallback;
 

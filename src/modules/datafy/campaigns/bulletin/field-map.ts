@@ -19,11 +19,51 @@ export const FIELD_MAP_OPTIONS: Array<{
     { key: "pedagio", label: "Pedágio" },
     { key: "observacoes", label: "Observações" },
     { key: "detalhes", label: "Detalhes (catch-all)" },
+    { key: "rotaOrigem", label: "Rota origem + local (v3)" },
+    { key: "rotaDestino", label: "Destino + terminal (v3)" },
+    { key: "veiculoQtd", label: "Veículo + quantidade (v3)" },
+    { key: "fretePedagio", label: "Frete + pedágio (v3)" },
+    { key: "mapaObs", label: "Mapa + observações (v3)" },
 ];
 
 export const VALID_FIELD_KEYS = new Set(
     FIELD_MAP_OPTIONS.map((f) => f.key)
 );
+
+/**
+ * Atomic freight fields covered by a slot (composites expand).
+ * Used for compatibility / uncovered-field checks.
+ */
+export const SLOT_FIELD_COVERAGE: Record<LoadSlotField, LoadSlotField[]> = {
+    origem: ["origem"],
+    localCarregamento: ["localCarregamento"],
+    destino: ["destino"],
+    terminal: ["terminal"],
+    janela: ["janela"],
+    veiculo: ["veiculo"],
+    quantidade: ["quantidade"],
+    frete: ["frete"],
+    lote: ["lote"],
+    localizacao: ["localizacao"],
+    pedagio: ["pedagio"],
+    observacoes: ["observacoes"],
+    detalhes: ["detalhes"],
+    rotaOrigem: ["origem", "localCarregamento"],
+    rotaDestino: ["destino", "terminal"],
+    veiculoQtd: ["veiculo", "quantidade"],
+    fretePedagio: ["frete", "pedagio"],
+    mapaObs: ["localizacao", "observacoes"],
+};
+
+export function expandSlotCoverage(mappings: LoadSlotField[]): LoadSlotField[] {
+    const out = new Set<LoadSlotField>();
+    for (const m of mappings) {
+        for (const k of SLOT_FIELD_COVERAGE[m] || [m]) {
+            out.add(k);
+        }
+    }
+    return [...out];
+}
 
 /** Fields that count for compatibility (grupoUrl is meta, not a template slot). */
 export function filledLoadFieldKeys(
@@ -50,19 +90,25 @@ export function filledLoadFieldKeys(
 }
 
 export function hasCatchAll(mappings: LoadSlotField[]): boolean {
+    const covered = expandSlotCoverage(mappings);
     return (
-        mappings.includes("observacoes") || mappings.includes("detalhes")
+        covered.includes("observacoes") ||
+        covered.includes("detalhes") ||
+        mappings.includes("observacoes") ||
+        mappings.includes("detalhes") ||
+        mappings.includes("mapaObs")
     );
 }
 
 /**
  * Uncovered filled fields that would be silently dropped without a catch-all.
+ * Composites (rotaOrigem, etc.) count as covering their atomic parts.
  */
 export function uncoveredFilledFields(
     filled: LoadSlotField[],
     mappings: LoadSlotField[]
 ): LoadSlotField[] {
-    const mapped = new Set(mappings);
+    const mapped = new Set(expandSlotCoverage(mappings));
     return filled.filter(
         (k) =>
             k !== "detalhes" &&

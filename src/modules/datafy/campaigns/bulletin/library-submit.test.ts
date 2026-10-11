@@ -11,9 +11,9 @@ import { composeReusableBulletinParts } from "./templates";
 import { analyzeBulletin } from "./analyze";
 
 describe("Bulletin library ready for Meta approval", () => {
-    it("exposes v1+v2 MARKETING pt_BR models within Meta limits", () => {
+    it("exposes v1+v2+v3 MARKETING pt_BR models within Meta limits", () => {
         const all = buildAllBulletinTemplateSubmissions();
-        assert.equal(all.length, 6);
+        assert.equal(all.length, 9);
         for (const s of all) {
             assert.equal(s.language, "pt_BR");
             assert.equal(s.category, "MARKETING");
@@ -27,14 +27,20 @@ describe("Bulletin library ready for Meta approval", () => {
                 countPositionalVars(s.bodyText),
                 s.variableCount
             );
-            assert.equal(s.checks.readyForManualSubmit, true);
+            // v2 kept for history but not ready for new Meta submit (2388293)
+            if (s.generation === 2) {
+                assert.equal(s.checks.readyForManualSubmit, false);
+            } else {
+                assert.equal(s.checks.readyForManualSubmit, true);
+            }
             assert.ok(s.previewFilled.length > 20);
             assert.equal(s.previewFilled.includes("{{"), false);
         }
         const names = all.map((x) => x.name);
         assert.ok(names.includes("boletim_1_carga"));
         assert.ok(names.includes("boletim_v2_1_carga"));
-        assert.ok(names.includes("boletim_v2_3_cargas"));
+        assert.ok(names.includes("boletim_v3_1_carga"));
+        assert.ok(names.includes("boletim_v3_3_cargas"));
     });
 
     it("does not use PENDING templates for real-send composition", () => {

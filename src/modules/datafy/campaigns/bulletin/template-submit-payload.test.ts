@@ -39,13 +39,13 @@ describe("template submit payload — Meta BODY rules", () => {
         assert.ok(!("parameter_format" in built.payload));
     });
 
-    it("11 variables (boletim_v2_1_carga): examples complete and BODY does not end with var", () => {
+    it("6 variables (boletim_v3_1_carga): examples complete and BODY does not end with var", () => {
         const spec = BULLETIN_TEMPLATE_LIBRARY.find(
-            (s) => s.preferredName === "boletim_v2_1_carga"
+            (s) => s.preferredName === "boletim_v3_1_carga"
         )!;
         const sub = buildBulletinTemplateSubmission(spec);
-        assert.equal(sub.variableCount, 11);
-        assert.equal(sub.exampleRow.length, 11);
+        assert.equal(sub.variableCount, 6);
+        assert.equal(sub.exampleRow.length, 6);
         const built = buildTemplateCreatePayload({
             name: sub.name,
             category: "MARKETING",
@@ -58,9 +58,31 @@ describe("template submit payload — Meta BODY rules", () => {
         assert.ok(!/\{\{\d+\}\}$/.test(body.trim()));
         assert.equal(
             built.payload.components[0].example?.body_text[0].length,
-            11
+            6
         );
         assert.ok(body.length <= 1024);
+    });
+
+    it("formats 2388293 density rejection with panel guidance", () => {
+        const err = new DatafyApiError(
+            "This template has too many variables for its length.",
+            400,
+            {
+                error: {
+                    message:
+                        "This template has too many variables for its length.",
+                    code: 100,
+                    error_subcode: 2388293,
+                    fbtrace_id: "dens_trace",
+                },
+            }
+        );
+        const f = formatMetaTemplateApiError(err);
+        assert.equal(f.subcode, 2388293);
+        assert.match(
+            f.guidance || "",
+            /variáveis demais em relação ao texto fixo/i
+        );
     });
 
     it("rejects missing examples", () => {
@@ -134,9 +156,9 @@ describe("template submit payload — Meta BODY rules", () => {
         assert.equal(f.fbtraceId, "trace_dup");
     });
 
-    it("all v2 library specs produce valid create payloads", () => {
+    it("all v3 library specs produce valid create payloads", () => {
         for (const spec of BULLETIN_TEMPLATE_LIBRARY.filter(
-            (s) => s.generation === 2
+            (s) => s.generation === 3
         )) {
             const sub = buildBulletinTemplateSubmission(spec);
             const built = buildTemplateCreatePayload({

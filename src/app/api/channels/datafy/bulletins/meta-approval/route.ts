@@ -238,7 +238,11 @@ export async function POST(request: NextRequest) {
                     variableCount: (managed.exampleRow as string[]).length,
                     bodyCharCount: managed.bodyText.length,
                     loadsPerMessage: managed.loadsPerMessage as 1 | 2 | 3,
-                    generation: 2 as const,
+                    generation: (managed.technicalName.includes("v3")
+                        ? 3
+                        : managed.technicalName.includes("v2")
+                          ? 2
+                          : 1) as 1 | 2 | 3,
                     description: managed.description || "",
                     previewFilled: managed.bodyText,
                     checks: {
@@ -269,14 +273,20 @@ export async function POST(request: NextRequest) {
         const existingStatus = String(
             managed?.remoteStatus || ""
         ).toUpperCase();
-        if (existingStatus === "PENDING" || existingStatus === "APPROVED") {
+        if (
+            existingStatus === "PENDING" ||
+            existingStatus === "APPROVED" ||
+            existingStatus === "REJECTED"
+        ) {
             return NextResponse.json(
                 {
                     status: false,
                     message:
                         existingStatus === "APPROVED"
                             ? "Template já APPROVED — não reenvie o mesmo nome/idioma."
-                            : "Template já PENDING — aguarde a Meta ou atualize o status.",
+                            : existingStatus === "PENDING"
+                              ? "Template já PENDING — aguarde a Meta ou atualize o status."
+                              : "Template rejeitado pela Meta — ajuste a estrutura ou use outro nome técnico. Não há reenvio automático.",
                     data: {
                         approvalStatus: existingStatus,
                         templateId: managed?.remoteTemplateId || null,

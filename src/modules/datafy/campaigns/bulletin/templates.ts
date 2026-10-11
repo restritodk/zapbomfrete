@@ -15,6 +15,7 @@ import {
     type LoadSlotField,
 } from "./library";
 import {
+    expandSlotCoverage,
     filledLoadFieldKeys,
     hasCatchAll,
     uncoveredFilledFields,
@@ -56,10 +57,10 @@ export function resolveReusableBulletinTemplates(
         if (b.spec.loadsPerMessage !== a.spec.loadsPerMessage) {
             return b.spec.loadsPerMessage - a.spec.loadsPerMessage;
         }
-        // Prefer more mapped fields (richer coverage), then generation
-        if (b.spec.slotFields.length !== a.spec.slotFields.length) {
-            return b.spec.slotFields.length - a.spec.slotFields.length;
-        }
+        // Prefer richer atomic coverage (composites expand), then newer generation
+        const covA = expandSlotCoverage(a.spec.slotFields).length;
+        const covB = expandSlotCoverage(b.spec.slotFields).length;
+        if (covB !== covA) return covB - covA;
         return b.spec.generation - a.spec.generation;
     });
     return matched;
@@ -79,7 +80,7 @@ function pickTemplateForCapacity(
             m,
             ok: cov.ok,
             uncovered: cov.uncovered.length,
-            fields: m.spec.slotFields.length,
+            fields: expandSlotCoverage(m.spec.slotFields).length,
             gen: m.spec.generation,
             cat: String(m.category || "").toUpperCase(),
         };
@@ -107,6 +108,14 @@ function cleanParam(
         key === "localizacao" ? "localizacaoUrl" : key;
     const stripped = stripFieldLabelPrefix(fieldKey, raw);
     return sanitizeTemplateParam(stripped);
+}
+
+function joinComposite(...parts: string[]): string {
+    const cleaned = parts
+        .map((p) => p.trim())
+        .filter((p) => p && p !== "N/D");
+    if (!cleaned.length) return "N/D";
+    return sanitizeTemplateParam(cleaned.join(" · "));
 }
 
 function fieldValue(
@@ -139,6 +148,39 @@ function fieldValue(
             return cleanParam("lote", fields.lote);
         case "pedagio":
             return cleanParam("pedagio", fields.pedagio);
+        case "rotaOrigem":
+            return joinComposite(
+                cleanParam("origem", fields.origem),
+                cleanParam("localCarregamento", fields.localCarregamento)
+            );
+        case "rotaDestino":
+            return joinComposite(
+                cleanParam("destino", fields.destino),
+                cleanParam("terminal", fields.terminal)
+            );
+        case "veiculoQtd":
+            return joinComposite(
+                cleanParam("veiculo", fields.veiculo),
+                cleanParam("quantidade", fields.quantidade || fields.lote)
+            );
+        case "fretePedagio":
+            return joinComposite(
+                cleanParam("frete", fields.frete),
+                cleanParam("pedagio", fields.pedagio)
+            );
+        case "mapaObs": {
+            let obs = fields.observacoes || "";
+            if (fields.localizacaoUrl && obs) {
+                obs = obs
+                    .split(" · ")
+                    .filter((p) => !p.includes(fields.localizacaoUrl!))
+                    .join(" · ");
+            }
+            return joinComposite(
+                cleanParam("localizacao", fields.localizacaoUrl),
+                obs.trim() ? cleanParam("observacoes", obs) : "N/D"
+            );
+        }
         case "observacoes": {
             // Never fall back to detalhes — that re-injects Janela/Frete into Obs.
             let obs = fields.observacoes || "";
@@ -298,7 +340,11 @@ export function composeReusableBulletinParts(
                 // Append uncovered filled fields into catch-all slot (last observacoes/detalhes)
                 const catchIdx = [...tmpl.spec.slotFields]
                     .map((k, i) =>
-                        k === "observacoes" || k === "detalhes" ? i : -1
+                        k === "observacoes" ||
+                        k === "detalhes" ||
+                        k === "mapaObs"
+                            ? i
+                            : -1
                     )
                     .filter((i) => i >= 0)
                     .pop();
@@ -307,7 +353,11 @@ export function composeReusableBulletinParts(
                         ? tmpl.spec.slotFields[catchIdx]
                         : null;
                 // `detalhes` already aggregates frete/janela/veículo — never re-append
-                if (catchIdx != null && catchIdx >= 0 && catchKey === "observacoes") {
+                if (
+                    catchIdx != null &&
+                    catchIdx >= 0 &&
+                    (catchKey === "observacoes" || catchKey === "mapaObs")
+                ) {
                     const extra = uncoveredFilledFields(
                         filledLoadFieldKeys(load.fields),
                         tmpl.spec.slotFields

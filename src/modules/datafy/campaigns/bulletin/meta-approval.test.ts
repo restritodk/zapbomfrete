@@ -82,11 +82,12 @@ describe("meta approval — single balloon & COTTON 8", () => {
 
     it("library submission validation stays within official limits", () => {
         for (const spec of BULLETIN_TEMPLATE_LIBRARY.filter(
-            (s) => s.generation === 2
+            (s) => s.generation === 3
         )) {
             const sub = buildBulletinTemplateSubmission(spec);
             assert.equal(sub.checks.bodyWithinLimit, true);
             assert.ok(sub.bodyCharCount <= 1024);
+            assert.equal(sub.checks.readyForManualSubmit, true);
         }
     });
 });
@@ -119,27 +120,36 @@ describe("meta approval — status mapping & webhook", () => {
         assert.equal(rejected.rejectedReason, "INVALID_FORMAT");
     });
 
-    it("blocks re-submit when already PENDING or APPROVED", () => {
+    it("blocks re-submit when already PENDING, APPROVED or REJECTED", () => {
         const a = analyzeBulletin(COTTON_8_LOADS_RAW);
         const draft = analysisToEditableDraft(a);
         const pending = buildMetaApprovalProposal(draft, {
-            boletim_v2_1_carga: { remoteStatus: "PENDING" },
+            boletim_v3_1_carga: { remoteStatus: "PENDING" },
         });
         const cardP = pending.libraryProposals.find(
-            (p) => p.technicalName === "boletim_v2_1_carga"
+            (p) => p.technicalName === "boletim_v3_1_carga"
         );
         assert.ok(cardP);
         assert.equal(cardP!.canSubmit, false);
         assert.match(cardP!.submitBlockReason || "", /PENDING/i);
 
         const approved = buildMetaApprovalProposal(draft, {
-            boletim_v2_1_carga: { remoteStatus: "APPROVED" },
+            boletim_v3_1_carga: { remoteStatus: "APPROVED" },
         });
         const cardA = approved.libraryProposals.find(
-            (p) => p.technicalName === "boletim_v2_1_carga"
+            (p) => p.technicalName === "boletim_v3_1_carga"
         );
         assert.equal(cardA!.canSubmit, false);
         assert.match(cardA!.submitBlockReason || "", /APPROVED/i);
+
+        const rejected = buildMetaApprovalProposal(draft, {
+            boletim_v3_1_carga: { remoteStatus: "REJECTED" },
+        });
+        const cardR = rejected.libraryProposals.find(
+            (p) => p.technicalName === "boletim_v3_1_carga"
+        );
+        assert.equal(cardR!.canSubmit, false);
+        assert.match(cardR!.submitBlockReason || "", /Rejeitado|estrutura/i);
     });
 
     it("ready_to_submit when no remote status", () => {

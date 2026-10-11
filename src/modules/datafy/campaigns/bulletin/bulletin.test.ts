@@ -86,12 +86,13 @@ describe("Reusable bulletin templates (6G)", () => {
         assert.equal(parts[0].loadIndexes.length, 3);
         assert.equal(parts[1].loadIndexes.length, 3);
         assert.ok(
-            parts[0].templateName === "boletim_v2_3_cargas" ||
+            parts[0].templateName === "boletim_v3_3_cargas" ||
+                parts[0].templateName === "boletim_v2_3_cargas" ||
                 parts[0].templateName === "boletim_3_cargas"
         );
         assert.equal(parts[0].readyForRealSend, true);
         assert.ok(
-            (parts[0].variableMapping?.body?.length || 0) >= 21
+            (parts[0].variableMapping?.body?.length || 0) >= 18
         );
         assert.match(parts[0].bodyText, /Cidade A1/);
         assert.match(parts[1].bodyText, /Cidade A4/);
@@ -140,13 +141,14 @@ describe("Reusable bulletin templates (6G)", () => {
         );
     });
 
-    it("sanitizes params and checklist lists v1+v2 reusable models", () => {
+    it("sanitizes params and checklist lists v1+v2+v3 reusable models", () => {
         assert.equal(sanitizeTemplateParam(""), "N/D");
         assert.equal(sanitizeTemplateParam("a\nb"), "a · b");
         const list = libraryApprovalChecklist();
-        assert.equal(list.length, 6);
+        assert.equal(list.length, 9);
         assert.ok(list.every((x) => x.recommendedCategory === "MARKETING"));
         assert.ok(list.some((x) => x.generation === 2));
+        assert.ok(list.some((x) => x.generation === 3));
     });
 
     it("warns when only UTILITY templates exist for marketing purpose", () => {
