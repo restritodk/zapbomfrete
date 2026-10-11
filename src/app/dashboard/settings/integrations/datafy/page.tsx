@@ -64,6 +64,9 @@ function DatafyIntegrationPageInner() {
     const { data: authSession, status: authStatus } = useSession();
     // Credential management is SUPERADMIN-only (matches API isAdmin).
     const isAdmin = authSession?.user?.role === "SUPERADMIN";
+    // Template library submit/sync: OWNER + SUPERADMIN
+    const canManageTemplates =
+        isAdmin || authSession?.user?.role === "OWNER";
 
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -644,7 +647,7 @@ function DatafyIntegrationPageInner() {
             </Card>
 
             <BulletinTemplateManager
-                canManage={isAdmin}
+                canManage={canManageTemplates}
                 hasChannelToken={!!status?.hasChannelToken}
             />
 

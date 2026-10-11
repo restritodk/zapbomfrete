@@ -29,3 +29,11 @@ export async function canEditDatafyCampaigns(
 export function canLaunchDatafyCampaigns(userRole: string): boolean {
     return isAdmin(userRole) || userRole === "OWNER";
 }
+
+/**
+ * Manage bulletin / Meta template library (create, edit, submit, sync, import).
+ * OWNER + SUPERADMIN. Credentials/global Datafy settings remain SUPERADMIN-only.
+ */
+export function canManageBulletinTemplates(userRole: string): boolean {
+    return isAdmin(userRole) || userRole === "OWNER";
+}

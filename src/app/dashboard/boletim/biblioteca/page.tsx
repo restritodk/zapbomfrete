@@ -1,9 +1,15 @@
 import Link from "next/link";
+import { auth } from "@/lib/auth";
 import { BulletinTemplateManager } from "@/components/dashboard/bulletin-template-manager";
 import { Button } from "@/components/ui/button";
 import { Library, ShieldCheck } from "lucide-react";
+import { canManageBulletinTemplates } from "@/modules/datafy/campaigns/access";
 
-export default function BibliotecaTemplatesPage() {
+export default async function BibliotecaTemplatesPage() {
+    const session = await auth();
+    const role = (session?.user as { role?: string } | undefined)?.role || "";
+    const canManage = canManageBulletinTemplates(role);
+
     return (
         <div className="p-4 sm:p-6 lg:p-8 mx-auto w-full max-w-[1400px] space-y-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -25,7 +31,10 @@ export default function BibliotecaTemplatesPage() {
                     </Link>
                 </Button>
             </div>
-            <BulletinTemplateManager canManage hasChannelToken />
+            <BulletinTemplateManager
+                canManage={canManage}
+                hasChannelToken
+            />
         </div>
     );
 }

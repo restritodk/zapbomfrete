@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getAuthenticatedUser, isAdmin } from "@/lib/api-auth";
+import { getAuthenticatedUser } from "@/lib/api-auth";
 import { canAccessDatafyChannel } from "@/modules/channels/access";
+import {
+    canManageBulletinTemplates,
+    canViewDatafyCampaigns,
+} from "@/modules/datafy/campaigns/access";
 import { datafyProvider, DatafyApiError } from "@/modules/datafy";
 import { redactSecrets } from "@/modules/datafy/crypto-secrets";
 import { loadDatafyConfig } from "@/modules/datafy/config";
@@ -73,13 +77,13 @@ async function requireAccess(request: NextRequest, write: boolean) {
         };
     }
     if (write) {
-        if (!isAdmin(user.role)) {
+        if (!canManageBulletinTemplates(user.role)) {
             return {
                 error: NextResponse.json(
                     {
                         status: false,
                         message:
-                            "Apenas SUPERADMIN pode gerenciar/submeter templates",
+                            "Apenas OWNER ou SUPERADMIN podem gerenciar/submeter templates",
                     },
                     { status: 403 }
                 ),
@@ -87,7 +91,8 @@ async function requireAccess(request: NextRequest, write: boolean) {
         }
     } else {
         const allowed =
-            isAdmin(user.role) ||
+            canManageBulletinTemplates(user.role) ||
+            (await canViewDatafyCampaigns(user.id, user.role)) ||
             (await canAccessDatafyChannel(user.id, user.role));
         if (!allowed) {
             return {

@@ -132,6 +132,7 @@ export function MetaApprovalsPanel() {
 
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [items, setItems] = useState<ApprovalItem[]>([]);
     const [counters, setCounters] = useState<Counters>({
         total: 0,
@@ -154,8 +155,22 @@ export function MetaApprovalsPanel() {
     const [fieldOpts, setFieldOpts] = useState<FieldOpt[]>([]);
     const [mappings, setMappings] = useState<string[]>([]);
 
+    const friendlyClientMessage = (raw: string | undefined, fallback: string) => {
+        const msg = String(raw || "").trim();
+        if (!msg) return fallback;
+        if (
+            /prisma|postgres|42501|permission denied|ECONNREFUSED|P1001|P2021|stack|SELECT |FROM "/i.test(
+                msg
+            )
+        ) {
+            return fallback;
+        }
+        return msg;
+    };
+
     const load = useCallback(async () => {
         setLoading(true);
+        setLoadError(null);
         try {
             const params = new URLSearchParams();
             params.set("page", String(page));
@@ -168,7 +183,14 @@ export function MetaApprovalsPanel() {
                 `/api/channels/datafy/approvals?${params.toString()}`
             );
             const json = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(json.message || "Falha ao carregar");
+            if (!res.ok) {
+                throw new Error(
+                    friendlyClientMessage(
+                        json.message,
+                        "Não foi possível carregar os templates. Verifique a conexão e tente novamente."
+                    )
+                );
+            }
             setItems(json.data?.items || []);
             setTotal(json.data?.total || 0);
             setCounters(
@@ -184,7 +206,14 @@ export function MetaApprovalsPanel() {
             setWabaId(json.data?.wabaId || null);
             setFieldOpts(json.data?.fieldMapOptions || []);
         } catch (e) {
-            toast.error(e instanceof Error ? e.message : "Erro ao carregar");
+            const msg =
+                e instanceof Error
+                    ? e.message
+                    : "Não foi possível carregar os templates. Tente novamente.";
+            setLoadError(msg);
+            setItems([]);
+            setTotal(0);
+            toast.error(msg);
         } finally {
             setLoading(false);
         }
@@ -209,11 +238,24 @@ export function MetaApprovalsPanel() {
                 body: JSON.stringify({ action }),
             });
             const json = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(json.message || "Falha na sincronização");
+            if (!res.ok) {
+                throw new Error(
+                    friendlyClientMessage(
+                        json.message,
+                        "Não foi possível sincronizar os templates. Verifique a conexão com o serviço e tente novamente."
+                    )
+                );
+            }
             toast.success(json.data?.message || "Sincronizado");
+            setLoadError(null);
             await load();
         } catch (e) {
-            toast.error(e instanceof Error ? e.message : "Erro na sincronização");
+            const msg =
+                e instanceof Error
+                    ? e.message
+                    : "Não foi possível sincronizar os templates. Tente novamente.";
+            setLoadError(msg);
+            toast.error(msg);
         } finally {
             setSyncing(false);
         }
@@ -472,7 +514,35 @@ export function MetaApprovalsPanel() {
                                         ))}
                                     </TableRow>
                                 ))}
-                            {!loading && items.length === 0 && (
+                            {!loading && loadError && (
+                                <TableRow>
+                                    <TableCell
+                                        colSpan={7}
+                                        className="py-16 text-center"
+                                    >
+                                        <div className="mx-auto max-w-md space-y-3">
+                                            <AlertTriangle className="mx-auto h-8 w-8 text-amber-600" />
+                                            <p className="font-medium">
+                                                Não foi possível carregar os
+                                                templates
+                                            </p>
+                                            <p className="text-sm text-muted-foreground">
+                                                {loadError}
+                                            </p>
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                disabled={loading || syncing}
+                                                onClick={() => void load()}
+                                            >
+                                                <RefreshCw className="h-4 w-4 mr-1.5" />
+                                                Tentar novamente
+                                            </Button>
+                                        </div>
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                            {!loading && !loadError && items.length === 0 && (
                                 <TableRow>
                                     <TableCell
                                         colSpan={7}

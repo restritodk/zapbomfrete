@@ -5,12 +5,14 @@ import {
     requireCampaignEdit,
     requireCampaignView,
 } from "@/modules/datafy/campaigns/auth-gate";
+import { canManageBulletinTemplates } from "@/modules/datafy/campaigns/access";
 import {
     importTemplateToLibrary,
     listSyncedApprovals,
     syncTemplatesFromDatafy,
     toApprovalDto,
 } from "@/modules/datafy/campaigns/bulletin/template-sync";
+import { toSafeApprovalsError } from "@/modules/datafy/campaigns/bulletin/safe-errors";
 import { FIELD_MAP_OPTIONS } from "@/modules/datafy/campaigns/bulletin/field-map";
 import { prisma } from "@/lib/prisma";
 
@@ -43,30 +45,42 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const id = url.searchParams.get("id");
     if (id) {
-        const row = await (
-            prisma as unknown as {
-                datafyManagedTemplate: {
-                    findFirst: (
-                        a: unknown
-                    ) => Promise<Record<string, unknown> | null>;
-                };
+        try {
+            const row = await (
+                prisma as unknown as {
+                    datafyManagedTemplate: {
+                        findFirst: (
+                            a: unknown
+                        ) => Promise<Record<string, unknown> | null>;
+                    };
+                }
+            ).datafyManagedTemplate.findFirst({
+                where: { id, organizationKey: "default", deletedAt: null },
+            });
+            if (!row) {
+                return NextResponse.json(
+                    { status: false, message: "Template não encontrado" },
+                    { status: 404 }
+                );
             }
-        ).datafyManagedTemplate.findFirst({
-            where: { id, organizationKey: "default", deletedAt: null },
-        });
-        if (!row) {
+            return NextResponse.json({
+                status: true,
+                data: {
+                    item: toApprovalDto(row as never),
+                    fieldMapOptions: FIELD_MAP_OPTIONS,
+                },
+            });
+        } catch (e) {
+            const safe = toSafeApprovalsError(e, "GET approvals by id");
             return NextResponse.json(
-                { status: false, message: "Template não encontrado" },
-                { status: 404 }
+                {
+                    status: false,
+                    message: safe.message,
+                    data: { code: safe.code },
+                },
+                { status: safe.statusCode }
             );
         }
-        return NextResponse.json({
-            status: true,
-            data: {
-                item: toApprovalDto(row as never),
-                fieldMapOptions: FIELD_MAP_OPTIONS,
-            },
-        });
     }
 
     const parsed = listSchema.safeParse({
@@ -100,18 +114,14 @@ export async function GET(request: NextRequest) {
             },
         });
     } catch (e) {
-        const message =
-            e instanceof DatafyApiError
-                ? e.message
-                : e instanceof Error
-                  ? e.message
-                  : "Falha ao listar aprovações";
+        const safe = toSafeApprovalsError(e, "GET approvals list");
         return NextResponse.json(
-            { status: false, message },
             {
-                status:
-                    e instanceof DatafyApiError ? e.statusCode || 500 : 500,
-            }
+                status: false,
+                message: safe.message,
+                data: { code: safe.code },
+            },
+            { status: safe.statusCode }
         );
     }
 }
@@ -119,6 +129,17 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
     const gate = await requireCampaignEdit(request);
     if (gate.error) return gate.error;
+
+    if (!canManageBulletinTemplates(gate.user!.role)) {
+        return NextResponse.json(
+            {
+                status: false,
+                message:
+                    "Apenas OWNER ou SUPERADMIN podem sincronizar ou importar templates",
+            },
+            { status: 403 }
+        );
+    }
 
     let body: unknown;
     try {
@@ -182,13 +203,31 @@ export async function POST(request: NextRequest) {
             { status: 400 }
         );
     } catch (e) {
-        const message =
-            e instanceof DatafyApiError
-                ? e.message
-                : e instanceof Error
-                  ? e.message
-                  : "Falha na operação";
-        const code = e instanceof DatafyApiError ? e.statusCode || 500 : 500;
-        return NextResponse.json({ status: false, message }, { status: code });
+        if (e instanceof DatafyApiError && e.statusCode === 429) {
+            const safe = toSafeApprovalsError(e, "POST approvals sync busy");
+            return NextResponse.json(
+                {
+                    status: false,
+                    message: safe.message,
+                    data: { code: safe.code },
+                },
+                { status: 429 }
+            );
+        }
+        if (e instanceof Error && /Mapeamentos|não encontrado/i.test(e.message)) {
+            return NextResponse.json(
+                { status: false, message: e.message },
+                { status: 400 }
+            );
+        }
+        const safe = toSafeApprovalsError(e, "POST approvals");
+        return NextResponse.json(
+            {
+                status: false,
+                message: safe.message,
+                data: { code: safe.code },
+            },
+            { status: safe.statusCode }
+        );
     }
 }

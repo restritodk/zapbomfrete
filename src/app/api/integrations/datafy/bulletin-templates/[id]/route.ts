@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getAuthenticatedUser, isAdmin } from "@/lib/api-auth";
+import { getAuthenticatedUser } from "@/lib/api-auth";
+import { canManageBulletinTemplates } from "@/modules/datafy/campaigns/access";
 import {
     campaignsUsingTemplate,
     deleteOrHideManaged,
@@ -32,7 +33,7 @@ const duplicateSchema = z.object({
     technicalName: z.string().min(3).max(64).optional(),
 });
 
-async function requireAdmin(request: NextRequest) {
+async function requireTemplateManager(request: NextRequest) {
     const user = await getAuthenticatedUser(request);
     if (!user) {
         return {
@@ -42,12 +43,13 @@ async function requireAdmin(request: NextRequest) {
             ),
         };
     }
-    if (!isAdmin(user.role)) {
+    if (!canManageBulletinTemplates(user.role)) {
         return {
             error: NextResponse.json(
                 {
                     status: false,
-                    message: "Apenas SUPERADMIN pode gerenciar templates",
+                    message:
+                        "Apenas OWNER ou SUPERADMIN podem gerenciar templates",
                 },
                 { status: 403 }
             ),
@@ -65,7 +67,7 @@ export async function GET(
     request: NextRequest,
     ctx: { params: Promise<{ id: string }> }
 ) {
-    const gate = await requireAdmin(request);
+    const gate = await requireTemplateManager(request);
     if (gate.error) return gate.error;
     const { id } = await ctx.params;
     const view = await resolveView(decodeURIComponent(id));
@@ -83,7 +85,7 @@ export async function PATCH(
     request: NextRequest,
     ctx: { params: Promise<{ id: string }> }
 ) {
-    const gate = await requireAdmin(request);
+    const gate = await requireTemplateManager(request);
     if (gate.error) return gate.error;
     const { id } = await ctx.params;
     const viewId = decodeURIComponent(id);
@@ -168,7 +170,7 @@ export async function POST(
     request: NextRequest,
     ctx: { params: Promise<{ id: string }> }
 ) {
-    const gate = await requireAdmin(request);
+    const gate = await requireTemplateManager(request);
     if (gate.error) return gate.error;
     const { id } = await ctx.params;
     const viewId = decodeURIComponent(id);
@@ -205,7 +207,7 @@ export async function DELETE(
     request: NextRequest,
     ctx: { params: Promise<{ id: string }> }
 ) {
-    const gate = await requireAdmin(request);
+    const gate = await requireTemplateManager(request);
     if (gate.error) return gate.error;
     const { id } = await ctx.params;
     const viewId = decodeURIComponent(id);
