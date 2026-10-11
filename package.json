@@ -13,6 +13,7 @@
     "test:broadcast": "tsx --test src/lib/broadcast-delay.test.ts src/lib/broadcast-cancel.test.ts",
     "test:wa-connection": "tsx --test src/modules/whatsapp/connection-lifecycle.test.ts",
     "test:datafy": "tsx --test src/modules/datafy/datafy.test.ts src/modules/datafy/chat/chat.test.ts",
+    "test:public-origin": "tsx --test src/lib/public-origin.test.ts",
     "test:channels": "tsx --test src/modules/channels/channels.test.ts src/lib/phone-br-groups.test.ts",
     "test:datafy-chat": "tsx --test src/modules/datafy/chat/chat.test.ts",
     "test:crm": "tsx --test src/modules/crm/crm.test.ts src/modules/crm/consent/consent.test.ts src/modules/crm/consent/decisions.unit.test.ts",

@@ -1,4 +1,5 @@
 import type { NextAuthConfig } from "next-auth";
+import { publicUrl } from "@/lib/public-origin";
 
 export const authConfig = {
     pages: {
@@ -9,20 +10,21 @@ export const authConfig = {
             const isLoggedIn = !!auth?.user;
             const isOnDashboard = nextUrl.pathname.startsWith('/dashboard');
             const isRoot = nextUrl.pathname === '/';
+            const req = { nextUrl, url: nextUrl.href };
 
             // Root: never show landing — edge redirect before any page HTML
             if (isRoot) {
                 if (isLoggedIn) {
-                    return Response.redirect(new URL('/dashboard', nextUrl));
+                    return Response.redirect(publicUrl('/dashboard', req));
                 }
-                return Response.redirect(new URL('/auth/login', nextUrl));
+                return Response.redirect(publicUrl('/auth/login', req));
             }
 
             if (isOnDashboard) {
                 if (isLoggedIn) return true;
                 return false; // Redirect unauthenticated users to login page
             } else if (isLoggedIn && nextUrl.pathname === '/auth/login') {
-                return Response.redirect(new URL('/dashboard', nextUrl));
+                return Response.redirect(publicUrl('/dashboard', req));
             }
             return true;
         },

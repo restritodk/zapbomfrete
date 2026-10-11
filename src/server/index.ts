@@ -11,8 +11,11 @@ import { waManager } from "../modules/whatsapp/manager";
 import { logger } from "../lib/logger";
 import pkg from "../../package.json";
 
+import { resolveNextHostname } from "../lib/public-origin";
+
 const dev = process.env.NODE_ENV !== "production";
-const hostname = process.env.HOSTNAME || "localhost";
+// Public host for Next absolute URLs (not OS HOSTNAME / bind address).
+const hostname = resolveNextHostname();
 const port = parseInt(process.env.PORT || "3030", 10);
 
 if (!process.env.AUTH_SECRET) {

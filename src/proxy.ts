@@ -1,7 +1,16 @@
 import { auth } from "@/lib/auth";
 import { isPublicApiPath } from "@/lib/public-api-routes";
+import { publicUrl, safeCallbackPath } from "@/lib/public-origin";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+
+function redirectTo(path: string, request: NextRequest, callbackPath?: string) {
+    const url = publicUrl(path, request);
+    if (callbackPath !== undefined) {
+        url.searchParams.set("callbackUrl", safeCallbackPath(callbackPath));
+    }
+    return NextResponse.redirect(url);
+}
 
 export async function proxy(request: NextRequest) {
     const { pathname } = request.nextUrl;
@@ -55,9 +64,7 @@ export async function proxy(request: NextRequest) {
         const session = await auth();
 
         if (!session?.user) {
-            const loginUrl = new URL("/auth/login", request.url);
-            loginUrl.searchParams.set("callbackUrl", pathname);
-            return NextResponse.redirect(loginUrl);
+            return redirectTo("/auth/login", request, pathname);
         }
 
         return NextResponse.next();
@@ -67,26 +74,24 @@ export async function proxy(request: NextRequest) {
     if (pathname === "/") {
         const session = await auth();
         if (session?.user) {
-            return NextResponse.redirect(new URL("/dashboard", request.url));
+            return redirectTo("/dashboard", request);
         }
-        return NextResponse.redirect(new URL("/auth/login", request.url));
+        return redirectTo("/auth/login", request);
     }
 
     // Public routes
     if (isPublicRoute) {
         const session = await auth();
         if (session?.user && (pathname.startsWith("/auth/login") || pathname.startsWith("/auth/register"))) {
-            return NextResponse.redirect(new URL("/dashboard", request.url));
+            return redirectTo("/dashboard", request);
         }
         return NextResponse.next();
     }
 
-    // Default: require auth for everything else
+    // Default: require auth for everything else (e.g. /login → public /auth/login)
     const session = await auth();
     if (!session?.user) {
-        const loginUrl = new URL("/auth/login", request.url);
-        loginUrl.searchParams.set("callbackUrl", pathname);
-        return NextResponse.redirect(loginUrl);
+        return redirectTo("/auth/login", request, pathname);
     }
 
     return NextResponse.next();
