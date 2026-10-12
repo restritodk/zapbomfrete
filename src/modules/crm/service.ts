@@ -107,6 +107,32 @@ export async function listCrmContacts(opts: {
     };
 }
 
+/** Aggregate KPIs for CRM list (org-scoped, active contacts only). */
+export async function getCrmContactStats() {
+    const base = { organizationKey: CRM_ORG_DEFAULT, active: true };
+    const [total, granted, unknown, companyRows] = await Promise.all([
+        prisma.crmContact.count({ where: base }),
+        prisma.crmContact.count({
+            where: { ...base, consentStatus: "granted" },
+        }),
+        prisma.crmContact.count({
+            where: { ...base, consentStatus: "unknown" },
+        }),
+        prisma.crmContact.findMany({
+            where: {
+                ...base,
+                company: { not: null },
+            },
+            select: { company: true },
+            distinct: ["company"],
+        }),
+    ]);
+    const companies = companyRows.filter(
+        (r) => String(r.company || "").trim().length > 0
+    ).length;
+    return { total, granted, unknown, companies };
+}
+
 export async function getCrmContact(id: string) {
     const c = await prisma.crmContact.findFirst({
         where: { id, organizationKey: CRM_ORG_DEFAULT },

@@ -4,6 +4,7 @@ import { requireCrmAccess, requireCrmMutate } from "@/modules/crm/auth-gate";
 import {
     CrmError,
     createCrmContact,
+    getCrmContactStats,
     listCrmContacts,
 } from "@/modules/crm/service";
 import { CRM_CATEGORIES, CRM_CONSENT_STATUSES } from "@/modules/crm/constants";
@@ -39,7 +40,11 @@ export async function GET(request: NextRequest) {
             page: Number(sp.get("page") || 1) || 1,
             limit: Number(sp.get("limit") || 20) || 20,
         });
-        return NextResponse.json({ status: true, data });
+        const stats = await getCrmContactStats();
+        return NextResponse.json({
+            status: true,
+            data: { ...data, stats },
+        });
     } catch (e) {
         if (e instanceof CrmError) {
             return NextResponse.json(
