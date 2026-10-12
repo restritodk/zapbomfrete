@@ -14,6 +14,7 @@ import {
     ChevronRight,
     FilePlus2,
     Loader2,
+    X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -75,7 +76,9 @@ const premiumBtn =
 const premiumBtnOutline =
     "rounded-xl border-slate-200 bg-white text-[#0f2744] hover:bg-slate-50";
 const fieldClass =
-    "h-10 rounded-xl border-slate-200 bg-white focus-visible:ring-[#2563eb]/30";
+    "h-11 w-full rounded-xl border-slate-200 bg-white focus-visible:ring-[#2563eb]/30";
+const labelClass =
+    "text-sm font-medium text-[#0f2744] whitespace-nowrap leading-none";
 
 export function BulletinTemplateEditorDialog({
     open,
@@ -101,7 +104,6 @@ export function BulletinTemplateEditorDialog({
             setDiscardOpen(false);
             setMobilePreview(false);
         }
-        // Capture baseline only when the dialog opens.
         // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional open-edge snapshot
     }, [open]);
 
@@ -130,23 +132,23 @@ export function BulletinTemplateEditorDialog({
     const stepIndex = EDITOR_STEPS.findIndex((s) => s.id === step);
 
     const WhatsAppPreview = (
-        <div className="rounded-2xl border border-slate-200/80 bg-[#efeae2] p-3 sm:p-4 shadow-inner min-h-[240px] flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-                <p className="text-[11px] font-medium text-slate-600">
+        <div className="h-full min-h-[280px] rounded-2xl border border-slate-200/80 bg-[#efeae2] p-4 shadow-inner flex flex-col">
+            <div className="flex items-center justify-between gap-2 mb-4 shrink-0">
+                <p className="text-xs font-semibold text-slate-700">
                     Prévia WhatsApp
                 </p>
-                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] text-slate-500 ring-1 ring-slate-200">
+                <span className="rounded-full bg-white/90 px-2.5 py-0.5 text-[10px] text-slate-500 ring-1 ring-slate-200 whitespace-nowrap">
                     Ilustrativa · exemplos
                 </span>
             </div>
-            <div className="flex-1 flex flex-col justify-end gap-1.5">
-                <div className="max-w-[min(100%,300px)] self-start rounded-2xl rounded-tl-md bg-white shadow-sm border border-black/5 overflow-hidden">
+            <div className="flex-1 flex flex-col justify-center gap-2 min-h-0">
+                <div className="w-full max-w-[340px] mx-auto rounded-2xl rounded-tl-md bg-white shadow-md border border-black/5 overflow-hidden">
                     {draft.headerText.trim() ? (
-                        <div className="px-3 pt-2.5 text-[13px] font-semibold text-[#111b21]">
+                        <div className="px-3.5 pt-3 text-[13px] font-semibold text-[#111b21] break-words">
                             {draft.headerText}
                         </div>
                     ) : null}
-                    <div className="px-3 py-2.5 text-[13px] leading-relaxed text-[#111b21] whitespace-pre-wrap break-words">
+                    <div className="px-3.5 py-3 text-[13px] leading-relaxed text-[#111b21] whitespace-pre-wrap break-words">
                         {previewBody.trim() || (
                             <span className="text-slate-400 italic">
                                 Digite o corpo da mensagem para ver a prévia…
@@ -154,16 +156,16 @@ export function BulletinTemplateEditorDialog({
                         )}
                     </div>
                     {draft.footerText.trim() ? (
-                        <div className="px-3 pb-2 text-[11px] text-slate-500">
+                        <div className="px-3.5 pb-2 text-[11px] text-slate-500 break-words">
                             {draft.footerText}
                         </div>
                     ) : null}
-                    <div className="px-3 pb-1.5 text-[10px] text-slate-400 text-right">
+                    <div className="px-3.5 pb-2 text-[10px] text-slate-400 text-right">
                         prévia
                     </div>
                 </div>
                 {draft.buttons.enabled ? (
-                    <div className="max-w-[min(100%,300px)] space-y-1">
+                    <div className="w-full max-w-[340px] mx-auto space-y-1.5">
                         {[
                             draft.buttons.grantText.trim() ||
                                 "Sim, quero ofertas",
@@ -172,7 +174,7 @@ export function BulletinTemplateEditorDialog({
                         ].map((label) => (
                             <div
                                 key={label}
-                                className="rounded-xl bg-white border border-black/5 text-center text-[13px] font-medium text-[#027eb5] py-2 shadow-sm"
+                                className="rounded-xl bg-white border border-black/5 text-center text-[13px] font-medium text-[#027eb5] py-2.5 shadow-sm"
                             >
                                 {label}
                             </div>
@@ -180,7 +182,7 @@ export function BulletinTemplateEditorDialog({
                     </div>
                 ) : null}
             </div>
-            <p className="mt-3 text-[10px] text-center text-slate-500 leading-snug">
+            <p className="mt-4 text-[10px] text-center text-slate-500 leading-snug shrink-0">
                 Não é uma mensagem enviada. Valores são exemplos de variáveis.
             </p>
         </div>
@@ -195,12 +197,13 @@ export function BulletinTemplateEditorDialog({
                 }}
             >
                 <DialogContent
+                    size="wide"
                     showCloseButton={false}
                     className={cn(
                         "p-0 gap-0 overflow-hidden border-slate-200/80 bg-white",
-                        "w-[min(1120px,calc(100vw-1.25rem))] max-w-[1120px]",
-                        "h-[min(90vh,860px)] max-h-[90vh]",
-                        "rounded-2xl shadow-[0_24px_64px_-24px_rgba(15,23,42,0.45)]",
+                        "w-[min(1200px,calc(100vw-48px))]",
+                        "h-[min(90dvh,880px)] max-h-[90dvh]",
+                        "rounded-2xl shadow-[0_28px_80px_-28px_rgba(15,23,42,0.5)]",
                         "flex flex-col"
                     )}
                     onPointerDownOutside={(e) => {
@@ -215,17 +218,17 @@ export function BulletinTemplateEditorDialog({
                     }}
                 >
                     {/* Header */}
-                    <div className="shrink-0 flex items-start gap-3 px-4 sm:px-6 py-4 border-b border-slate-100 bg-white">
-                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#2563eb] text-white shadow-[0_8px_20px_-8px_rgba(37,99,235,0.7)]">
+                    <div className="shrink-0 flex items-start gap-3.5 px-5 sm:px-7 py-4 border-b border-slate-100 bg-white relative">
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#2563eb] text-white shadow-[0_8px_20px_-8px_rgba(37,99,235,0.7)]">
                             <FilePlus2 className="h-5 w-5" />
                         </div>
-                        <div className="min-w-0 flex-1 pr-8">
-                            <DialogTitle className="text-lg sm:text-xl font-bold tracking-tight text-[#0f2744]">
+                        <div className="min-w-0 flex-1 pr-10">
+                            <DialogTitle className="text-xl font-bold tracking-tight text-[#0f2744]">
                                 {mode === "create"
                                     ? "Novo template"
                                     : "Editar template"}
                             </DialogTitle>
-                            <DialogDescription className="text-sm text-slate-500 mt-0.5">
+                            <DialogDescription className="text-sm text-slate-500 mt-1 max-w-3xl">
                                 Configure o modelo local da biblioteca. O
                                 salvamento não envia o template à Meta.
                             </DialogDescription>
@@ -233,31 +236,17 @@ export function BulletinTemplateEditorDialog({
                         <button
                             type="button"
                             aria-label="Fechar"
-                            className="absolute right-4 top-4 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+                            className="absolute right-4 top-4 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
                             onClick={requestClose}
                             disabled={saving}
                         >
-                            <span className="sr-only">Fechar</span>
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                            >
-                                <path d="M18 6 6 18" />
-                                <path d="m6 6 12 12" />
-                            </svg>
+                            <X className="h-4 w-4" />
                         </button>
                     </div>
 
-                    {/* Steps */}
-                    <div className="shrink-0 px-4 sm:px-6 py-3 border-b border-slate-100 bg-slate-50/60">
-                        <div className="flex flex-wrap gap-1.5">
+                    {/* Steps — single row on desktop */}
+                    <div className="shrink-0 px-5 sm:px-7 py-3 border-b border-slate-100 bg-slate-50/70">
+                        <div className="flex items-center gap-2 overflow-x-auto sidebar-scroll pb-0.5">
                             {EDITOR_STEPS.map((s, i) => {
                                 const active = s.id === step;
                                 const done = i < stepIndex;
@@ -267,7 +256,7 @@ export function BulletinTemplateEditorDialog({
                                         type="button"
                                         onClick={() => setStep(s.id)}
                                         className={cn(
-                                            "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
+                                            "inline-flex shrink-0 items-center gap-2 rounded-full px-3.5 py-2 text-[12px] font-medium transition-colors whitespace-nowrap",
                                             active
                                                 ? "bg-[#2563eb] text-white shadow-sm"
                                                 : done
@@ -291,9 +280,7 @@ export function BulletinTemplateEditorDialog({
                                                 s.short
                                             )}
                                         </span>
-                                        <span className="hidden sm:inline">
-                                            {s.label}
-                                        </span>
+                                        {s.label}
                                     </button>
                                 );
                             })}
@@ -304,9 +291,7 @@ export function BulletinTemplateEditorDialog({
                                 variant="ghost"
                                 size="sm"
                                 className="h-8 rounded-lg text-xs text-[#2563eb]"
-                                onClick={() =>
-                                    setMobilePreview((v) => !v)
-                                }
+                                onClick={() => setMobilePreview((v) => !v)}
                             >
                                 {mobilePreview
                                     ? "Voltar ao formulário"
@@ -315,24 +300,24 @@ export function BulletinTemplateEditorDialog({
                         </div>
                     </div>
 
-                    {/* Body */}
-                    <div className="flex-1 min-h-0 grid lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_360px]">
+                    {/* Body — horizontal split */}
+                    <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1.4fr)_minmax(360px,1fr)]">
                         <div
                             className={cn(
-                                "sidebar-scroll px-4 sm:px-6 py-4 min-h-0",
+                                "sidebar-scroll min-h-0 min-w-0 px-5 sm:px-7 py-5",
                                 mobilePreview && "hidden lg:block"
                             )}
                         >
                             {step === "info" && (
-                                <div className="space-y-4 max-w-2xl">
+                                <div className="space-y-5 w-full max-w-none">
                                     <p className="text-sm text-slate-500">
                                         Identifique o template na biblioteca
-                                        local. O nome técnico será usado na
-                                        Meta se você enviar depois.
+                                        local. O nome técnico será usado na Meta
+                                        se você enviar depois.
                                     </p>
-                                    <div className="grid gap-3 sm:grid-cols-2">
-                                        <div className="space-y-1.5">
-                                            <Label className="text-[#0f2744]">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-4">
+                                        <div className="space-y-2 min-w-0">
+                                            <Label className={labelClass}>
                                                 Nome técnico
                                             </Label>
                                             <Input
@@ -360,8 +345,8 @@ export function BulletinTemplateEditorDialog({
                                                 Apenas a–z, 0–9 e underscore
                                             </p>
                                         </div>
-                                        <div className="space-y-1.5">
-                                            <Label className="text-[#0f2744]">
+                                        <div className="space-y-2 min-w-0">
+                                            <Label className={labelClass}>
                                                 Nome de exibição
                                             </Label>
                                             <Input
@@ -377,8 +362,8 @@ export function BulletinTemplateEditorDialog({
                                                 placeholder="Boletim frete 1 carga"
                                             />
                                         </div>
-                                        <div className="space-y-1.5">
-                                            <Label className="text-[#0f2744]">
+                                        <div className="space-y-2 min-w-0">
+                                            <Label className={labelClass}>
                                                 Categoria
                                             </Label>
                                             <Select
@@ -409,8 +394,8 @@ export function BulletinTemplateEditorDialog({
                                                 </SelectContent>
                                             </Select>
                                         </div>
-                                        <div className="space-y-1.5">
-                                            <Label className="text-[#0f2744]">
+                                        <div className="space-y-2 min-w-0">
+                                            <Label className={labelClass}>
                                                 Cargas por mensagem
                                             </Label>
                                             <Select
@@ -445,8 +430,8 @@ export function BulletinTemplateEditorDialog({
                                                 </SelectContent>
                                             </Select>
                                         </div>
-                                        <div className="space-y-1.5 sm:col-span-2">
-                                            <Label className="text-[#0f2744]">
+                                        <div className="space-y-2 min-w-0 md:col-span-2">
+                                            <Label className={labelClass}>
                                                 Descrição
                                             </Label>
                                             <Input
@@ -467,22 +452,22 @@ export function BulletinTemplateEditorDialog({
                             )}
 
                             {step === "content" && (
-                                <div className="space-y-4 max-w-2xl">
+                                <div className="space-y-5 w-full">
                                     <p className="text-sm text-slate-500">
                                         Monte o conteúdo oficial do template.
                                         Use {"{{1}}"}, {"{{2}}"}… para
-                                        variáveis. Quebras de linha e emojis
-                                        são preservados.
+                                        variáveis. Quebras de linha e emojis são
+                                        preservados.
                                     </p>
-                                    <div className="space-y-1.5">
-                                        <div className="flex justify-between">
-                                            <Label className="text-[#0f2744]">
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <Label className={labelClass}>
                                                 Cabeçalho{" "}
                                                 <span className="text-slate-400 font-normal">
                                                     (opcional)
                                                 </span>
                                             </Label>
-                                            <span className="text-[11px] text-slate-400">
+                                            <span className="text-[11px] text-slate-400 tabular-nums shrink-0">
                                                 {draft.headerText.length}/60
                                             </span>
                                         </div>
@@ -498,14 +483,14 @@ export function BulletinTemplateEditorDialog({
                                             }
                                         />
                                     </div>
-                                    <div className="space-y-1.5">
-                                        <div className="flex justify-between">
-                                            <Label className="text-[#0f2744]">
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <Label className={labelClass}>
                                                 Corpo
                                             </Label>
                                             <span
                                                 className={cn(
-                                                    "text-[11px] tabular-nums",
+                                                    "text-[11px] tabular-nums shrink-0",
                                                     bodyOver
                                                         ? "text-red-600 font-medium"
                                                         : "text-slate-400"
@@ -515,7 +500,7 @@ export function BulletinTemplateEditorDialog({
                                             </span>
                                         </div>
                                         <Textarea
-                                            className="min-h-[220px] rounded-xl border-slate-200 font-mono text-xs leading-relaxed focus-visible:ring-[#2563eb]/30"
+                                            className="min-h-[240px] w-full rounded-xl border-slate-200 font-mono text-xs leading-relaxed focus-visible:ring-[#2563eb]/30"
                                             value={draft.bodyText}
                                             onChange={(e) =>
                                                 onBodyChange(e.target.value)
@@ -526,7 +511,7 @@ export function BulletinTemplateEditorDialog({
                                         />
                                         {bodyOver ? (
                                             <p className="text-xs text-red-600 inline-flex items-center gap-1.5">
-                                                <AlertTriangle className="h-3.5 w-3.5" />
+                                                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                                                 Corpo ultrapassa o limite Meta
                                                 de {META_BODY_MAX} caracteres.
                                             </p>
@@ -537,15 +522,15 @@ export function BulletinTemplateEditorDialog({
                                             </p>
                                         )}
                                     </div>
-                                    <div className="space-y-1.5">
-                                        <div className="flex justify-between">
-                                            <Label className="text-[#0f2744]">
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <Label className={labelClass}>
                                                 Rodapé{" "}
                                                 <span className="text-slate-400 font-normal">
                                                     (opcional)
                                                 </span>
                                             </Label>
-                                            <span className="text-[11px] text-slate-400">
+                                            <span className="text-[11px] text-slate-400 tabular-nums shrink-0">
                                                 {draft.footerText.length}/60
                                             </span>
                                         </div>
@@ -565,36 +550,41 @@ export function BulletinTemplateEditorDialog({
                             )}
 
                             {step === "vars" && (
-                                <div className="space-y-5 max-w-2xl">
+                                <div className="space-y-5 w-full">
                                     <div>
-                                        <p className="text-sm font-medium text-[#0f2744]">
+                                        <p className="text-sm font-semibold text-[#0f2744]">
                                             Variáveis → campos da carga
                                         </p>
-                                        <p className="text-sm text-slate-500 mt-0.5">
+                                        <p className="text-sm text-slate-500 mt-1">
                                             Mapeie cada {"{{n}}"} a um campo da
                                             carga e defina o exemplo enviado à
                                             Meta.
                                         </p>
                                     </div>
                                     {draft.fieldMappings.length === 0 ? (
-                                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
+                                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-500 text-center">
                                             Nenhuma variável no corpo. Inclua{" "}
                                             {"{{1}}"} no texto da etapa Conteúdo
                                             para mapear campos.
                                         </div>
                                     ) : (
-                                        <div className="space-y-2">
+                                        <div className="space-y-2.5">
                                             {draft.fieldMappings.map(
                                                 (m, i) => (
                                                     <div
                                                         key={i}
-                                                        className="rounded-xl border border-slate-200 bg-white p-3 grid gap-2 sm:grid-cols-[72px_1fr_1fr] items-center"
+                                                        className="rounded-xl border border-slate-200 bg-white p-3.5 grid grid-cols-1 sm:grid-cols-[80px_minmax(0,1fr)_minmax(0,1fr)] gap-3 items-end"
                                                     >
-                                                        <span className="inline-flex h-9 items-center justify-center rounded-lg bg-slate-100 font-mono text-xs font-semibold text-slate-600">
-                                                            {`{{${i + 1}}}`}
-                                                        </span>
-                                                        <div className="space-y-1">
-                                                            <Label className="text-[11px] text-slate-400">
+                                                        <div className="space-y-1.5">
+                                                            <Label className="text-[11px] text-slate-400 whitespace-nowrap">
+                                                                Variável
+                                                            </Label>
+                                                            <span className="inline-flex h-10 w-full items-center justify-center rounded-lg bg-slate-100 font-mono text-xs font-semibold text-slate-600">
+                                                                {`{{${i + 1}}}`}
+                                                            </span>
+                                                        </div>
+                                                        <div className="space-y-1.5 min-w-0">
+                                                            <Label className="text-[11px] text-slate-400 whitespace-nowrap">
                                                                 Campo da carga
                                                             </Label>
                                                             <Select
@@ -619,7 +609,7 @@ export function BulletinTemplateEditorDialog({
                                                                     );
                                                                 }}
                                                             >
-                                                                <SelectTrigger className="h-9 rounded-lg text-xs border-slate-200">
+                                                                <SelectTrigger className="h-10 w-full rounded-lg text-xs border-slate-200">
                                                                     <SelectValue />
                                                                 </SelectTrigger>
                                                                 <SelectContent>
@@ -644,12 +634,12 @@ export function BulletinTemplateEditorDialog({
                                                                 </SelectContent>
                                                             </Select>
                                                         </div>
-                                                        <div className="space-y-1">
-                                                            <Label className="text-[11px] text-slate-400">
+                                                        <div className="space-y-1.5 min-w-0">
+                                                            <Label className="text-[11px] text-slate-400 whitespace-nowrap">
                                                                 Exemplo Meta
                                                             </Label>
                                                             <Input
-                                                                className="h-9 rounded-lg text-xs border-slate-200"
+                                                                className="h-10 w-full rounded-lg text-xs border-slate-200"
                                                                 value={
                                                                     draft
                                                                         .exampleRow[
@@ -686,22 +676,21 @@ export function BulletinTemplateEditorDialog({
                                     )}
 
                                     <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div>
-                                                <p className="text-sm font-medium text-[#0f2744]">
+                                        <div className="flex items-start justify-between gap-4">
+                                            <div className="min-w-0">
+                                                <p className="text-sm font-semibold text-[#0f2744]">
                                                     Botões interativos
                                                 </p>
-                                                <p className="text-[11px] text-slate-500 mt-0.5 max-w-md">
+                                                <p className="text-[11px] text-slate-500 mt-1 max-w-xl">
                                                     Solicitar confirmação de
                                                     recebimento de ofertas
                                                     (QUICK_REPLY · máx. 25
                                                     caracteres). Templates
-                                                    APPROVED exigem nova
-                                                    versão.
+                                                    APPROVED exigem nova versão.
                                                 </p>
                                             </div>
                                             <div className="flex items-center gap-2 shrink-0">
-                                                <span className="text-xs text-slate-500">
+                                                <span className="text-xs text-slate-500 whitespace-nowrap">
                                                     {draft.buttons.enabled
                                                         ? "Ativado"
                                                         : "Desativado"}
@@ -725,13 +714,13 @@ export function BulletinTemplateEditorDialog({
                                             </div>
                                         </div>
                                         {draft.buttons.enabled && (
-                                            <div className="grid gap-3 sm:grid-cols-2">
-                                                <div className="space-y-1">
-                                                    <Label className="text-xs">
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                <div className="space-y-1.5 min-w-0">
+                                                    <Label className="text-xs whitespace-nowrap">
                                                         Botão positivo
                                                     </Label>
                                                     <Input
-                                                        className="h-9 rounded-lg text-sm border-slate-200"
+                                                        className="h-10 w-full rounded-lg text-sm border-slate-200"
                                                         maxLength={25}
                                                         value={
                                                             draft.buttons
@@ -759,12 +748,12 @@ export function BulletinTemplateEditorDialog({
                                                         /25
                                                     </p>
                                                 </div>
-                                                <div className="space-y-1">
-                                                    <Label className="text-xs">
+                                                <div className="space-y-1.5 min-w-0">
+                                                    <Label className="text-xs whitespace-nowrap">
                                                         Botão negativo
                                                     </Label>
                                                     <Input
-                                                        className="h-9 rounded-lg text-sm border-slate-200"
+                                                        className="h-10 w-full rounded-lg text-sm border-slate-200"
                                                         maxLength={25}
                                                         value={
                                                             draft.buttons
@@ -799,25 +788,25 @@ export function BulletinTemplateEditorDialog({
                             )}
 
                             {step === "review" && (
-                                <div className="space-y-4 max-w-2xl">
+                                <div className="space-y-4 w-full">
                                     <p className="text-sm text-slate-500">
                                         Confira o resumo antes de salvar na
                                         biblioteca local.
                                     </p>
-                                    <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm">
-                                        <div>
+                                    <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4 rounded-2xl border border-slate-200 bg-white p-5 text-sm">
+                                        <div className="min-w-0">
                                             <dt className="text-[11px] text-slate-400">
                                                 Nome técnico
                                             </dt>
-                                            <dd className="font-mono font-medium text-[#0f2744]">
+                                            <dd className="font-mono font-medium text-[#0f2744] break-all mt-0.5">
                                                 {draft.technicalName || "—"}
                                             </dd>
                                         </div>
-                                        <div>
+                                        <div className="min-w-0">
                                             <dt className="text-[11px] text-slate-400">
                                                 Exibição
                                             </dt>
-                                            <dd className="font-medium text-[#0f2744]">
+                                            <dd className="font-medium text-[#0f2744] break-words mt-0.5">
                                                 {draft.displayName || "—"}
                                             </dd>
                                         </div>
@@ -825,19 +814,23 @@ export function BulletinTemplateEditorDialog({
                                             <dt className="text-[11px] text-slate-400">
                                                 Categoria
                                             </dt>
-                                            <dd>{draft.category}</dd>
+                                            <dd className="mt-0.5">
+                                                {draft.category}
+                                            </dd>
                                         </div>
                                         <div>
                                             <dt className="text-[11px] text-slate-400">
                                                 Cargas / msg
                                             </dt>
-                                            <dd>{draft.loadsPerMessage}</dd>
+                                            <dd className="mt-0.5">
+                                                {draft.loadsPerMessage}
+                                            </dd>
                                         </div>
                                         <div>
                                             <dt className="text-[11px] text-slate-400">
                                                 Variáveis
                                             </dt>
-                                            <dd>
+                                            <dd className="mt-0.5">
                                                 {draft.fieldMappings.length}
                                             </dd>
                                         </div>
@@ -845,7 +838,7 @@ export function BulletinTemplateEditorDialog({
                                             <dt className="text-[11px] text-slate-400">
                                                 Botões
                                             </dt>
-                                            <dd>
+                                            <dd className="mt-0.5">
                                                 {draft.buttons.enabled
                                                     ? "QUICK_REPLY ativos"
                                                     : "Desativados"}
@@ -884,20 +877,18 @@ export function BulletinTemplateEditorDialog({
 
                         <aside
                             className={cn(
-                                "border-l border-slate-100 bg-slate-50/40 p-4 min-h-0 sidebar-scroll",
-                                mobilePreview
-                                    ? "block"
-                                    : "hidden lg:block"
+                                "border-t lg:border-t-0 lg:border-l border-slate-100 bg-slate-50/50 p-4 sm:p-5 min-h-0 min-w-0 sidebar-scroll",
+                                mobilePreview ? "block" : "hidden lg:block"
                             )}
                         >
-                            <div className="lg:sticky lg:top-0">
+                            <div className="h-full min-h-[320px] lg:sticky lg:top-0">
                                 {WhatsAppPreview}
                             </div>
                         </aside>
                     </div>
 
                     {/* Footer */}
-                    <div className="shrink-0 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-3 px-4 sm:px-6 py-3.5 border-t border-slate-100 bg-white">
+                    <div className="shrink-0 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-5 sm:px-7 py-3.5 border-t border-slate-100 bg-white">
                         <div className="flex items-center gap-2">
                             <Button
                                 type="button"
@@ -928,7 +919,7 @@ export function BulletinTemplateEditorDialog({
                         </div>
                         <div className="flex items-center gap-2 justify-end">
                             {dirty && (
-                                <span className="text-[11px] text-amber-700 hidden sm:inline">
+                                <span className="text-[11px] text-amber-700 hidden sm:inline whitespace-nowrap">
                                     Alterações não salvas
                                 </span>
                             )}
@@ -966,8 +957,8 @@ export function BulletinTemplateEditorDialog({
                             Descartar alterações?
                         </AlertDialogTitle>
                         <AlertDialogDescription>
-                            Há alterações não salvas neste template. Se
-                            fechar agora, o trabalho será perdido.
+                            Há alterações não salvas neste template. Se fechar
+                            agora, o trabalho será perdido.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
