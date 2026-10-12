@@ -20,6 +20,8 @@ export const CAMPAIGN_PURPOSES = [
     "authentication",
     "transactional",
     "other",
+    /** Texto livre: envio pelo WhatsApp conectado (Baileys) com o número da Datafy. */
+    "texto_livre",
 ] as const;
 
 export type CampaignPurpose = (typeof CAMPAIGN_PURPOSES)[number];

@@ -15,7 +15,11 @@ import {
     normalizeWaId,
 } from "@/modules/datafy/chat/window";
 
-export type SendModality = "template_approved" | "service_window" | "none";
+export type SendModality =
+    | "template_approved"
+    | "service_window"
+    | "baileys_freeform"
+    | "none";
 
 export type TemplatePartLite = {
     templateName?: string | null;
@@ -48,6 +52,26 @@ export function purposeAllowsServiceWindowFreeform(
     return p === "utility" || p === "transactional";
 }
 
+/**
+ * Texto livre: o texto sai pelo WhatsApp conectado (Baileys) com o número
+ * cadastrado na Datafy. Não usa template nem a janela de 24h da API oficial.
+ */
+export function purposeUsesBaileysFreeform(
+    purpose: string | null | undefined
+): boolean {
+    return String(purpose || "").toLowerCase() === "texto_livre";
+}
+
+/** Utilidade, transacional e texto livre não exigem consentimento prévio. */
+export function purposeSkipsConsentGate(
+    purpose: string | null | undefined
+): boolean {
+    return (
+        purposeAllowsServiceWindowFreeform(purpose) ||
+        purposeUsesBaileysFreeform(purpose)
+    );
+}
+
 export function hasApprovedTemplateContent(opts: {
     contentKind?: string | null;
     templateName?: string | null;
@@ -78,9 +102,10 @@ export function hasApprovedTemplateContent(opts: {
 export const META_INTERACTIVE_BODY_MAX = 1024;
 
 /**
- * Per-recipient send decision for utility/transactional campaigns.
- * Freeform body on utility/transactional → send immediately (disparador).
- * APPROVED template remains available as alternative.
+ * Per-recipient send decision.
+ * Texto livre só é entrega real com a janela de 24h aberta.
+ * Fora dela a Datafy responde HTTP 200 + wamid e a Meta não entrega (131047).
+ * Template APPROVED é o único envio real com a janela fechada.
  */
 export type RecipientSendMode = "template" | "freeform" | "skip_no_window";
 
@@ -91,9 +116,7 @@ export function resolveRecipientSendMode(opts: {
     windowOpen: boolean;
 }): RecipientSendMode {
     const freeformOk =
-        opts.purposeAllowsFreeform && opts.hasFreeformBody;
-    // Utilidade/Transacional: texto livre → disparo real imediato (Datafy).
-    // Janela 24h NÃO bloqueia mais este caminho.
+        opts.purposeAllowsFreeform && opts.hasFreeformBody && opts.windowOpen;
     if (freeformOk) return "freeform";
     if (opts.hasApprovedTemplate) return "template";
     return "skip_no_window";
@@ -125,28 +148,47 @@ export function assessRealSendReadiness(opts: {
         consentEligibleCount - openWindowCount
     );
 
+    const baileysFreeform = purposeUsesBaileysFreeform(opts.purpose);
+
     if (consentEligibleCount <= 0) {
         blockReason =
             "Nenhum destinatário elegível para envio. Importe números válidos ou selecione contatos no CRM.";
         statusLabel = "Bloqueado — sem destinatários elegíveis";
-    } else if (
-        purposeAllowsServiceWindow &&
-        opts.hasFreeformBody
-    ) {
-        // Utilidade / Transacional + texto (Envio Direto / boletim completo):
-        // aprovado para disparo imediato de todos os elegíveis.
-        modality = "service_window";
+    } else if (baileysFreeform && opts.hasFreeformBody) {
+        modality = "baileys_freeform";
         realSendReady = true;
         technicallySendableCount = consentEligibleCount;
         needsTemplateCount = 0;
-        statusLabel = "Aprovado — Envio Direto (Utilidade/Transacional)";
+        statusLabel = "Texto livre — WhatsApp conectado (Baileys)";
         blockReason = null;
+    } else if (baileysFreeform) {
+        blockReason =
+            "Informe o texto da mensagem na Etapa 1. Texto livre envia pelo WhatsApp conectado, com o número da Datafy, sem template da Meta.";
+        statusLabel = "Bloqueado — sem texto da mensagem";
     } else if (opts.hasApprovedTemplate) {
         modality = "template_approved";
         realSendReady = true;
         technicallySendableCount = consentEligibleCount;
         needsTemplateCount = 0;
         statusLabel = "Aprovado — template APPROVED";
+    } else if (
+        purposeAllowsServiceWindow &&
+        opts.hasFreeformBody &&
+        openWindowCount > 0
+    ) {
+        // Texto livre só chega em quem escreveu nas últimas 24h.
+        modality = "service_window";
+        realSendReady = true;
+        technicallySendableCount = openWindowCount;
+        needsTemplateCount = consentEligibleCount - openWindowCount;
+        statusLabel = "Texto livre — só quem tem janela de 24h aberta";
+        blockReason = null;
+    } else if (purposeAllowsServiceWindow && opts.hasFreeformBody) {
+        blockReason =
+            "A Meta não entrega texto livre com a janela de 24h fechada. A API responde 200 e devolve um protocolo, mas o celular não recebe (erro 131047). Envio real exige template APPROVED ou o cliente ter escrito para o WhatsApp oficial nas últimas 24 horas.";
+        statusLabel = "Bloqueado — janela fechada (API aceita e não entrega)";
+        technicallySendableCount = 0;
+        needsTemplateCount = consentEligibleCount;
     } else if (!purposeAllowsServiceWindow) {
         blockReason =
             "Marketing exige template APPROVED para envio real.";

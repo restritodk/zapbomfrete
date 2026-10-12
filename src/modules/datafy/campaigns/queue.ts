@@ -10,7 +10,12 @@ import {
     brazilianWaIdVariants,
     normalizeWaId,
 } from "@/modules/datafy/chat/window";
+import { normalizeBrazilianPhone } from "@/lib/phone-br";
 import { emitDatafyEvent } from "@/modules/datafy/chat/realtime";
+import {
+    serializeConversation,
+    serializeMessage,
+} from "@/modules/datafy/chat/persist";
 import {
     CAMPAIGN_LOCK_TTL_MS,
     CAMPAIGN_ORG_DEFAULT,
@@ -22,13 +27,19 @@ import {
     CampaignError,
     setStatus,
 } from "./service";
-import { buildTemplateComponents } from "./variables";
+import { buildTemplateComponents, renderCampaignFreeform } from "./variables";
+import {
+    resolveBaileysSessionForDatafyNumber,
+    sendBaileysCampaignText,
+} from "./baileys-freeform";
 import { evaluateEligibility } from "./eligibility";
 import { partClientMessageId, resolveCampaignParts } from "./parts";
 import {
     hasApprovedTemplateContent,
     META_INTERACTIVE_BODY_MAX,
     purposeAllowsServiceWindowFreeform,
+    purposeUsesBaileysFreeform,
+    recipientHasOpenServiceWindow,
     resolveRecipientSendMode,
 } from "./send-readiness";
 import {
@@ -167,6 +178,196 @@ async function ensureConversation(waId: string, contactName: string | null) {
     });
 }
 
+async function sendRecipientViaBaileys(opts: {
+    campaign: {
+        id: string;
+        delayMs: number;
+        messageBody?: string | null;
+    };
+    recipient: {
+        id: string;
+        waId: string;
+        fullName: string | null;
+        company: string | null;
+    };
+    parts: CampaignMessagePart[];
+}) {
+    const { campaign, recipient, parts } = opts;
+    let session: Awaited<ReturnType<typeof resolveBaileysSessionForDatafyNumber>>;
+    try {
+        session = await resolveBaileysSessionForDatafyNumber();
+    } catch (e) {
+        const msg = (
+            e instanceof Error
+                ? e.message
+                : "WhatsApp conectado indisponível para Texto livre"
+        ).slice(0, 500);
+        await prisma.datafyCampaignRecipient.update({
+            where: { id: recipient.id },
+            data: {
+                status: "failed",
+                failedAt: new Date(),
+                lastError: msg,
+            },
+        });
+        return;
+    }
+
+    const toWaId =
+        normalizeBrazilianPhone(recipient.waId) || normalizeWaId(recipient.waId);
+    if (!toWaId || toWaId.length < 10) {
+        await prisma.datafyCampaignRecipient.update({
+            where: { id: recipient.id },
+            data: {
+                status: "failed",
+                failedAt: new Date(),
+                lastError: "Destinatário com telefone inválido",
+            },
+        });
+        return;
+    }
+
+    const bodies = parts
+        .map((p) => (p.bodyText || campaign.messageBody || "").trim())
+        .filter(Boolean);
+    const texts = bodies.length
+        ? bodies
+        : [(campaign.messageBody || "").trim()].filter(Boolean);
+    if (!texts.length) {
+        await prisma.datafyCampaignRecipient.update({
+            where: { id: recipient.id },
+            data: {
+                status: "failed",
+                failedAt: new Date(),
+                lastError: "Texto livre sem conteúdo para enviar",
+            },
+        });
+        return;
+    }
+
+    const conversation = await ensureConversation(toWaId, recipient.fullName);
+
+    try {
+        let lastKey = "";
+        for (let i = 0; i < texts.length; i++) {
+            if (i > 0) {
+                const delayMs = normalizeCampaignDelayMs(campaign.delayMs, {
+                    allowLegacyBelowMin: true,
+                });
+                const ready = await waitForSendSlot(campaign.id, delayMs);
+                if (!ready) return;
+                const claimed = await claimCampaignSendSlot(campaign.id, {
+                    delayMs,
+                });
+                if (!claimed.ok) return;
+            }
+
+            const text = renderCampaignFreeform(texts[i], {
+                fullName: recipient.fullName,
+                company: recipient.company,
+                waId: toWaId,
+            }).trim();
+            if (!text) continue;
+
+            const { keyId } = await sendBaileysCampaignText(
+                session.sessionId,
+                toWaId,
+                text
+            );
+            lastKey = keyId;
+            const cmid = `camp_${campaign.id}_${toWaId}_b${i}`;
+            const preview = text.slice(0, 280);
+            const existing = await prisma.datafyMessage.findUnique({
+                where: { clientMessageId: cmid },
+            });
+            const saved = existing
+                ? await prisma.datafyMessage.update({
+                      where: { id: existing.id },
+                      data: {
+                          wamid: keyId,
+                          body: text,
+                          status: "sent",
+                          providerTimestamp: new Date(),
+                      },
+                  })
+                : await prisma.datafyMessage.create({
+                      data: {
+                          conversationId: conversation.id,
+                          clientMessageId: cmid,
+                          wamid: keyId,
+                          direction: "outbound",
+                          type: "text",
+                          body: text,
+                          status: "sent",
+                          providerTimestamp: new Date(),
+                          metadata: {
+                              campaignId: campaign.id,
+                              campaignRecipientId: recipient.id,
+                              partIndex: i,
+                              transport: "baileys",
+                              sessionId: session.sessionId,
+                              senderPhone: session.phone,
+                          } as Prisma.InputJsonValue,
+                      },
+                  });
+            emitDatafyEvent("datafy.message", {
+                conversationId: conversation.id,
+                message: serializeMessage(saved),
+            });
+
+            const done = i === texts.length - 1;
+            await prisma.datafyCampaignRecipient.update({
+                where: { id: recipient.id },
+                data: {
+                    status: done ? "sent" : "sending",
+                    waId: toWaId,
+                    clientMessageId: `camp_${campaign.id}_${toWaId}_b0`,
+                    wamid: keyId,
+                    datafyMessageId: saved.id,
+                    conversationId: conversation.id,
+                    sentAt: new Date(),
+                    acceptedAt: done ? new Date() : undefined,
+                    lastError: null,
+                    errorCode: null,
+                },
+            });
+
+            const conv = await prisma.datafyConversation.update({
+                where: { id: conversation.id },
+                data: {
+                    lastMessagePreview: preview,
+                    lastMessageAt: new Date(),
+                },
+                include: {
+                    assignedTo: {
+                        select: { id: true, name: true, email: true },
+                    },
+                },
+            });
+            emitDatafyEvent("datafy.conversation", {
+                conversation: serializeConversation(conv),
+            });
+        }
+
+        if (!lastKey) {
+            throw new Error("Texto livre ficou vazio depois das variáveis");
+        }
+    } catch (e) {
+        const msg = (
+            e instanceof Error ? e.message : "Falha no envio pelo WhatsApp conectado"
+        ).slice(0, 500);
+        await prisma.datafyCampaignRecipient.update({
+            where: { id: recipient.id },
+            data: {
+                status: "failed",
+                failedAt: new Date(),
+                lastError: msg,
+                conversationId: conversation.id,
+            },
+        });
+    }
+}
+
 async function sendOneRecipient(
     campaign: {
         id: string;
@@ -196,8 +397,12 @@ async function sendOneRecipient(
         return;
     }
 
-    // Re-check consent/eligibility immediately before send (Phase 9)
-    {
+    // Re-check eligibility before send.
+    // Utilidade/Transacional: não bloqueia por consentimento (botões coletam depois).
+    const purposeAllowsDirect = purposeAllowsServiceWindowFreeform(
+        campaign.purpose
+    );
+    if (!purposeAllowsDirect) {
         const contact = recipient.crmContactId
             ? await prisma.crmContact.findUnique({
                   where: { id: recipient.crmContactId },
@@ -239,7 +444,8 @@ async function sendOneRecipient(
             }
         } else if (
             campaign.requireConsent &&
-            (campaign.purpose === "marketing" || campaign.purpose === "other") &&
+            (campaign.purpose === "marketing" ||
+                campaign.purpose === "other") &&
             !campaign.dryRun
         ) {
             await prisma.datafyCampaignRecipient.update({
@@ -304,6 +510,15 @@ async function sendOneRecipient(
         return;
     }
 
+    if (purposeUsesBaileysFreeform(fullCampaign.purpose)) {
+        await sendRecipientViaBaileys({
+            campaign: fullCampaign,
+            recipient,
+            parts,
+        });
+        return;
+    }
+
     const hasTemplate = hasApprovedTemplateContent({
         contentKind: fullCampaign.contentKind,
         templateName: fullCampaign.templateName,
@@ -347,28 +562,28 @@ async function sendOneRecipient(
         recipient.fullName
     );
 
-    // Utilidade/Transacional + texto → freeform imediato pelo número Datafy.
-    // Não bloquear por janela 24h (disparador real).
-    let recipientMode = resolveRecipientSendMode({
+    // Texto livre fora da janela: a Datafy devolve HTTP 200 + wamid e a Meta
+    // não entrega (131047). Não marcar isso como enviado.
+    const windowOpen = await recipientHasOpenServiceWindow(recipient.waId);
+    const recipientMode = resolveRecipientSendMode({
         hasApprovedTemplate: hasTemplate,
         purposeAllowsFreeform,
         hasFreeformBody,
-        windowOpen: true,
+        windowOpen,
     });
-    if (purposeAllowsFreeform && hasFreeformBody) {
-        recipientMode = "freeform";
-    } else if (hasTemplate) {
-        recipientMode = "template";
-    }
 
     if (recipientMode === "skip_no_window") {
+        const closedWindow =
+            purposeAllowsFreeform && hasFreeformBody && !windowOpen;
         await prisma.datafyCampaignRecipient.update({
             where: { id: recipient.id },
             data: {
                 status: "failed",
                 failedAt: new Date(),
-                lastError:
-                    "Sem conteúdo enviável (texto livre ou template APPROVED)",
+                errorCode: closedWindow ? 131047 : null,
+                lastError: closedWindow
+                    ? "A Meta não entrega texto livre com a janela de 24h fechada (erro 131047). A API aceita o envio e devolve um protocolo, mas o celular não recebe. Este contato nunca escreveu para o WhatsApp oficial. Envio real exige template APPROVED ou resposta do cliente nas últimas 24 horas."
+                    : "Sem conteúdo enviável (texto livre na janela de 24h ou template APPROVED)",
             },
         });
         return;
@@ -521,10 +736,19 @@ async function sendPartsSequentially(opts: {
             campaign.messageBody ||
             ""
         ).trim();
-        const preview = (useTemplate ? part.bodyText : freeformText).slice(
-            0,
-            280
-        );
+        const chatBody = (
+            useTemplate ? part.bodyText || "" : freeformText
+        ).trim();
+        const preview = chatBody.slice(0, 280);
+        const toWaId =
+            normalizeBrazilianPhone(recipient.waId) ||
+            normalizeWaId(recipient.waId);
+        if (!toWaId || toWaId.length < 10) {
+            throw new DatafyApiError(
+                `Destinatário com telefone inválido: ${recipient.waId}`,
+                400
+            );
+        }
 
         let messageId = existingMsg?.id;
         let wamid: string | null = null;
@@ -547,7 +771,7 @@ async function sendPartsSequentially(opts: {
                 {
                     fullName: recipient.fullName,
                     company: recipient.company,
-                    waId: recipient.waId,
+                    waId: toWaId,
                 },
                 { headerImageUrl: headerUrl }
             );
@@ -559,7 +783,7 @@ async function sendPartsSequentially(opts: {
                         clientMessageId: cmid,
                         direction: "outbound",
                         type: "template",
-                        body: preview,
+                        body: chatBody || preview,
                         status: "pending",
                         metadata: {
                             campaignId: campaign.id,
@@ -575,7 +799,7 @@ async function sendPartsSequentially(opts: {
             }
 
             const res = await client.sendTemplate(phoneNumberId, {
-                to: normalizeWaId(recipient.waId),
+                to: toWaId,
                 name: resolvedTemplateName,
                 languageCode: resolvedTemplateLanguage,
                 components,
@@ -599,13 +823,17 @@ async function sendPartsSequentially(opts: {
             const { parseCampaignConsentButtons, toInteractiveSendButtons } =
                 await import("@/modules/crm/consent/campaign-buttons");
             const consentBtns = parseCampaignConsentButtons(
-                (campaign as { interactiveButtons?: unknown }).interactiveButtons
+                (campaign as { interactiveButtons?: unknown })
+                    .interactiveButtons
             );
             const interactiveButtons = toInteractiveSendButtons(consentBtns);
             const useInteractive = interactiveButtons.length > 0;
+            // Utilidade/Transacional com botões: sempre texto completo + botões
+            // num segundo balão (consentimento pós-recebimento).
             const detachedInteractive =
                 useInteractive &&
-                freeformText.length > META_INTERACTIVE_BODY_MAX;
+                (purposeAllowsServiceWindowFreeform(opts.purpose) ||
+                    freeformText.length > META_INTERACTIVE_BODY_MAX);
 
             if (!messageId) {
                 const pending = await prisma.datafyMessage.create({
@@ -613,16 +841,14 @@ async function sendPartsSequentially(opts: {
                         conversationId,
                         clientMessageId: cmid,
                         direction: "outbound",
-                        type:
-                            useInteractive && !detachedInteractive
-                                ? "interactive"
-                                : "text",
-                        body: preview,
+                        type: "text",
+                        body: chatBody || preview,
                         status: "pending",
                         metadata: {
                             campaignId: campaign.id,
                             campaignRecipientId: recipient.id,
                             partIndex: part.index,
+                            to: toWaId,
                             sendMode: detachedInteractive
                                 ? "service_window_freeform_plus_interactive"
                                 : useInteractive
@@ -637,52 +863,102 @@ async function sendPartsSequentially(opts: {
                 messageId = pending.id;
             }
 
-            if (detachedInteractive) {
-                // Full bulletin/text first; buttons in a separate interactive balloon.
-                const resText = await client.sendText(phoneNumberId, {
-                    to: normalizeWaId(recipient.waId),
+            async function sendTextTo(to: string) {
+                return client.sendText(phoneNumberId, {
+                    to,
                     text: freeformText,
                     previewUrl: /https?:\/\//i.test(freeformText),
                 });
-                const resInt = await client.sendInteractiveButtons(
-                    phoneNumberId,
-                    {
-                        to: normalizeWaId(recipient.waId),
-                        bodyText: "Toque em uma opção para responder:",
-                        buttons: interactiveButtons,
+            }
+
+            const tryTos = brazilianWaIdVariants(toWaId);
+            let resText: Awaited<ReturnType<typeof sendTextTo>> | null = null;
+            let deliveredTo = toWaId;
+            let textError: unknown = null;
+            for (const candidate of tryTos) {
+                try {
+                    resText = await sendTextTo(candidate);
+                    if (resText.messages?.[0]?.id) {
+                        deliveredTo = candidate;
+                        break;
                     }
+                } catch (err) {
+                    textError = err;
+                    resText = null;
+                }
+            }
+            if (!resText?.messages?.[0]?.id) {
+                if (textError) throw textError;
+                throw new DatafyApiError(
+                    `API Datafy não retornou wamid para ${toWaId}`,
+                    502
                 );
-                wamid =
-                    resInt.messages?.[0]?.id ||
-                    resText.messages?.[0]?.id ||
-                    null;
-            } else if (useInteractive) {
-                const res = await client.sendInteractiveButtons(
-                    phoneNumberId,
-                    {
-                        to: normalizeWaId(recipient.waId),
-                        bodyText: freeformText,
-                        buttons: interactiveButtons,
+            }
+            wamid = resText.messages[0].id;
+
+            if (useInteractive) {
+                const buttonBody = detachedInteractive
+                    ? "Toque em uma opção para responder:"
+                    : freeformText;
+                try {
+                    const resButtons = await client.sendInteractiveButtons(
+                        phoneNumberId,
+                        {
+                            to: deliveredTo,
+                            bodyText: buttonBody,
+                            buttons: interactiveButtons,
+                        }
+                    );
+                    const buttonWamid = resButtons.messages?.[0]?.id || null;
+                    if (buttonWamid) {
+                        const buttonMsg = await prisma.datafyMessage.create({
+                            data: {
+                                conversationId,
+                                wamid: buttonWamid,
+                                clientMessageId: `${cmid}_btns`,
+                                direction: "outbound",
+                                type: "interactive",
+                                body: buttonBody,
+                                status: "accepted",
+                                providerTimestamp: new Date(),
+                                metadata: {
+                                    campaignId: campaign.id,
+                                    campaignRecipientId: recipient.id,
+                                    partIndex: part.index,
+                                    buttons: interactiveButtons,
+                                } as Prisma.InputJsonValue,
+                            },
+                        });
+                        emitDatafyEvent("datafy.message", {
+                            conversationId,
+                            message: serializeMessage(buttonMsg),
+                        });
                     }
-                );
-                wamid = res.messages?.[0]?.id || null;
-            } else {
-                const res = await client.sendText(phoneNumberId, {
-                    to: normalizeWaId(recipient.waId),
-                    text: freeformText,
-                    previewUrl: /https?:\/\//i.test(freeformText),
-                });
-                wamid = res.messages?.[0]?.id || null;
+                } catch {
+                    // Texto já foi aceito — botões são opcionais pós-envio.
+                }
             }
         }
 
-        await prisma.datafyMessage.update({
+        if (!wamid) {
+            throw new DatafyApiError(
+                `API Datafy aceitou sem wamid para ${toWaId}`,
+                502
+            );
+        }
+
+        const acceptedMsg = await prisma.datafyMessage.update({
             where: { id: messageId },
             data: {
                 wamid,
                 status: "accepted",
                 providerTimestamp: new Date(),
+                body: chatBody || undefined,
             },
+        });
+        emitDatafyEvent("datafy.message", {
+            conversationId,
+            message: serializeMessage(acceptedMsg),
         });
 
         partEntries[i] = {
@@ -698,6 +974,7 @@ async function sendPartsSequentially(opts: {
             where: { id: recipient.id },
             data: {
                 status: nextIndex >= parts.length ? "accepted" : "sending",
+                waId: toWaId,
                 clientMessageId: partEntries[0]?.clientMessageId || cmid,
                 wamid: wamid,
                 datafyMessageId: messageId,
@@ -713,12 +990,20 @@ async function sendPartsSequentially(opts: {
             },
         });
 
-        await prisma.datafyConversation.update({
+        const conv = await prisma.datafyConversation.update({
             where: { id: conversationId },
             data: {
-                lastMessagePreview: preview,
+                lastMessagePreview: preview || chatBody.slice(0, 280),
                 lastMessageAt: new Date(),
             },
+            include: {
+                assignedTo: {
+                    select: { id: true, name: true, email: true },
+                },
+            },
+        });
+        emitDatafyEvent("datafy.conversation", {
+            conversation: serializeConversation(conv),
         });
 
         if (i < parts.length - 1) {
@@ -797,78 +1082,95 @@ async function processCampaign(campaignId: string) {
         }
         if (!campaign || campaign.status !== "running") return;
 
-        const now = new Date();
-        const retryable = await prisma.datafyCampaignRecipient.findMany({
-            where: {
-                campaignId,
-                status: { in: ["pending", "queued", "sending"] },
-                OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
-            },
-            orderBy: { createdAt: "asc" },
-            take: Math.max(1, campaign.batchSize),
-        });
-
-        for (const r of retryable) {
-            // Re-read status — may have been paused/cancelled
-            const fresh = await prisma.datafyCampaign.findUnique({
-                where: { id: campaignId },
-                select: {
-                    id: true,
-                    status: true,
-                    templateName: true,
-                    templateLanguage: true,
-                    variableMapping: true,
-                    dryRun: true,
-                    purpose: true,
-                    requireConsent: true,
-                    delayMs: true,
-                    headerImageUrl: true,
-                    messageBody: true,
-                    interactiveButtons: true,
-                    contentKind: true,
-                    messageParts: true,
-                },
-            });
-            if (!fresh || fresh.status !== "running") break;
-
-            const delayMs = normalizeCampaignDelayMs(fresh.delayMs, {
-                allowLegacyBelowMin: true,
-            });
-
-            // Persistent pacing: do not start until nextSendEligibleAt
-            const ready = await waitForSendSlot(campaignId, delayMs);
-            if (!ready) break;
-
-            const slot = await claimCampaignSendSlot(campaignId, { delayMs });
-            if (!slot.ok) {
-                if (slot.reason === "not_running") break;
-                // Concurrent claim or clock skew — stop this tick
-                break;
-            }
-
-            await refreshCampaignLock(campaignId, WORKER_ID);
-            await sendOneRecipient({ ...fresh, delayMs }, r.id);
-            await refreshCounters(campaignId);
-
-            const updated = await prisma.datafyCampaign.findUnique({
-                where: { id: campaignId },
-            });
-            if (updated) {
-                emitDatafyEvent("datafy.campaign.progress", {
+        // Um start envia para todos os aptos da Etapa 2, não só o primeiro lote.
+        let keepSending = true;
+        let rounds = 0;
+        while (keepSending && rounds < 20_000) {
+            rounds++;
+            const now = new Date();
+            const retryable = await prisma.datafyCampaignRecipient.findMany({
+                where: {
                     campaignId,
-                    status: updated.status,
-                    totals: {
-                        eligible: updated.totalEligible,
-                        accepted: updated.totalAccepted,
-                        delivered: updated.totalDelivered,
-                        read: updated.totalRead,
-                        failed: updated.totalFailed,
-                        skipped: updated.totalSkipped,
-                        cancelled: updated.totalCancelled,
-                        queued: updated.totalQueued,
+                    status: { in: ["pending", "queued", "sending"] },
+                    OR: [
+                        { nextAttemptAt: null },
+                        { nextAttemptAt: { lte: now } },
+                    ],
+                },
+                orderBy: { createdAt: "asc" },
+                take: Math.max(1, campaign.batchSize),
+            });
+            if (!retryable.length) break;
+
+            for (const r of retryable) {
+                // Re-read status — may have been paused/cancelled
+                const fresh = await prisma.datafyCampaign.findUnique({
+                    where: { id: campaignId },
+                    select: {
+                        id: true,
+                        status: true,
+                        templateName: true,
+                        templateLanguage: true,
+                        variableMapping: true,
+                        dryRun: true,
+                        purpose: true,
+                        requireConsent: true,
+                        delayMs: true,
+                        headerImageUrl: true,
+                        messageBody: true,
+                        interactiveButtons: true,
+                        contentKind: true,
+                        messageParts: true,
                     },
-                    dryRun: updated.dryRun,
                 });
+                if (!fresh || fresh.status !== "running") {
+                    keepSending = false;
+                    break;
+                }
+
+                const delayMs = normalizeCampaignDelayMs(fresh.delayMs, {
+                    allowLegacyBelowMin: true,
+                });
+
+                // Persistent pacing: do not start until nextSendEligibleAt
+                const ready = await waitForSendSlot(campaignId, delayMs);
+                if (!ready) {
+                    keepSending = false;
+                    break;
+                }
+
+                const slot = await claimCampaignSendSlot(campaignId, {
+                    delayMs,
+                });
+                if (!slot.ok) {
+                    keepSending = false;
+                    break;
+                }
+
+                await refreshCampaignLock(campaignId, WORKER_ID);
+                await sendOneRecipient({ ...fresh, delayMs }, r.id);
+                await refreshCounters(campaignId);
+
+                const updated = await prisma.datafyCampaign.findUnique({
+                    where: { id: campaignId },
+                });
+                if (updated) {
+                    emitDatafyEvent("datafy.campaign.progress", {
+                        campaignId,
+                        status: updated.status,
+                        totals: {
+                            eligible: updated.totalEligible,
+                            accepted: updated.totalAccepted,
+                            delivered: updated.totalDelivered,
+                            read: updated.totalRead,
+                            failed: updated.totalFailed,
+                            skipped: updated.totalSkipped,
+                            cancelled: updated.totalCancelled,
+                            queued: updated.totalQueued,
+                        },
+                        dryRun: updated.dryRun,
+                    });
+                }
             }
         }
 

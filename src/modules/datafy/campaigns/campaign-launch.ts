@@ -7,6 +7,7 @@ import {
     assessRealSendReadiness,
     hasApprovedTemplateContent,
     purposeAllowsServiceWindowFreeform,
+    purposeUsesBaileysFreeform,
     type RealSendAssessment,
     type TemplatePartLite,
 } from "./send-readiness";
@@ -134,6 +135,7 @@ export function shouldAutoPickFallbackTemplate(opts: {
     openWindowCount: number;
     templateKey: string;
 }): boolean {
+    if (purposeUsesBaileysFreeform(opts.purpose)) return false;
     if (opts.eligibleCount <= 0) return false;
     if (opts.templateKey) return false;
     if ((opts.openWindowCount || 0) > 0) return false;

@@ -1,5 +1,6 @@
 import { normalizeBrazilianPhone } from "@/lib/phone-br";
 import type { CampaignPurpose } from "./constants";
+import { purposeSkipsConsentGate } from "./send-readiness";
 
 export type EligibilityContact = {
     id: string;
@@ -48,6 +49,15 @@ export function evaluateEligibility(
     if (!contact.active) {
         return { ok: false, reason: "inactive" };
     }
+
+    const purpose = String(opts.purpose || "marketing").toLowerCase();
+
+    // Utilidade / Transacional / Texto livre: todos os números válidos.
+    // Texto livre sai pelo Baileys. Consentimento não bloqueia o envio.
+    if (purposeSkipsConsentGate(purpose)) {
+        return { ok: true, waId };
+    }
+
     if (contact.consentStatus === "opted_out") {
         return { ok: false, reason: "opted_out" };
     }
@@ -55,7 +65,6 @@ export function evaluateEligibility(
         return { ok: false, reason: "denied" };
     }
 
-    const purpose = opts.purpose || "marketing";
     const needsConsent =
         opts.requireConsent &&
         (purpose === "marketing" || purpose === "other");

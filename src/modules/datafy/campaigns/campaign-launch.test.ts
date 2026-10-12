@@ -15,7 +15,7 @@ import { brazilianWaIdVariants } from "@/modules/datafy/chat/window";
 import { resolveRecipientSendMode } from "./send-readiness";
 
 describe("Iniciar disparo — Utilidade / Transacional", () => {
-    it("utility + 139 importados + texto livre habilita o botão sem janela", () => {
+    it("utility + texto livre com janela fechada não habilita envio real", () => {
         const s = evaluateDirectLaunchScenario({
             purpose: "utility",
             importedCount: 139,
@@ -27,13 +27,12 @@ describe("Iniciar disparo — Utilidade / Transacional", () => {
         });
         assert.equal(s.audiencePreserved, true);
         assert.equal(s.intervalOk, true);
-        assert.equal(s.buttonEnabled, true);
-        assert.equal(s.technicallySendableCount, 139);
-        assert.equal(s.needsTemplateCount, 0);
-        assert.equal(s.modality, "service_window");
+        assert.equal(s.buttonEnabled, false);
+        assert.equal(s.technicallySendableCount, 0);
+        assert.equal(s.needsTemplateCount, 139);
     });
 
-    it("transactional + texto livre habilita mesmo com 0 janelas", () => {
+    it("transactional + texto livre com 0 janelas não é envio real", () => {
         const s = evaluateDirectLaunchScenario({
             purpose: "transactional",
             importedCount: 139,
@@ -43,9 +42,8 @@ describe("Iniciar disparo — Utilidade / Transacional", () => {
             hasApprovedTemplate: false,
             delaySeconds: 15,
         });
-        assert.equal(s.buttonEnabled, true);
-        assert.equal(s.technicallySendableCount, 139);
-        assert.equal(s.modality, "service_window");
+        assert.equal(s.buttonEnabled, false);
+        assert.equal(s.technicallySendableCount, 0);
     });
 
     it("utility sem texto mantém botão desabilitado", () => {
@@ -158,7 +156,7 @@ describe("Iniciar disparo — Utilidade / Transacional", () => {
         );
     });
 
-    it("fila envia freeform para utilidade mesmo sem janela aberta", () => {
+    it("fila não trata texto livre sem janela como envio real", () => {
         assert.equal(
             resolveRecipientSendMode({
                 hasApprovedTemplate: false,
@@ -166,7 +164,7 @@ describe("Iniciar disparo — Utilidade / Transacional", () => {
                 hasFreeformBody: true,
                 windowOpen: false,
             }),
-            "freeform"
+            "skip_no_window"
         );
     });
 

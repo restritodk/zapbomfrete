@@ -76,6 +76,27 @@ export function buildTemplateComponents(
     return components;
 }
 
+/** Substitui {{fullName}} e os demais tokens CRM no texto que vai ao destinatário. */
+export function renderCampaignFreeform(
+    raw: string,
+    contact: ContactFields
+): string {
+    return String(raw || "").replace(
+        /\{\{(fullName|company|city|state|waId|category)\}\}/gi,
+        (_m, key: string) => {
+            const map: Record<string, string> = {
+                fullname: contact.fullName || "",
+                company: contact.company || "",
+                city: contact.city || "",
+                state: contact.state || "",
+                waid: contact.waId || "",
+                category: contact.category || "",
+            };
+            return map[String(key).toLowerCase()] ?? "";
+        }
+    );
+}
+
 /** Convert CRM tokens in free text to positional {{1}} {{2}} for Meta templates. */
 export function prepareTemplateBodyFromCopy(raw: string): {
     bodyText: string;

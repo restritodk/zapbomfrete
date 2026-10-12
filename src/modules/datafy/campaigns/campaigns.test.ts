@@ -74,10 +74,31 @@ describe("Eligibility & consent", () => {
         if (!r.ok) assert.equal(r.reason, "missing_consent");
     });
 
-    it("always rejects opted_out", () => {
+    it("utility/transactional send even without consent (buttons collect after)", () => {
+        for (const purpose of ["utility", "transactional", "texto_livre"] as const) {
+            for (const consentStatus of [
+                "unknown",
+                "opted_out",
+                "denied",
+                "granted",
+            ] as const) {
+                const r = evaluateEligibility(
+                    { ...base, consentStatus },
+                    { purpose, requireConsent: true }
+                );
+                assert.equal(
+                    r.ok,
+                    true,
+                    `${purpose}/${consentStatus} should be eligible`
+                );
+            }
+        }
+    });
+
+    it("marketing still rejects opted_out", () => {
         const r = evaluateEligibility(
             { ...base, consentStatus: "opted_out" },
-            { purpose: "utility", requireConsent: false }
+            { purpose: "marketing", requireConsent: true }
         );
         assert.equal(r.ok, false);
         if (!r.ok) assert.equal(r.reason, "opted_out");

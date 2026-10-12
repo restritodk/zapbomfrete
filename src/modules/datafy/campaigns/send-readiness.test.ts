@@ -4,6 +4,7 @@ import {
     assessRealSendReadiness,
     hasApprovedTemplateContent,
     purposeAllowsServiceWindowFreeform,
+    purposeUsesBaileysFreeform,
     resolveRecipientSendMode,
 } from "./send-readiness";
 
@@ -35,7 +36,7 @@ describe("Send readiness modalities", () => {
         assert.match(a.blockReason || "", /template APPROVED|marketing/i);
     });
 
-    it("allows utility freeform for all eligible (immediate dispatch)", () => {
+    it("allows utility freeform only for open 24h windows", () => {
         const a = assessRealSendReadiness({
             purpose: "utility",
             consentEligibleCount: 8,
@@ -45,12 +46,11 @@ describe("Send readiness modalities", () => {
         });
         assert.equal(a.realSendReady, true);
         assert.equal(a.modality, "service_window");
-        assert.equal(a.technicallySendableCount, 8);
-        assert.equal(a.needsTemplateCount, 0);
-        assert.match(a.statusLabel, /Aprovado/i);
+        assert.equal(a.technicallySendableCount, 3);
+        assert.equal(a.needsTemplateCount, 5);
     });
 
-    it("utility without window still approved when freeform body exists", () => {
+    it("blocks utility freeform when every window is closed", () => {
         const a = assessRealSendReadiness({
             purpose: "utility",
             consentEligibleCount: 2,
@@ -58,8 +58,9 @@ describe("Send readiness modalities", () => {
             hasApprovedTemplate: false,
             hasFreeformBody: true,
         });
-        assert.equal(a.realSendReady, true);
-        assert.equal(a.technicallySendableCount, 2);
+        assert.equal(a.realSendReady, false);
+        assert.equal(a.technicallySendableCount, 0);
+        assert.match(a.blockReason || "", /131047|janela/i);
     });
 
     it("distinguishes consent eligible from technical readiness", () => {
@@ -108,6 +109,36 @@ describe("Send readiness modalities", () => {
             false
         );
         assert.equal(purposeAllowsServiceWindowFreeform("utility"), true);
+        assert.equal(purposeUsesBaileysFreeform("texto_livre"), true);
+        assert.equal(purposeUsesBaileysFreeform("utility"), false);
+    });
+
+    it("sends texto livre to every eligible number without a template or window", () => {
+        const a = assessRealSendReadiness({
+            purpose: "texto_livre",
+            consentEligibleCount: 12,
+            openWindowCount: 0,
+            hasApprovedTemplate: false,
+            hasFreeformBody: true,
+        });
+        assert.equal(a.realSendReady, true);
+        assert.equal(a.modality, "baileys_freeform");
+        assert.equal(a.technicallySendableCount, 12);
+        assert.equal(a.needsTemplateCount, 0);
+        assert.equal(a.blockReason, null);
+    });
+
+    it("blocks texto livre without a message body", () => {
+        const a = assessRealSendReadiness({
+            purpose: "texto_livre",
+            consentEligibleCount: 4,
+            openWindowCount: 0,
+            hasApprovedTemplate: false,
+            hasFreeformBody: false,
+        });
+        assert.equal(a.realSendReady, false);
+        assert.equal(a.technicallySendableCount, 0);
+        assert.match(a.blockReason || "", /Etapa 1|texto/i);
     });
 
     it("accepts campaign-level APPROVED fallback on complete bulletin parts", () => {
@@ -128,7 +159,7 @@ describe("Send readiness modalities", () => {
         );
     });
 
-    it("resolves utility freeform for every eligible recipient", () => {
+    it("resolves freeform only inside the window, otherwise template", () => {
         assert.equal(
             resolveRecipientSendMode({
                 hasApprovedTemplate: true,
@@ -145,7 +176,7 @@ describe("Send readiness modalities", () => {
                 hasFreeformBody: true,
                 windowOpen: false,
             }),
-            "freeform"
+            "template"
         );
         assert.equal(
             resolveRecipientSendMode({
@@ -154,7 +185,7 @@ describe("Send readiness modalities", () => {
                 hasFreeformBody: true,
                 windowOpen: false,
             }),
-            "freeform"
+            "skip_no_window"
         );
     });
 });
