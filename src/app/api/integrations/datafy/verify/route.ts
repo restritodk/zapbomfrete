@@ -19,6 +19,12 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await datafyProvider.verifyConnection();
+    if (result.ok && result.verifiedName) {
+        const { syncVerifiedNameFromApi } = await import(
+            "@/modules/crm/org-profile"
+        );
+        await syncVerifiedNameFromApi(result.verifiedName);
+    }
     return NextResponse.json(
         {
             status: result.ok,
@@ -35,6 +41,7 @@ export async function POST(request: NextRequest) {
                           cliente_id: result.me.cliente_id || null,
                       }
                     : null,
+                verifiedName: result.verifiedName ?? null,
             },
         },
         { status: result.ok ? 200 : 400 }

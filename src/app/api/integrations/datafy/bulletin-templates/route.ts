@@ -342,6 +342,12 @@ export async function POST(request: NextRequest) {
             if (!wabaId) {
                 const verified = await datafyProvider.verifyConnection();
                 wabaId = verified.me?.waba_id || null;
+                if (verified.ok && verified.verifiedName) {
+                    const { syncVerifiedNameFromApi } = await import(
+                        "@/modules/crm/org-profile"
+                    );
+                    await syncVerifiedNameFromApi(verified.verifiedName);
+                }
             }
             if (!wabaId) {
                 return NextResponse.json(

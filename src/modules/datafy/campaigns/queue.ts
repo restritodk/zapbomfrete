@@ -27,7 +27,12 @@ import {
     CampaignError,
     setStatus,
 } from "./service";
-import { buildTemplateComponents, renderCampaignFreeform } from "./variables";
+import {
+    buildTemplateComponents,
+    renderCampaignFreeform,
+    type CampaignVariableContext,
+} from "./variables";
+import { resolveSenderVariableFields } from "@/modules/crm/org-profile";
 import {
     extractMetaErrorCode,
     formatMeta132000Message,
@@ -252,6 +257,16 @@ async function sendRecipientViaBaileys(opts: {
     }
 
     const conversation = await ensureConversation(toWaId, recipient.fullName);
+    const sender = await resolveSenderVariableFields(CAMPAIGN_ORG_DEFAULT);
+    const variableCtx: CampaignVariableContext = {
+        recipient: {
+            fullName: recipient.fullName,
+            waProfileName: conversation.contactName,
+            waId: toWaId,
+            category: null,
+        },
+        sender,
+    };
 
     try {
         let lastKey = "";
@@ -268,11 +283,7 @@ async function sendRecipientViaBaileys(opts: {
                 if (!claimed.ok) return;
             }
 
-            const text = renderCampaignFreeform(texts[i], {
-                fullName: recipient.fullName,
-                company: recipient.company,
-                waId: toWaId,
-            }).trim();
+            const text = renderCampaignFreeform(texts[i], variableCtx).trim();
             if (!text) continue;
 
             const { keyId } = await sendBaileysCampaignText(
@@ -567,6 +578,18 @@ async function sendOneRecipient(
         recipient.waId,
         recipient.fullName
     );
+    const senderFields = await resolveSenderVariableFields(
+        CAMPAIGN_ORG_DEFAULT
+    );
+    const variableCtx: CampaignVariableContext = {
+        recipient: {
+            fullName: recipient.fullName,
+            waProfileName: conversation.contactName,
+            waId: normalizeBrazilianPhone(recipient.waId) || recipient.waId,
+            category: null,
+        },
+        sender: senderFields,
+    };
 
     // Texto livre fora da janela: a Datafy devolve HTTP 200 + wamid e a Meta
     // não entrega (131047). Não marcar isso como enviado.
@@ -605,6 +628,7 @@ async function sendOneRecipient(
             delayMs: campaign.delayMs,
             sendMode: recipientMode,
             purpose: fullCampaign.purpose,
+            variableCtx,
         });
     } catch (e) {
         const apiErr = e instanceof DatafyApiError ? e : null;
@@ -694,11 +718,18 @@ async function sendPartsSequentially(opts: {
     delayMs: number;
     sendMode: "template" | "freeform";
     purpose: string;
+    variableCtx: CampaignVariableContext;
 }) {
     // Recipient-major: finish ALL parts for this recipient before the worker
     // moves to the next contact (processCampaign uses take:1 for multi-part).
     const parts = [...opts.parts].sort((a, b) => a.index - b.index);
-    const { campaign, recipient, conversationId, phoneNumberId } = opts;
+    const {
+        campaign,
+        recipient,
+        conversationId,
+        phoneNumberId,
+        variableCtx,
+    } = opts;
     const prev = (recipient.partStatuses || {}) as {
         nextPartIndex?: number;
         parts?: PartStatusEntry[];
@@ -755,13 +786,21 @@ async function sendPartsSequentially(opts: {
             continue;
         }
 
-        const freeformText = (
+        const rawFreeform = (
             part.bodyText ||
             campaign.messageBody ||
             ""
         ).trim();
+        // Always resolve {{fullName}}/{{company}}/{{city}}/{{state}} before send.
+        // Emojis and UTF-8 are preserved by renderCampaignFreeform.
+        const freeformText = renderCampaignFreeform(
+            rawFreeform,
+            variableCtx
+        ).trim();
         const chatBody = (
-            useTemplate ? part.bodyText || "" : freeformText
+            useTemplate
+                ? renderCampaignFreeform(part.bodyText || "", variableCtx)
+                : freeformText
         ).trim();
         const preview = chatBody.slice(0, 280);
         const toWaId =
@@ -822,9 +861,11 @@ async function sendPartsSequentially(opts: {
             const components = buildTemplateComponents(
                 mapping,
                 {
-                    fullName: recipient.fullName,
-                    company: recipient.company,
-                    waId: toWaId,
+                    ...variableCtx,
+                    recipient: {
+                        ...variableCtx.recipient,
+                        waId: toWaId,
+                    },
                 },
                 { headerImageUrl: headerUrl }
             );

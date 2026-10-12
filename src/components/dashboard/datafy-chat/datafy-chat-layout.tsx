@@ -135,17 +135,30 @@ export function DatafyChatLayout({
     const loadConversations = useCallback(async (q?: string) => {
         setLoadingList(true);
         try {
-            const params = new URLSearchParams();
-            if (q?.trim()) params.set("search", q.trim());
-            const res = await fetch(
-                `/api/channels/datafy/conversations?${params}`
-            );
-            const json = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                toast.error(json.message || "Falha ao carregar conversas");
-                return;
+            const all: DatafyConversationRow[] = [];
+            let cursor: string | null = null;
+            // O disparo da Etapa 2 cria uma conversa por número apto — carregar todas.
+            for (let page = 0; page < 50; page++) {
+                const params = new URLSearchParams();
+                params.set("limit", "100");
+                if (q?.trim()) params.set("search", q.trim());
+                if (cursor) params.set("cursor", cursor);
+                const res = await fetch(
+                    `/api/channels/datafy/conversations?${params}`
+                );
+                const json = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    toast.error(json.message || "Falha ao carregar conversas");
+                    return;
+                }
+                const batch = (json.data?.conversations ||
+                    []) as DatafyConversationRow[];
+                all.push(...batch);
+                const next = json.data?.nextCursor as string | null | undefined;
+                if (!json.data?.hasMore || !next) break;
+                cursor = next;
             }
-            setConversations(json.data?.conversations || []);
+            setConversations(all);
         } catch {
             toast.error("Erro ao carregar conversas");
         } finally {
@@ -504,8 +517,9 @@ export function DatafyChatLayout({
                     ) : conversations.length === 0 ? (
                         <div className="px-6 py-16 text-center text-sm text-muted-foreground">
                             <MessageSquare className="mx-auto mb-3 h-8 w-8 opacity-40" />
-                            Nenhuma conversa ainda. Mensagens recebidas pelo
-                            webhook aparecerão aqui automaticamente.
+                            Nenhuma conversa ainda. Mensagens recebidas e os
+                            disparos para os números aptos da Etapa 2 aparecem
+                            aqui.
                         </div>
                     ) : (
                         conversations.map((c) => {

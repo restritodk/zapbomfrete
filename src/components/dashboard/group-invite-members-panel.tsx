@@ -82,6 +82,10 @@ export function GroupInviteMembersPanel() {
     const [q, setQ] = useState("");
     const [filter, setFilter] = useState<"all" | "clicked" | "joined">("all");
     const [defaultUrl, setDefaultUrl] = useState("");
+    const [companyName, setCompanyName] = useState("");
+    const [city, setCity] = useState("");
+    const [stateUf, setStateUf] = useState("");
+    const [verifiedName, setVerifiedName] = useState<string | null>(null);
     const [savingUrl, setSavingUrl] = useState(false);
     const [confirmRow, setConfirmRow] = useState<Member | null>(null);
     const [evidence, setEvidence] = useState("");
@@ -93,7 +97,7 @@ export function GroupInviteMembersPanel() {
                 fetch(
                     `/api/crm/group-invite/members?status=${filter}&q=${encodeURIComponent(q)}`
                 ),
-                fetch("/api/crm/group-invite/settings"),
+                fetch("/api/crm/org-profile"),
             ]);
             const mJson = await mRes.json().catch(() => ({}));
             const sJson = await sRes.json().catch(() => ({}));
@@ -104,9 +108,12 @@ export function GroupInviteMembersPanel() {
                 );
             }
             if (sRes.ok) {
-                setDefaultUrl(
-                    sJson.data?.settings?.defaultGroupInviteUrl || ""
-                );
+                const p = sJson.data?.profile || {};
+                setDefaultUrl(p.defaultGroupInviteUrl || "");
+                setCompanyName(p.companyName || "");
+                setCity(p.city || "");
+                setStateUf(p.state || "");
+                setVerifiedName(p.verifiedNameFromApi || null);
             }
         } catch {
             toast.error("Falha ao carregar usuários do grupo");
@@ -130,11 +137,14 @@ export function GroupInviteMembersPanel() {
         }
         setSavingUrl(true);
         try {
-            const res = await fetch("/api/crm/group-invite/settings", {
+            const res = await fetch("/api/crm/org-profile", {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     defaultGroupInviteUrl: defaultUrl.trim() || null,
+                    companyName: companyName.trim() || null,
+                    city: city.trim() || null,
+                    state: stateUf.trim() || null,
                 }),
             });
             const json = await res.json().catch(() => ({}));
@@ -142,10 +152,12 @@ export function GroupInviteMembersPanel() {
                 toast.error(json.message || "Não foi possível salvar");
                 return;
             }
-            toast.success("Link padrão do grupo salvo");
-            setDefaultUrl(
-                json.data?.settings?.defaultGroupInviteUrl || ""
-            );
+            toast.success("Perfil da empresa salvo");
+            const p = json.data?.profile || {};
+            setDefaultUrl(p.defaultGroupInviteUrl || "");
+            setCompanyName(p.companyName || "");
+            setCity(p.city || "");
+            setStateUf(p.state || "");
         } finally {
             setSavingUrl(false);
         }
@@ -222,36 +234,77 @@ export function GroupInviteMembersPanel() {
                 <div className="flex items-center gap-2 text-slate-800">
                     <Link2 className="h-4 w-4 text-[#0969E8]" />
                     <p className="text-sm font-semibold">
-                        Link padrão do grupo (empresa)
+                        Perfil da empresa (variáveis e grupo)
                     </p>
                 </div>
                 <p className="text-xs text-slate-500">
-                    Usado para pré-preencher novas campanhas. Isolado por
-                    organização — nunca compartilhado.
+                    Alimenta {"{{company}}"}, {"{{city}}"} e {"{{state}}"} nas
+                    campanhas. O nome no cabeçalho do WhatsApp do destinatário
+                    («Usuário desconhecido») é o verified_name da Meta Business
+                    Manager — altere lá para mudar o título da conversa.
+                    {verifiedName
+                        ? ` Nome verificado na API: «${verifiedName}».`
+                        : ""}
                 </p>
-                <div className="flex flex-col sm:flex-row gap-2">
-                    <Input
-                        value={defaultUrl}
-                        onChange={(e) => setDefaultUrl(e.target.value)}
-                        disabled={!canManage}
-                        className="font-mono text-xs h-10 rounded-xl"
-                        placeholder="https://chat.whatsapp.com/…"
-                    />
-                    {canManage ? (
-                        <Button
-                            type="button"
-                            className="rounded-xl bg-[#0969E8] hover:bg-[#0858c4]"
-                            disabled={savingUrl}
-                            onClick={() => void saveDefaultUrl()}
-                        >
-                            {savingUrl ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                                "Salvar link"
-                            )}
-                        </Button>
-                    ) : null}
+                <div className="grid sm:grid-cols-3 gap-2">
+                    <div className="space-y-1 sm:col-span-3">
+                        <Label className="text-xs">Nome comercial</Label>
+                        <Input
+                            value={companyName}
+                            onChange={(e) => setCompanyName(e.target.value)}
+                            disabled={!canManage}
+                            className="h-10 rounded-xl"
+                            placeholder="Bom Frete Transportes Ltda"
+                        />
+                    </div>
+                    <div className="space-y-1">
+                        <Label className="text-xs">Cidade de origem</Label>
+                        <Input
+                            value={city}
+                            onChange={(e) => setCity(e.target.value)}
+                            disabled={!canManage}
+                            className="h-10 rounded-xl"
+                            placeholder="Rondonópolis"
+                        />
+                    </div>
+                    <div className="space-y-1">
+                        <Label className="text-xs">Estado (UF)</Label>
+                        <Input
+                            value={stateUf}
+                            onChange={(e) => setStateUf(e.target.value)}
+                            disabled={!canManage}
+                            className="h-10 rounded-xl uppercase"
+                            placeholder="MT"
+                            maxLength={2}
+                        />
+                    </div>
+                    <div className="space-y-1 sm:col-span-3">
+                        <Label className="text-xs">
+                            Link padrão do grupo WhatsApp
+                        </Label>
+                        <Input
+                            value={defaultUrl}
+                            onChange={(e) => setDefaultUrl(e.target.value)}
+                            disabled={!canManage}
+                            className="font-mono text-xs h-10 rounded-xl"
+                            placeholder="https://chat.whatsapp.com/…"
+                        />
+                    </div>
                 </div>
+                {canManage ? (
+                    <Button
+                        type="button"
+                        className="rounded-xl bg-[#0969E8] hover:bg-[#0858c4]"
+                        disabled={savingUrl}
+                        onClick={() => void saveDefaultUrl()}
+                    >
+                        {savingUrl ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                            "Salvar perfil da empresa"
+                        )}
+                    </Button>
+                ) : null}
             </div>
 
             <div className="rounded-2xl border border-amber-200/80 bg-amber-50/70 px-4 py-3 text-xs text-amber-950 flex gap-2">

@@ -610,7 +610,7 @@ export function DatafyCampaignsPanel() {
     const [name, setName] = useState("");
     const [purpose, setPurpose] = useState("marketing");
     const [messageBody, setMessageBody] = useState(
-        "Olá, {{fullName}}! Tudo bem? Aqui é a equipe Bom Frete."
+        "Olá, {{fullName}}! 👋\n\nAqui é da {{company}}. 🚚\n\nEstamos enviando oportunidades de frete de {{city}} - {{state}}. 📦\n\nSe precisar, estamos à disposição! ✅"
     );
     /** message = texto comum (Fase 5) · bulletin = boletim de cargas (Fase 6) */
     const [contentKind, setContentKind] = useState<"message" | "bulletin">(
@@ -643,6 +643,12 @@ export function DatafyCampaignsPanel() {
     const [orgDefaultGroupUrl, setOrgDefaultGroupUrl] = useState<string | null>(
         null
     );
+    /** Sender profile for preview {{company}}/{{city}}/{{state}} */
+    const [senderPreview, setSenderPreview] = useState({
+        company: "Bom Frete Transportes",
+        city: "Rondonópolis",
+        state: "MT",
+    });
     const [templates, setTemplates] = useState<Template[]>([]);
     const [bulletinLibrary, setBulletinLibrary] = useState<
         BulletinTemplateSpec[] | null
@@ -992,12 +998,13 @@ export function DatafyCampaignsPanel() {
     }, [progressOpen, progressCampaignId, pollProgress]);
 
     const loadTemplates = async () => {
-        const [res, libRes, groupRes] = await Promise.all([
+        const [res, libRes, groupRes, orgRes] = await Promise.all([
             fetch(
                 "/api/integrations/datafy/templates?status=APPROVED&limit=80"
             ),
             fetch("/api/integrations/datafy/bulletin-templates"),
             fetch("/api/crm/group-invite/settings"),
+            fetch("/api/crm/org-profile"),
         ]);
         const json = await res.json().catch(() => ({}));
         if (res.ok) setTemplates(json.data?.data || json.data || []);
@@ -1016,6 +1023,22 @@ export function DatafyCampaignsPanel() {
             setOrgDefaultGroupUrl(url);
             if (url && !consentGroupUrl.trim()) {
                 setConsentGroupUrl(url);
+            }
+        }
+        const orgJson = await orgRes.json().catch(() => ({}));
+        if (orgRes.ok && orgJson.data?.resolved) {
+            setSenderPreview({
+                company:
+                    orgJson.data.resolved.company ||
+                    "Bom Frete Transportes",
+                city: orgJson.data.resolved.city || "Rondonópolis",
+                state: orgJson.data.resolved.state || "MT",
+            });
+            const url =
+                orgJson.data.profile?.defaultGroupInviteUrl || null;
+            if (url) {
+                setOrgDefaultGroupUrl(url);
+                if (!consentGroupUrl.trim()) setConsentGroupUrl(url);
             }
         }
     };
@@ -1554,7 +1577,7 @@ export function DatafyCampaignsPanel() {
         setName("");
         setPurpose("marketing");
         setMessageBody(
-            "Olá, {{fullName}}! Tudo bem? Aqui é a equipe Bom Frete."
+            "Olá, {{fullName}}! 👋\n\nAqui é da {{company}}. 🚚\n\nEstamos enviando oportunidades de frete de {{city}} - {{state}}. 📦\n\nSe precisar, estamos à disposição! ✅"
         );
         setContentKind("message");
         setBulletinParts([]);
@@ -2530,11 +2553,11 @@ export function DatafyCampaignsPanel() {
             });
         }
         const text = messageBody
-            .replace(/\{\{fullName\}\}/gi, "Maria Silva")
-            .replace(/\{\{company\}\}/gi, "Transportadora Exemplo")
-            .replace(/\{\{city\}\}/gi, "Curitiba")
-            .replace(/\{\{state\}\}/gi, "PR")
-            .replace(/\{\{waId\}\}/gi, "5541999999999")
+            .replace(/\{\{fullName\}\}/gi, "Paulo")
+            .replace(/\{\{company\}\}/gi, senderPreview.company)
+            .replace(/\{\{city\}\}/gi, senderPreview.city)
+            .replace(/\{\{state\}\}/gi, senderPreview.state)
+            .replace(/\{\{waId\}\}/gi, "5566999999999")
             .replace(/\{\{category\}\}/gi, "Motorista");
         // Template-selected message: prefer filled template body when available
         if (
@@ -2563,6 +2586,7 @@ export function DatafyCampaignsPanel() {
         previewPartIndex,
         messageBody,
         selectedTemplate,
+        senderPreview,
     ]);
 
     const previewText = activePreview.text;
@@ -3597,6 +3621,28 @@ export function DatafyCampaignsPanel() {
                                                     </Button>
                                                 ))}
                                             </div>
+                                            <ul className="text-[10px] text-slate-500 space-y-0.5 mt-1.5 list-disc pl-4">
+                                                <li>
+                                                    <code>{"{{fullName}}"}</code>{" "}
+                                                    — nome do destinatário (CRM
+                                                    ou perfil WhatsApp)
+                                                </li>
+                                                <li>
+                                                    <code>{"{{company}}"}</code>{" "}
+                                                    — nome comercial da empresa
+                                                    remetente (
+                                                    {senderPreview.company ||
+                                                        "configure no CRM"})
+                                                </li>
+                                                <li>
+                                                    <code>{"{{city}}"}</code> /{" "}
+                                                    <code>{"{{state}}"}</code> —
+                                                    origem da empresa (
+                                                    {senderPreview.city || "—"}-
+                                                    {senderPreview.state || "—"}
+                                                    ), não do destinatário
+                                                </li>
+                                            </ul>
                                         </div>
                                         <div>
                                             <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400 mb-1.5 inline-flex items-center gap-1">

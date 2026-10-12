@@ -1,12 +1,28 @@
 import type { VARIABLE_TOKENS } from "./constants";
 
-type ContactFields = {
+/** Recipient-side fields (who receives the message). */
+export type RecipientVariableFields = {
     fullName?: string | null;
+    /** WhatsApp profile name from conversation/webhook when CRM name missing */
+    waProfileName?: string | null;
+    waId?: string | null;
+    category?: string | null;
+    /** @deprecated Do not use for {{company}}/{{city}}/{{state}} — sender profile only */
     company?: string | null;
     city?: string | null;
     state?: string | null;
-    waId?: string | null;
-    category?: string | null;
+};
+
+/** Sender-side fields (Bom Frete / business that sends). */
+export type SenderVariableFields = {
+    company?: string | null;
+    city?: string | null;
+    state?: string | null;
+};
+
+export type CampaignVariableContext = {
+    recipient: RecipientVariableFields;
+    sender: SenderVariableFields;
 };
 
 type Mapping = {
@@ -14,32 +30,66 @@ type Mapping = {
     header?: string[];
 };
 
+/** Resolve display name for {{fullName}} without inventing fake names. */
+export function resolveRecipientDisplayName(
+    recipient: RecipientVariableFields
+): string {
+    const crm = String(recipient.fullName || "").trim();
+    if (crm) return crm;
+    const wa = String(recipient.waProfileName || "").trim();
+    if (wa && !/^usu[aá]rio\s+desconhecido$/i.test(wa)) return wa;
+    return "";
+}
+
+export function buildVariableValueMap(
+    ctx: CampaignVariableContext
+): Record<string, string> {
+    return {
+        fullName: resolveRecipientDisplayName(ctx.recipient),
+        company: String(ctx.sender.company || "").trim(),
+        city: String(ctx.sender.city || "").trim(),
+        state: String(ctx.sender.state || "").trim(),
+        waId: String(ctx.recipient.waId || "").trim(),
+        category: String(ctx.recipient.category || "").trim(),
+    };
+}
+
 /**
  * Build Meta/Datafy template components from CRM field tokens.
- * Tokens like "{{fullName}}" or "fullName" are resolved per contact.
- * Literal strings (not matching known tokens) are sent as-is.
+ * {{fullName}} → recipient; {{company}}/{{city}}/{{state}} → sender profile.
  */
 export function buildTemplateComponents(
     mapping: Mapping | null | undefined,
-    contact: ContactFields,
+    contactOrCtx: RecipientVariableFields | CampaignVariableContext,
     opts?: {
         headerImageUrl?: string | null;
         headerImageMediaId?: string | null;
+        sender?: SenderVariableFields;
     }
 ): unknown[] {
+    const ctx: CampaignVariableContext =
+        "recipient" in contactOrCtx && "sender" in contactOrCtx
+            ? contactOrCtx
+            : {
+                  recipient: contactOrCtx,
+                  sender: opts?.sender || {
+                      company: contactOrCtx.company,
+                      city: contactOrCtx.city,
+                      state: contactOrCtx.state,
+                  },
+              };
+
+    const map = buildVariableValueMap(ctx);
     const components: unknown[] = [];
 
     const resolve = (token: string) => {
         const key = token.replace(/^\{\{|\}\}$/g, "").trim();
-        const map: Record<string, string> = {
-            fullName: contact.fullName || "Cliente",
-            company: contact.company || "",
-            city: contact.city || "",
-            state: contact.state || "",
-            waId: contact.waId || "",
-            category: contact.category || "",
-        };
-        if (key in map) return map[key];
+        if (key in map) {
+            const v = map[key];
+            // Meta body params cannot be empty strings — use space-safe fallback
+            if (key === "fullName") return v || "Cliente";
+            return v || "—";
+        }
         return token;
     };
 
@@ -76,23 +126,39 @@ export function buildTemplateComponents(
     return components;
 }
 
-/** Substitui {{fullName}} e os demais tokens CRM no texto que vai ao destinatário. */
+/**
+ * Substitui tokens no texto livre. Preserva emojis e UTF-8.
+ * Ausentes → string vazia (não inventa dados).
+ */
 export function renderCampaignFreeform(
     raw: string,
-    contact: ContactFields
+    contactOrCtx: RecipientVariableFields | CampaignVariableContext,
+    sender?: SenderVariableFields
 ): string {
+    const ctx: CampaignVariableContext =
+        contactOrCtx &&
+        typeof contactOrCtx === "object" &&
+        "recipient" in contactOrCtx &&
+        "sender" in contactOrCtx
+            ? contactOrCtx
+            : {
+                  recipient: contactOrCtx as RecipientVariableFields,
+                  sender: sender || {
+                      company: (contactOrCtx as RecipientVariableFields)
+                          .company,
+                      city: (contactOrCtx as RecipientVariableFields).city,
+                      state: (contactOrCtx as RecipientVariableFields).state,
+                  },
+              };
+
+    const map = buildVariableValueMap(ctx);
     return String(raw || "").replace(
         /\{\{(fullName|company|city|state|waId|category)\}\}/gi,
         (_m, key: string) => {
-            const map: Record<string, string> = {
-                fullname: contact.fullName || "",
-                company: contact.company || "",
-                city: contact.city || "",
-                state: contact.state || "",
-                waid: contact.waId || "",
-                category: contact.category || "",
-            };
-            return map[String(key).toLowerCase()] ?? "";
+            const found = Object.keys(map).find(
+                (x) => x.toLowerCase() === String(key).toLowerCase()
+            );
+            return found ? map[found] : "";
         }
     );
 }
@@ -117,11 +183,11 @@ export function prepareTemplateBodyFromCopy(raw: string): {
         }
     );
     const examples: Record<string, string> = {
-        fullName: "Maria",
-        company: "Transportadora Exemplo",
-        city: "Curitiba",
-        state: "PR",
-        waId: "5541999999999",
+        fullName: "Paulo",
+        company: "Bom Frete Transportes",
+        city: "Rondonópolis",
+        state: "MT",
+        waId: "5566999999999",
         category: "Motorista",
     };
     return {
@@ -143,6 +209,23 @@ export function countBodyVariablesFromTemplateComponents(
         }
     }
     return 0;
+}
+
+/** Preview helper with explicit sample recipient + real sender profile. */
+export function renderCampaignPreview(
+    raw: string,
+    opts: {
+        sampleRecipient?: RecipientVariableFields;
+        sender: SenderVariableFields;
+    }
+): string {
+    return renderCampaignFreeform(raw, {
+        recipient: opts.sampleRecipient || {
+            fullName: "Paulo",
+            waId: "5566999999999",
+        },
+        sender: opts.sender,
+    });
 }
 
 export type VariableToken = (typeof VARIABLE_TOKENS)[number];

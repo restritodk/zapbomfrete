@@ -162,20 +162,23 @@ describe("Audience preview dedupe", () => {
 });
 
 describe("Template variables", () => {
-    it("builds body parameters from CRM tokens", () => {
+    it("builds body parameters: fullName=recipient, company=sender", () => {
         const comps = buildTemplateComponents(
             { body: ["fullName", "company"] },
-            { fullName: "João", company: "Bom Frete" }
+            {
+                recipient: { fullName: "João" },
+                sender: { company: "Bom Frete Transportes" },
+            }
         ) as Array<{ type: string; parameters: Array<{ text: string }> }>;
         assert.equal(comps[0].type, "body");
         assert.equal(comps[0].parameters[0].text, "João");
-        assert.equal(comps[0].parameters[1].text, "Bom Frete");
+        assert.equal(comps[0].parameters[1].text, "Bom Frete Transportes");
     });
 
     it("includes optional IMAGE header when URL provided", () => {
         const comps = buildTemplateComponents(
             { body: ["fullName"] },
-            { fullName: "Ana" },
+            { recipient: { fullName: "Ana" }, sender: {} },
             { headerImageUrl: "https://example.com/a.jpg" }
         ) as Array<{ type: string; parameters: Array<{ type: string }> }>;
         assert.equal(comps[0].type, "header");

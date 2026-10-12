@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}====================================================${NC}"
-echo -e "${BLUE}       ⚡ WA-AKG PM2 AUTO STARTUP SCRIPT ⚡        ${NC}"
+echo -e "${BLUE}   ⚡ Micro Hard Center PM2 AUTO STARTUP SCRIPT⚡  ${NC}"
 echo -e "${BLUE}====================================================${NC}"
 
 # Step 1: Check for .env file & Security Auditing
@@ -170,8 +170,8 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo -e "\n${GREEN}====================================================${NC}"
-echo -e "${GREEN}       🎉 WA-AKG DEPLOYED SUCCESSFULLY! 🎉         ${NC}"
+echo -e "\n${GREEN}==================================================${NC}"
+echo -e "${GREEN}  🎉 Micro Hard Center DEPLOYED SUCCESSFULLY! 🎉   ${NC}"
 echo -e "${GREEN}====================================================${NC}"
 echo -e "\n${BLUE}Useful PM2 Commands:${NC}"
 echo -e "  - View status:           ${YELLOW}pm2 status${NC}"

@@ -387,9 +387,8 @@ export function LoginScreen() {
               {benefits.map((item, index) => (
                 <div
                   key={item.title}
-                  className={`flex flex-col items-start px-[clamp(0.5rem,1vw,1rem)] first:pl-0 last:pr-0 ${
-                    index > 0 ? "border-l border-white/20" : ""
-                  }`}
+                  className={`flex flex-col items-start px-[clamp(0.5rem,1vw,1rem)] first:pl-0 last:pr-0 ${index > 0 ? "border-l border-white/20" : ""
+                    }`}
                 >
                   <div className="mb-2.5 flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
                     <item.Icon className={`h-5 w-5 ${item.iconClass}`} />
@@ -439,50 +438,50 @@ export function LoginScreen() {
 
       {/* ===== MOBILE ===== */}
       {!isDesktop && (
-      <div className="relative">
-        <div className="relative overflow-hidden bg-gradient-to-b from-[#0A3D82] via-[#082B5C] to-[#061C3C] px-5 pt-7 pb-28">
-          <div className="relative z-10 space-y-4">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/media/logo-principal.png"
-              alt="ZapPro"
-              className="h-auto w-[clamp(120px,40vw,160px)] max-w-full object-contain"
-            />
-            <div>
-              <div className="mb-3 h-[3px] w-12 rounded-full bg-gradient-to-r from-[#2E9B4A] to-[#1269D3]" />
-              <h1 className="text-[clamp(1.75rem,7vw,2.15rem)] font-extrabold leading-tight tracking-tight text-white">
-                Bem-vindo
-              </h1>
-              <p className="mt-2 max-w-sm text-sm leading-relaxed text-white/75">
-                Centralize suas conexões e operações do WhatsApp em um ambiente seguro, organizado e profissional.
-              </p>
+        <div className="relative">
+          <div className="relative overflow-hidden bg-gradient-to-b from-[#0A3D82] via-[#082B5C] to-[#061C3C] px-5 pt-7 pb-28">
+            <div className="relative z-10 space-y-4">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/media/logo-principal.png"
+                alt="ZapPro"
+                className="h-auto w-[clamp(120px,40vw,160px)] max-w-full object-contain"
+              />
+              <div>
+                <div className="mb-3 h-[3px] w-12 rounded-full bg-gradient-to-r from-[#2E9B4A] to-[#1269D3]" />
+                <h1 className="text-[clamp(1.75rem,7vw,2.15rem)] font-extrabold leading-tight tracking-tight text-white">
+                  Bem-vindo
+                </h1>
+                <p className="mt-2 max-w-sm text-sm leading-relaxed text-white/75">
+                  Centralize suas conexões e operações do WhatsApp em um ambiente seguro, organizado e profissional.
+                </p>
+              </div>
+            </div>
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/media/imagem-login.jpg"
+                alt=""
+                className="h-full w-full object-cover object-[22%_52%]"
+              />
+              <div
+                className="absolute inset-0"
+                style={{
+                  background:
+                    "linear-gradient(to bottom, #07336a 0%, rgba(7,51,106,0.92) 14%, rgba(7,51,106,0.35) 48%, rgba(4,24,55,0.4) 100%)",
+                }}
+              />
             </div>
           </div>
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/media/imagem-login.jpg"
-              alt=""
-              className="h-full w-full object-cover object-[22%_52%]"
-            />
-            <div
-              className="absolute inset-0"
-              style={{
-                background:
-                  "linear-gradient(to bottom, #07336a 0%, rgba(7,51,106,0.92) 14%, rgba(7,51,106,0.35) 48%, rgba(4,24,55,0.4) 100%)",
-              }}
-            />
-          </div>
-        </div>
 
-        <div className="px-4 py-6">
-          <LoginCard {...cardProps} className="p-6" />
-          <div className="mt-4 flex items-center justify-center gap-1.5 text-[11px] text-[#7A90A8]">
-            <ShieldCheck className="h-3.5 w-3.5 text-[#2E9B4A]" />
-            <span>Ambiente protegido • Sessão criptografada</span>
+          <div className="px-4 py-6">
+            <LoginCard {...cardProps} className="p-6" />
+            <div className="mt-4 flex items-center justify-center gap-1.5 text-[11px] text-[#7A90A8]">
+              <ShieldCheck className="h-3.5 w-3.5 text-[#2E9B4A]" />
+              <span>Ambiente protegido • Sessão criptografada</span>
+            </div>
           </div>
         </div>
-      </div>
       )}
     </div>
   );

@@ -49,6 +49,8 @@ export class DatafyProvider {
         ok: boolean;
         status: DatafyPublicStatus;
         me?: Awaited<ReturnType<DatafyClient["getMe"]>>;
+        /** Meta verified_name from phone numbers API — sync on server routes only */
+        verifiedName?: string | null;
         error?: string;
     }> {
         try {
@@ -58,6 +60,7 @@ export class DatafyProvider {
             let displayPhoneNumber: string | null | undefined;
             const wabaId = me.waba_id || null;
             const phoneNumberId = me.phone_number_id || null;
+            let verifiedName: string | null = null;
             if (wabaId) {
                 try {
                     const phones = await client.getPhoneNumbers(wabaId);
@@ -65,6 +68,7 @@ export class DatafyProvider {
                         phones.data?.find((p) => p.id === phoneNumberId) ||
                         phones.data?.[0];
                     displayPhoneNumber = match?.display_phone_number || null;
+                    verifiedName = match?.verified_name?.trim() || null;
                 } catch {
                     displayPhoneNumber = undefined;
                 }
@@ -82,7 +86,12 @@ export class DatafyProvider {
                 lastError: null,
             });
 
-            return { ok: true, status: await this.getPublicStatus(), me };
+            return {
+                ok: true,
+                status: await this.getPublicStatus(),
+                me,
+                verifiedName,
+            };
         } catch (e) {
             const message =
                 e instanceof DatafyApiError
