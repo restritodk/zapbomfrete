@@ -221,7 +221,23 @@ export function splitCurrentAndHistory(
     return { current, history };
 }
 
-/** Prevent associating a card to an incompatible version (wrong card count / loads). */
+/**
+ * Pure filter for Step 1 section B: APPROVED managed templates not linked
+ * to any card. Intentionally ignores inLibrary (Meta remotes start false).
+ */
+export function filterUnassociatedApprovedTemplates<
+    T extends { id: string; remoteStatus?: string | null },
+>(templates: T[], linkedManagedIds: Iterable<string>): T[] {
+    const linked = new Set(
+        [...linkedManagedIds].filter((id): id is string => Boolean(id))
+    );
+    return templates.filter(
+        (t) =>
+            String(t.remoteStatus || "").toUpperCase() === "APPROVED" &&
+            !linked.has(t.id)
+    );
+}
+
 export function canAssociateTemplateToCard(opts: {
     cardLoadsPerMessage: number;
     templateLoadsPerMessage: number | null | undefined;

@@ -17,6 +17,7 @@ import {
     type BulletinCardSeed,
     type GroupedBulletinListItem,
     canAssociateTemplateToCard,
+    filterUnassociatedApprovedTemplates,
 } from "./grouping";
 
 const ORG = "default";
@@ -199,10 +200,18 @@ async function hydrateCardSeeds(
 ): Promise<BulletinCardSeed[]> {
     const out: BulletinCardSeed[] = [];
     for (const seed of seeds) {
-        const managed = await resolveManagedByName(
-            seed.technicalName,
-            seed.language || "pt_BR"
-        );
+        let managed =
+            seed.libraryTemplateId && !seed.managedTemplateId
+                ? await db().datafyManagedTemplate.findUnique({
+                      where: { id: seed.libraryTemplateId },
+                  })
+                : null;
+        if (!managed) {
+            managed = await resolveManagedByName(
+                seed.technicalName,
+                seed.language || "pt_BR"
+            );
+        }
         if (managed) {
             out.push({
                 ...seed,
@@ -215,7 +224,9 @@ async function hydrateCardSeeds(
                 lastSubmittedAt: managed.lastSubmittedAt,
                 templateComponents:
                     seed.templateComponents ?? managed.componentsJson,
-                associationSource: "compose",
+                associationSource: seed.libraryTemplateId
+                    ? "manual"
+                    : "compose",
             });
         } else {
             out.push(seed);
@@ -600,7 +611,29 @@ export async function buildCampaignPartsForVersion(opts: {
     };
 }
 
-export async function listOrphanManagedTemplates() {
+export type OrphanManagedTemplateDto = {
+    id: string;
+    technicalName: string;
+    displayName: string;
+    language: string;
+    category: string;
+    loadsPerMessage: number;
+    remoteStatus: string | null;
+    lastSyncedAt: string | null;
+    bodyPreview: string;
+    suggestedBundleKey: string | null;
+    inLibrary: boolean;
+    associationStatus: "unassociated";
+};
+
+/**
+ * APPROVED managed templates not linked to any bulletin card.
+ * Includes Meta-synced remotes with inLibrary=false — those appear in
+ * Aprovações Meta but were previously hidden from the campaign wizard.
+ */
+export async function listOrphanManagedTemplates(): Promise<
+    OrphanManagedTemplateDto[]
+> {
     const linked = await db().datafyBulletinCard.findMany({
         where: { managedTemplateId: { not: null } },
         select: { managedTemplateId: true },
@@ -613,15 +646,13 @@ export async function listOrphanManagedTemplates() {
             organizationKey: ORG,
             deletedAt: null,
             hidden: false,
-            remoteStatus: "APPROVED",
-            inLibrary: true,
+            // Do NOT require inLibrary — remote Meta imports start as false.
         },
         orderBy: { updatedAt: "desc" },
-        take: 200,
+        take: 300,
     });
-    return templates
-        .filter((t) => !linkedIds.has(t.id))
-        .map((t) => ({
+    return filterUnassociatedApprovedTemplates(templates, linkedIds).map(
+        (t) => ({
             id: t.id,
             technicalName: t.technicalName,
             displayName: t.displayName,
@@ -632,8 +663,95 @@ export async function listOrphanManagedTemplates() {
             lastSyncedAt: t.lastSyncedAt?.toISOString() || null,
             bodyPreview: t.bodyText.slice(0, 800),
             suggestedBundleKey: t.suggestedBundleKey,
+            inLibrary: Boolean(t.inLibrary),
             associationStatus: "unassociated" as const,
         }));
+}
+
+/**
+ * Create a bulletin version whose cards are the given APPROVED orphans
+ * (order preserved). Never resubmits to Meta.
+ */
+export async function createBulletinFromOrphanTemplates(opts: {
+    title: string;
+    managedTemplateIds: string[];
+    bundleId?: string | null;
+    userId?: string | null;
+}): Promise<{
+    bundle: { id: string; publicKey: string; name: string };
+    version: VersionRow;
+    cards: CardRow[];
+}> {
+    const ids = [...new Set(opts.managedTemplateIds.filter(Boolean))];
+    if (!ids.length) {
+        throw new Error("Selecione ao menos um template APPROVED");
+    }
+    const rows = await db().datafyManagedTemplate.findMany({
+        where: {
+            organizationKey: ORG,
+            id: { in: ids },
+            deletedAt: null,
+            hidden: false,
+        },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const ordered = ids.map((id) => {
+        const t = byId.get(id);
+        if (!t) throw new Error(`Template não encontrado: ${id}`);
+        if (String(t.remoteStatus || "").toUpperCase() !== "APPROVED") {
+            throw new Error(
+                `${t.technicalName}: só templates APPROVED podem ser associados`
+            );
+        }
+        return t;
+    });
+
+    const linked = await db().datafyBulletinCard.findMany({
+        where: { managedTemplateId: { in: ids } },
+        select: { managedTemplateId: true },
+    });
+    if (linked.length) {
+        throw new Error(
+            "Um ou mais templates já estão associados a um card de boletim"
+        );
+    }
+
+    const parts: CampaignMessagePart[] = ordered.map((t, i) => {
+        const loads = Math.max(1, t.loadsPerMessage || 1);
+        const loadIndexes = Array.from({ length: loads }, (_, k) => k);
+        return {
+            index: i,
+            label: `Card ${i + 1}/${ordered.length} · ${t.technicalName}`,
+            bodyText: t.bodyText || "",
+            loadIndexes,
+            charCount: (t.bodyText || "").length,
+            templateName: t.technicalName,
+            templateLanguage: t.language || "pt_BR",
+            templateCategory: t.category || "MARKETING",
+            templateApprovalStatus: "APPROVED",
+            libraryTemplateId: t.id,
+            readyForRealSend: true,
+            compatibility: "ready" as const,
+            blockReason: null,
+        };
+    });
+
+    const rawText = ordered.map((t) => t.bodyText || "").join("\n\n---\n\n");
+    const loadCount = parts.reduce(
+        (n, p) => n + (p.loadIndexes?.length || 0),
+        0
+    );
+
+    return createBulletinVersionFromParts({
+        title: opts.title.trim() || ordered[0].displayName || "Boletim",
+        rawText,
+        loadCount,
+        parts,
+        userId: opts.userId,
+        bundleId: opts.bundleId,
+        language: ordered[0].language || "pt_BR",
+        category: ordered[0].category || "MARKETING",
+    });
 }
 
 export async function associateTemplateToCard(opts: {

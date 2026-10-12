@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
     estimateMessagesFromSelection,
     flattenBulletinSelections,
+    isOrphanVersionId,
+    orphanToBulletinPick,
     resolveCampaignPreviewText,
     validateBulletinPicks,
     type BulletinVersionPick,
@@ -101,5 +103,72 @@ describe("bulletin campaign selection", () => {
         assert.equal(preview.text, "card two body");
         assert.ok(!preview.text.includes("RAW PASTE"));
         assert.equal(preview.partCount, 2);
+    });
+
+    it("empty bulletin selection yields empty preview (not paste prompt)", () => {
+        const preview = resolveCampaignPreviewText({
+            contentKind: "bulletin",
+            messageBody: "Cole o texto do boletim para analisar.",
+            parts: [],
+            partIndex: 0,
+        });
+        assert.equal(preview.text, "");
+        assert.equal(preview.partCount, 0);
+        assert.ok(!preview.text.includes("Cole o texto"));
+    });
+
+    it("orphan APPROVED template becomes selectable individual pick", () => {
+        const orphanPick = orphanToBulletinPick({
+            id: "mt1",
+            technicalName: "boletim_v3_2_cargas",
+            displayName: "Boletim 2 cargas",
+            language: "pt_BR",
+            category: "MARKETING",
+            loadsPerMessage: 2,
+            bodyPreview: "BODY REAL DO TEMPLATE",
+        });
+        assert.equal(isOrphanVersionId(orphanPick.versionId), true);
+        const prepared = flattenBulletinSelections([orphanPick]);
+        assert.equal(prepared.meta.cardCount, 1);
+        assert.equal(prepared.parts[0].bodyText, "BODY REAL DO TEMPLATE");
+        assert.equal(prepared.parts[0].templateName, "boletim_v3_2_cargas");
+        assert.equal(prepared.parts[0].templateLanguage, "pt_BR");
+        assert.equal(prepared.parts[0].readyForRealSend, true);
+        const v = validateBulletinPicks([orphanPick]);
+        assert.equal(v.ok, true);
+        const preview = resolveCampaignPreviewText({
+            contentKind: "bulletin",
+            messageBody: "IGNORED",
+            parts: prepared.parts,
+            partIndex: 0,
+        });
+        assert.equal(preview.text, "BODY REAL DO TEMPLATE");
+    });
+
+    it("zero registered bulletins + three orphan templates → three selectable", () => {
+        const names = [
+            "boletim_v3_2_cargas",
+            "boletim_v3_3_cargas",
+            "atualizao_de_embarque_cotton",
+        ];
+        const picks = names.map((name, i) =>
+            orphanToBulletinPick({
+                id: `mt${i}`,
+                technicalName: name,
+                displayName: name,
+                language: name.includes("cotton") ? "en" : "pt_BR",
+                category: "MARKETING",
+                loadsPerMessage: name.includes("3") ? 3 : 2,
+                bodyPreview: `body ${name}`,
+            })
+        );
+        assert.equal(picks.length, 3);
+        const prepared = flattenBulletinSelections(picks);
+        assert.equal(prepared.meta.cardCount, 3);
+        assert.equal(prepared.parts[2].templateLanguage, "en");
+        assert.equal(
+            estimateMessagesFromSelection(139, picks),
+            139 * 3
+        );
     });
 });

@@ -16,7 +16,62 @@ export type BulletinCardPick = {
     loadSummary: string;
     bodyPreview: string | null;
     libraryTemplateId: string | null;
+    language?: string | null;
+    category?: string | null;
 };
+
+/** Synthetic pick for an APPROVED template not yet linked to a bulletin card. */
+export type OrphanTemplateSource = {
+    id: string;
+    technicalName: string;
+    displayName: string;
+    language: string;
+    category: string;
+    loadsPerMessage: number;
+    bodyPreview: string;
+    remoteStatus?: string | null;
+};
+
+export function isOrphanVersionId(versionId: string): boolean {
+    return versionId.startsWith("orphan:");
+}
+
+export function orphanToBulletinPick(
+    orphan: OrphanTemplateSource
+): BulletinVersionPick {
+    const loads = Math.max(1, orphan.loadsPerMessage || 1);
+    const loadIndexes = Array.from({ length: loads }, (_, i) => i);
+    return {
+        bundleId: `orphan-bundle:${orphan.id}`,
+        versionId: `orphan:${orphan.id}`,
+        publicKey: orphan.technicalName,
+        title: orphan.displayName || orphan.technicalName,
+        version: 1,
+        isCurrent: true,
+        loadCount: loads,
+        cardCount: 1,
+        approvedCardCount: 1,
+        approvalStatus: "fully_approved",
+        mode: "selected_cards",
+        cardPositions: [1],
+        cards: [
+            {
+                cardId: `orphan-card:${orphan.id}`,
+                position: 1,
+                loadIndexes,
+                technicalName: orphan.technicalName,
+                displayName: orphan.displayName || orphan.technicalName,
+                approvalStatus: "APPROVED",
+                loadSummary:
+                    loads === 1 ? "1 carga" : `${loads} cargas`,
+                bodyPreview: orphan.bodyPreview || "",
+                libraryTemplateId: orphan.id,
+                language: orphan.language || "pt_BR",
+                category: orphan.category || "MARKETING",
+            },
+        ],
+    };
+}
 
 export type BulletinVersionPick = {
     bundleId: string;
@@ -99,13 +154,15 @@ export function flattenBulletinSelections(
             const ready = approval === "APPROVED" && Boolean(card.technicalName);
             parts.push({
                 index: globalIndex,
-                label: `${pick.publicKey} v${pick.version} · Card ${card.position}/${pick.cardCount}`,
+                label: isOrphanVersionId(pick.versionId)
+                    ? `Template · ${card.technicalName}`
+                    : `${pick.publicKey} v${pick.version} · Card ${card.position}/${pick.cardCount}`,
                 bodyText: card.bodyPreview || "",
                 loadIndexes: card.loadIndexes || [],
                 charCount: (card.bodyPreview || "").length,
                 templateName: card.technicalName,
-                templateLanguage: "pt_BR",
-                templateCategory: "MARKETING",
+                templateLanguage: card.language || "pt_BR",
+                templateCategory: card.category || "MARKETING",
                 templateApprovalStatus: approval,
                 libraryTemplateId: card.libraryTemplateId,
                 readyForRealSend: ready,
@@ -169,7 +226,9 @@ export function validateBulletinPicks(picks: BulletinVersionPick[]): {
 } {
     const errors: string[] = [];
     if (!picks.length) {
-        errors.push("Selecione ao menos um boletim aprovado.");
+        errors.push(
+            "Selecione ao menos um boletim ou template APPROVED."
+        );
         return { ok: false, errors };
     }
     for (const pick of picks) {
@@ -232,16 +291,25 @@ export function resolveCampaignPreviewText(opts: {
     parts: CampaignMessagePart[];
     partIndex: number;
 }): { text: string; partLabel: string | null; partCount: number } {
-    if (opts.contentKind === "bulletin" && opts.parts.length > 0) {
-        const idx = Math.min(
-            Math.max(0, opts.partIndex),
-            opts.parts.length - 1
-        );
-        const part = opts.parts[idx];
+    if (opts.contentKind === "bulletin") {
+        if (opts.parts.length > 0) {
+            const idx = Math.min(
+                Math.max(0, opts.partIndex),
+                opts.parts.length - 1
+            );
+            const part = opts.parts[idx];
+            return {
+                text: part.bodyText || "",
+                partLabel:
+                    part.label ||
+                    `Mensagem ${idx + 1} de ${opts.parts.length}`,
+                partCount: opts.parts.length,
+            };
+        }
         return {
-            text: part.bodyText || "",
-            partLabel: part.label || `Mensagem ${idx + 1} de ${opts.parts.length}`,
-            partCount: opts.parts.length,
+            text: "",
+            partLabel: "Nenhum conteúdo selecionado",
+            partCount: 0,
         };
     }
     return {

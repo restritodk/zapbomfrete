@@ -2,7 +2,6 @@
 
 import {
     useCallback,
-    useDeferredValue,
     useEffect,
     useMemo,
     useRef,
@@ -50,11 +49,6 @@ import {
 } from "@/modules/crm/consent/constants";
 import { useSession } from "@/components/dashboard/session-provider";
 import {
-    analyzeBulletin,
-    assessCompleteBulletin,
-    composeCompleteBulletinPart,
-    composeReusableBulletinParts,
-    deliveryModeNeedsUserChoice,
     estimateMessageTotal,
     hydrateClientLibrary,
     libraryApprovalChecklist,
@@ -574,7 +568,6 @@ export function DatafyCampaignsPanel() {
     const [bulletinAnalysis, setBulletinAnalysis] =
         useState<BulletinAnalysis | null>(null);
     const [previewPartIndex, setPreviewPartIndex] = useState(0);
-    const deferredBulletinText = useDeferredValue(messageBody);
     const [contentMode, setContentMode] = useState<
         "existing" | "custom" | "direct"
     >("existing");
@@ -2167,87 +2160,27 @@ export function DatafyCampaignsPanel() {
         void load();
     };
 
-    // Re-analyze bulletin; delivery mode decides complete vs split templates
+    // Library-first bulletin flow: parts come from Etapa 1 selection only.
+    // Do not analyze leftover messageBody paste (avoids "Cole o texto…").
     useEffect(() => {
         if (contentKind !== "bulletin") {
             setBulletinAnalysis(null);
-            setBulletinParts([]);
             setCompleteAssessment(null);
             return;
         }
-        const analysis = analyzeBulletin(deferredBulletinText);
-        setBulletinAnalysis(analysis);
-        const complete = assessCompleteBulletin(
-            deferredBulletinText,
-            analysis,
-            purpose
-        );
-        setCompleteAssessment(complete);
-
-        const splitParts = composeReusableBulletinParts(
-            analysis,
-            templates.map((t) => ({
-                name: t.name,
-                language: t.language,
-                status: t.status,
-                category: t.category,
-                components: t.components,
-            })),
-            {
-                purpose,
-                ...(bulletinLibrary?.length
-                    ? { library: bulletinLibrary }
-                    : {}),
-            }
-        );
-
-        const needsChoice = deliveryModeNeedsUserChoice(
-            analysis,
-            splitParts.length
-        );
-        let mode = bulletinDeliveryMode;
-        if (!needsChoice && !mode && analysis.loadCount > 0) {
-            // Single load / single part: default to split templates (safe for marketing)
-            mode = "split_templates";
-        }
-
-        // Etapa 1 bulletin library selection owns messageParts — do not overwrite.
-        if (bulletinSelections.length) return;
-
-        if (mode === "complete_single") {
-            setBulletinParts(
-                composeCompleteBulletinPart(
-                    deferredBulletinText,
-                    analysis,
-                    purpose
-                )
-            );
-            setPreviewPartIndex(0);
-        } else if (mode === "split_templates") {
-            setBulletinParts(splitParts);
-            setPreviewPartIndex((idx) =>
-                Math.min(idx, Math.max(0, splitParts.length - 1))
-            );
-        } else {
-            // Awaiting explicit choice — show analysis only, no silent split send path
+        setBulletinAnalysis(null);
+        setCompleteAssessment(null);
+        if (!bulletinSelections.length) {
             setBulletinParts([]);
             setPreviewPartIndex(0);
         }
-    }, [
-        contentKind,
-        deferredBulletinText,
-        templates,
-        purpose,
-        bulletinLibrary,
-        bulletinDeliveryMode,
-        bulletinSelections.length,
-    ]);
+    }, [contentKind, bulletinSelections.length]);
 
     const activePreview = useMemo(() => {
-        if (contentKind === "bulletin" && bulletinParts.length) {
+        if (contentKind === "bulletin") {
             return resolveCampaignPreviewText({
                 contentKind: "bulletin",
-                messageBody,
+                messageBody: "",
                 parts: bulletinParts,
                 partIndex: previewPartIndex,
             });
@@ -4918,7 +4851,13 @@ export function DatafyCampaignsPanel() {
                                                 )
                                             }
                                             warnings={
-                                                bulletinAnalysis?.warnings
+                                                contentKind === "bulletin"
+                                                    ? bulletinParts.length
+                                                        ? undefined
+                                                        : [
+                                                              "Selecione um boletim ou template APPROVED na Etapa 1.",
+                                                          ]
+                                                    : bulletinAnalysis?.warnings
                                             }
                                             interactiveButtons={
                                                 previewConsentButtons
@@ -4940,6 +4879,7 @@ export function DatafyCampaignsPanel() {
                                 previewText={previewText}
                                 imagePreview={imagePreview}
                                 partLabel={
+                                    activePreview.partLabel ||
                                     bulletinParts[previewPartIndex]?.label
                                 }
                                 partIndex={previewPartIndex}
@@ -4991,7 +4931,15 @@ export function DatafyCampaignsPanel() {
                                         )
                                     )
                                 }
-                                warnings={bulletinAnalysis?.warnings}
+                                warnings={
+                                    contentKind === "bulletin"
+                                        ? bulletinParts.length
+                                            ? undefined
+                                            : [
+                                                  "Selecione um boletim ou template APPROVED na Etapa 1.",
+                                              ]
+                                        : bulletinAnalysis?.warnings
+                                }
                                 interactiveButtons={previewConsentButtons}
                                 interactiveDetached={interactiveDetachedPreview}
                             />

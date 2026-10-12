@@ -30,9 +30,11 @@ export {
     partsFromBulletinCards,
     summarizeLoadIndexes,
     canAssociateTemplateToCard,
+    filterUnassociatedApprovedTemplates,
 } from "./grouping";
 export {
     createBulletinVersionFromParts,
+    createBulletinFromOrphanTemplates,
     listGroupedBulletins,
     getBulletinVersionDetail,
     buildCampaignPartsForVersion,
@@ -45,8 +47,11 @@ export {
     validateBulletinPicks,
     estimateMessagesFromSelection,
     resolveCampaignPreviewText,
+    orphanToBulletinPick,
+    isOrphanVersionId,
     type BulletinVersionPick,
     type BulletinCardPick,
+    type OrphanTemplateSource,
     type PreparedBulletinSend,
 } from "./selection";
 export {

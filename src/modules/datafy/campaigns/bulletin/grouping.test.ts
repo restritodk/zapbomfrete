@@ -5,6 +5,7 @@ import {
     canAssociateTemplateToCard,
     cardSeedsFromMessageParts,
     expectedMessagesForCampaign,
+    filterUnassociatedApprovedTemplates,
     formatBulletinDateKey,
     formatBulletinPublicKey,
     parseBulletinPublicKey,
@@ -175,5 +176,25 @@ describe("bulletin grouping helpers", () => {
             templateRemoteStatus: "APPROVED",
         });
         assert.equal(good.ok, true);
+    });
+
+    it("lists APPROVED orphans even when inLibrary is false (Meta remotes)", () => {
+        const rows = [
+            { id: "a", remoteStatus: "APPROVED", inLibrary: false, name: "boletim_v3_2_cargas" },
+            { id: "b", remoteStatus: "APPROVED", inLibrary: false, name: "boletim_v3_3_cargas" },
+            { id: "c", remoteStatus: "APPROVED", inLibrary: true, name: "atualizao_de_embarque_cotton" },
+            { id: "d", remoteStatus: "PENDING", inLibrary: false, name: "pending_one" },
+            { id: "e", remoteStatus: "APPROVED", inLibrary: false, name: "already_linked" },
+        ];
+        const orphans = filterUnassociatedApprovedTemplates(rows, ["e"]);
+        assert.equal(orphans.length, 3);
+        assert.deepEqual(
+            orphans.map((o) => o.name).sort(),
+            [
+                "atualizao_de_embarque_cotton",
+                "boletim_v3_2_cargas",
+                "boletim_v3_3_cargas",
+            ]
+        );
     });
 });

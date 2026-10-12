@@ -15,6 +15,7 @@ import type { CampaignMessagePart } from "@/modules/datafy/campaigns/bulletin/ty
 import {
     associateTemplateToCard,
     buildCampaignPartsForVersion,
+    createBulletinFromOrphanTemplates,
     createBulletinVersionFromParts,
     getBulletinVersionDetail,
     listGroupedBulletins,
@@ -92,6 +93,13 @@ const prepareSchema = z.object({
 const autoLinkSchema = z.object({
     action: z.literal("auto_link"),
     versionId: z.string().min(1),
+});
+
+const createFromOrphansSchema = z.object({
+    action: z.literal("create_from_orphans"),
+    title: z.string().min(1).max(300),
+    managedTemplateIds: z.array(z.string().min(1)).min(1).max(40),
+    bundleId: z.string().nullable().optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -223,6 +231,30 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({
                 status: true,
                 data: { linked, version: detail },
+            });
+        }
+
+        if (action === "create_from_orphans") {
+            const parsed = createFromOrphansSchema.safeParse(body);
+            if (!parsed.success) {
+                return NextResponse.json(
+                    { status: false, message: "Payload inválido" },
+                    { status: 400 }
+                );
+            }
+            const created = await createBulletinFromOrphanTemplates({
+                title: parsed.data.title,
+                managedTemplateIds: parsed.data.managedTemplateIds,
+                bundleId: parsed.data.bundleId,
+                userId: gate.user.id,
+            });
+            const detail = await getBulletinVersionDetail(created.version.id);
+            return NextResponse.json({
+                status: true,
+                data: {
+                    bundle: created.bundle,
+                    version: detail,
+                },
             });
         }
 
