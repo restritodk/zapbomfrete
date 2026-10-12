@@ -250,6 +250,50 @@ export class DatafyClient {
         );
     }
 
+    /**
+     * POST interactive CTA URL (single URL button). Meta Cloud API.
+     * Cannot be mixed with reply buttons in the same interactive message.
+     */
+    sendCtaUrl(
+        phoneNumberId: string,
+        body: {
+            to: string;
+            bodyText: string;
+            displayText: string;
+            url: string;
+        }
+    ): Promise<DatafySendMessageResponse> {
+        const bodyText = String(body.bodyText || "").slice(0, 1024);
+        const displayText = String(body.displayText || "").slice(0, 25);
+        const url = String(body.url || "").trim();
+        if (!url.startsWith("https://")) {
+            throw new DatafyApiError("CTA URL must be HTTPS", 400);
+        }
+        return this.request<DatafySendMessageResponse>(
+            "POST",
+            `/v1/${encodeURIComponent(phoneNumberId)}/messages`,
+            {
+                body: {
+                    messaging_product: "whatsapp",
+                    recipient_type: "individual",
+                    to: body.to,
+                    type: "interactive",
+                    interactive: {
+                        type: "cta_url",
+                        body: { text: bodyText || displayText },
+                        action: {
+                            name: "cta_url",
+                            parameters: {
+                                display_text: displayText,
+                                url,
+                            },
+                        },
+                    },
+                },
+            }
+        );
+    }
+
     /** POST /v1/{phone_number_id}/messages — approved template. */
     sendTemplate(
         phoneNumberId: string,

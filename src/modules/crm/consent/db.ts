@@ -17,16 +17,25 @@ export function consentDb() {
             findMany: (args: unknown) => Promise<
                 Array<{
                     id: string;
+                    waId?: string;
+                    crmContactId?: string | null;
                     decision: string;
                     resultingStatus: string;
                     source: string;
                     evidenceText: string | null;
+                    evidencePayload?: unknown;
                     buttonTitle: string | null;
                     relatedMessageId: string | null;
                     templateName: string | null;
                     wabaId: string;
                     decidedAt: Date;
                     appliedToContact: boolean;
+                    crmContact?: {
+                        id: string;
+                        waId: string;
+                        fullName: string | null;
+                        company: string | null;
+                    } | null;
                 }>
             >;
             create: (args: unknown) => Promise<{ id: string }>;

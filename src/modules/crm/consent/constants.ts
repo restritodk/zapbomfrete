@@ -38,9 +38,19 @@ export const CONSENT_BUTTON_IDS = {
     GRANT: "consent_yes",
     DENY: "consent_no",
     EXTRA: "consent_extra",
+    /** CTA / tracked group invite (not a consent decision). */
+    GROUP_INVITE: "group_invite",
     /** Phase 9 legacy payloads still accepted by the classifier */
     GRANT_LEGACY: "consent_grant_offers",
     DENY_LEGACY: "consent_deny_offers",
+} as const;
+
+/** CrmConsentDecision.purpose for group invite click / join audit. */
+export const GROUP_INVITE_PURPOSE = "whatsapp_group_invite" as const;
+
+export const GROUP_INVITE_DECISION = {
+    CLICKED: "GROUP_CLICKED",
+    JOINED: "GROUP_JOINED",
 } as const;
 
 /** Meta QUICK_REPLY (template) text max length. */
@@ -55,7 +65,11 @@ export const DEFAULT_CONSENT_BUTTON_TITLES = {
     grant: "Tenho interesse",
     deny: "Não tenho interesse",
     extra: "Falar com atendente",
+    groupInvite: "Entrar no grupo exclusivo",
 } as const;
+
+/** Meta CTA URL button display text max (template / cta_url). */
+export const META_CTA_URL_DISPLAY_TEXT_MAX = 25;
 
 export const DEFAULT_CONSENT_BUTTONS = [
     {

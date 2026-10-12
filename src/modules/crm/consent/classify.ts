@@ -66,6 +66,13 @@ export function classifyConsentReply(opts: {
             matchedBy: "button_id",
         };
     }
+    // Group invite is CTA / tracked URL — not a consent decision.
+    if (
+        id === CONSENT_BUTTON_IDS.GROUP_INVITE ||
+        id === CONSENT_BUTTON_IDS.EXTRA
+    ) {
+        return { kind: "none" };
+    }
     if (
         id === CONSENT_BUTTON_IDS.DENY ||
         id === CONSENT_BUTTON_IDS.DENY_LEGACY ||

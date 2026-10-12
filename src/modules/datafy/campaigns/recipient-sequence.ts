@@ -77,6 +77,48 @@ export function extractApprovedQuickReplyButtons(
     return out;
 }
 
+export type ApprovedUrlButton = {
+    text: string;
+    url: string;
+    example?: string[];
+    index: number;
+};
+
+/** Extract URL CTA buttons from approved template components (immutable). */
+export function extractApprovedUrlButtons(
+    components: unknown
+): ApprovedUrlButton[] {
+    if (!Array.isArray(components)) return [];
+    const out: ApprovedUrlButton[] = [];
+    for (const raw of components) {
+        const c = raw as {
+            type?: string;
+            buttons?: Array<{
+                type?: string;
+                text?: string;
+                url?: string;
+                example?: string[];
+            }>;
+        };
+        if (String(c.type || "").toUpperCase() !== "BUTTONS") continue;
+        const buttons = Array.isArray(c.buttons) ? c.buttons : [];
+        buttons.forEach((b, i) => {
+            const type = String(b.type || "").toUpperCase();
+            if (type !== "URL") return;
+            const text = String(b.text || "").trim();
+            const url = String(b.url || "").trim();
+            if (!text || !url) return;
+            out.push({
+                text,
+                url,
+                example: Array.isArray(b.example) ? b.example : undefined,
+                index: i,
+            });
+        });
+    }
+    return out;
+}
+
 export type ConsentPlacementAssessment = {
     /** Preference can be honored for freeform / detached interactive path */
     freeformLastOnlyPossible: boolean;

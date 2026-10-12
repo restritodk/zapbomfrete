@@ -46,6 +46,8 @@ next-env.d.ts
 !/data/media/.gitkeep
 /data/branding/*
 !/data/branding/.gitkeep
+/data/org-settings/*
+!/data/org-settings/.gitkeep
 /uploads/
 /public/media/*
 /public/branding/*

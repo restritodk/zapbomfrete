@@ -1026,6 +1026,70 @@ async function sendPartsSequentially(opts: {
                     // Texto já foi aceito — botões são opcionais pós-envio.
                 }
             }
+
+            // CTA URL (group invite) — separate interactive message (Meta cannot
+            // mix reply + URL in one balloon). Uses tracked redirect URL.
+            const { getEnabledUrlButton } = await import(
+                "@/modules/crm/consent/campaign-buttons"
+            );
+            const urlBtn =
+                allowFreeformButtons && consentBtns.enabled
+                    ? getEnabledUrlButton(consentBtns)
+                    : null;
+            if (urlBtn) {
+                try {
+                    const { getPublicOrigin } = await import(
+                        "@/lib/public-origin"
+                    );
+                    const {
+                        signGroupInviteToken,
+                        buildTrackedGroupInvitePath,
+                    } = await import("@/modules/crm/group-invite/tracking");
+                    const origin = getPublicOrigin(undefined, process.env);
+                    const trackToken = signGroupInviteToken({
+                        organizationKey: "default",
+                        waId: toWaId,
+                        campaignId: campaign.id,
+                        recipientId: recipient.id,
+                        inviteUrl: urlBtn.url,
+                    });
+                    const trackedUrl = `${origin.replace(/\/$/, "")}${buildTrackedGroupInvitePath(trackToken)}`;
+                    const resCta = await client.sendCtaUrl(phoneNumberId, {
+                        to: deliveredTo,
+                        bodyText: "Acesse o grupo exclusivo da Bom Frete:",
+                        displayText: urlBtn.title,
+                        url: trackedUrl,
+                    });
+                    const ctaWamid = resCta.messages?.[0]?.id || null;
+                    if (ctaWamid) {
+                        const ctaMsg = await prisma.datafyMessage.create({
+                            data: {
+                                conversationId,
+                                wamid: ctaWamid,
+                                clientMessageId: `${cmid}_cta`,
+                                direction: "outbound",
+                                type: "interactive",
+                                body: urlBtn.title,
+                                status: "accepted",
+                                providerTimestamp: new Date(),
+                                metadata: {
+                                    campaignId: campaign.id,
+                                    campaignRecipientId: recipient.id,
+                                    partIndex: part.index,
+                                    ctaUrl: trackedUrl,
+                                    inviteUrl: urlBtn.url,
+                                } as Prisma.InputJsonValue,
+                            },
+                        });
+                        emitDatafyEvent("datafy.message", {
+                            conversationId,
+                            message: serializeMessage(ctaMsg),
+                        });
+                    }
+                } catch {
+                    // Texto/respostas já aceitos — CTA opcional.
+                }
+            }
         }
 
         if (!wamid) {

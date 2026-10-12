@@ -44,10 +44,17 @@ export const createCampaignBodySchema = z.object({
                 .array(
                     z.object({
                         id: z.string().max(256),
-                        title: z.string().max(20),
+                        title: z.string().max(50),
                     })
                 )
                 .max(3)
+                .optional(),
+            urlButton: z
+                .object({
+                    enabled: z.boolean(),
+                    title: z.string().max(25),
+                    url: z.string().max(500),
+                })
                 .optional(),
         })
         .nullable()

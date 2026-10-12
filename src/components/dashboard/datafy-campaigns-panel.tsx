@@ -45,13 +45,16 @@ import {
     CAMPAIGN_BUTTON_TITLE_UI_MAX,
     CONSENT_BUTTON_IDS,
     DEFAULT_CONSENT_BUTTON_TITLES,
+    META_CTA_URL_DISPLAY_TEXT_MAX,
     META_INTERACTIVE_REPLY_TITLE_MAX,
 } from "@/modules/crm/consent/constants";
 import type { ConsentButtonPlacementPref } from "@/modules/crm/consent/campaign-buttons";
 import {
     assessConsentButtonPlacement,
     extractApprovedQuickReplyButtons,
+    extractApprovedUrlButtons,
 } from "@/modules/datafy/campaigns/recipient-sequence";
+import { validateWhatsappGroupInviteUrl } from "@/modules/crm/consent/group-invite-url";
 import { useSession } from "@/components/dashboard/session-provider";
 import {
     estimateMessageTotal,
@@ -326,7 +329,7 @@ function WhatsAppMessagePreview({
     onPrevPart?: () => void;
     onNextPart?: () => void;
     warnings?: string[];
-    interactiveButtons?: Array<{ title: string }> | null;
+    interactiveButtons?: Array<{ title: string; kind?: "reply" | "url" }> | null;
     /** When true, buttons cannot ride on the same balloon (body > Meta interactive 1024). */
     interactiveDetached?: boolean;
     templateMeta?: {
@@ -481,9 +484,17 @@ function WhatsAppMessagePreview({
                             {interactiveButtons!.map((b, i) => (
                                 <div
                                     key={`${b.title}-${i}`}
-                                    className="px-3 py-2.5 text-center text-[13px] font-medium text-[#027eb5]"
+                                    className="px-3 py-2.5 text-center text-[13px] font-medium text-[#027eb5] inline-flex w-full items-center justify-center gap-1"
                                 >
                                     {b.title}
+                                    {b.kind === "url" ? (
+                                        <span
+                                            className="text-[11px] opacity-80"
+                                            aria-hidden
+                                        >
+                                            ↗
+                                        </span>
+                                    ) : null}
                                 </div>
                             ))}
                         </div>
@@ -626,7 +637,11 @@ export function DatafyCampaignsPanel() {
     );
     const [consentBtnExtraEnabled, setConsentBtnExtraEnabled] = useState(false);
     const [consentBtnExtra, setConsentBtnExtra] = useState<string>(
-        DEFAULT_CONSENT_BUTTON_TITLES.extra
+        DEFAULT_CONSENT_BUTTON_TITLES.groupInvite
+    );
+    const [consentGroupUrl, setConsentGroupUrl] = useState("");
+    const [orgDefaultGroupUrl, setOrgDefaultGroupUrl] = useState<string | null>(
+        null
     );
     const [templates, setTemplates] = useState<Template[]>([]);
     const [bulletinLibrary, setBulletinLibrary] = useState<
@@ -977,11 +992,12 @@ export function DatafyCampaignsPanel() {
     }, [progressOpen, progressCampaignId, pollProgress]);
 
     const loadTemplates = async () => {
-        const [res, libRes] = await Promise.all([
+        const [res, libRes, groupRes] = await Promise.all([
             fetch(
                 "/api/integrations/datafy/templates?status=APPROVED&limit=80"
             ),
             fetch("/api/integrations/datafy/bulletin-templates"),
+            fetch("/api/crm/group-invite/settings"),
         ]);
         const json = await res.json().catch(() => ({}));
         if (res.ok) setTemplates(json.data?.data || json.data || []);
@@ -992,6 +1008,15 @@ export function DatafyCampaignsPanel() {
                     libJson.data.composeLibrary as ClientLibrarySpec[]
                 )
             );
+        }
+        const groupJson = await groupRes.json().catch(() => ({}));
+        if (groupRes.ok) {
+            const url =
+                groupJson.data?.settings?.defaultGroupInviteUrl || null;
+            setOrgDefaultGroupUrl(url);
+            if (url && !consentGroupUrl.trim()) {
+                setConsentGroupUrl(url);
+            }
         }
     };
 
@@ -1825,19 +1850,24 @@ export function DatafyCampaignsPanel() {
 
     const freeformConsentButtonList = useMemo(() => {
         if (!consentButtonsEnabled) return null;
-        const buttons = [
+        const buttons: Array<{ title: string; kind: "reply" | "url" }> = [
             {
                 title:
                     consentBtnGrant.trim() ||
                     DEFAULT_CONSENT_BUTTON_TITLES.grant,
+                kind: "reply",
             },
             {
                 title:
                     consentBtnDeny.trim() || DEFAULT_CONSENT_BUTTON_TITLES.deny,
+                kind: "reply",
             },
         ];
         if (consentBtnExtraEnabled && consentBtnExtra.trim()) {
-            buttons.push({ title: consentBtnExtra.trim() });
+            buttons.push({
+                title: consentBtnExtra.trim(),
+                kind: "url",
+            });
         }
         return buttons;
     }, [
@@ -1848,16 +1878,28 @@ export function DatafyCampaignsPanel() {
         consentBtnExtra,
     ]);
 
-    /** Preview buttons = approved Meta QUICK_REPLY for the part, never Etapa 1 fiction on templates. */
+    /** Preview buttons = approved Meta components or freeform config (never invent on APPROVED). */
     const previewPartButtons = useMemo(() => {
         if (contentKind === "bulletin" && bulletinParts.length) {
             const part = bulletinParts[previewPartIndex];
-            const approved = extractApprovedQuickReplyButtons(
+            const approvedQr = extractApprovedQuickReplyButtons(
                 part?.templateComponents
             );
-            if (approved.length) {
+            const approvedUrl = extractApprovedUrlButtons(
+                part?.templateComponents
+            );
+            if (approvedQr.length || approvedUrl.length) {
                 return {
-                    buttons: approved.map((b) => ({ title: b.text })),
+                    buttons: [
+                        ...approvedQr.map((b) => ({
+                            title: b.text,
+                            kind: "reply" as const,
+                        })),
+                        ...approvedUrl.map((b) => ({
+                            title: b.text,
+                            kind: "url" as const,
+                        })),
+                    ],
                     source: "approved" as const,
                 };
             }
@@ -1882,12 +1924,24 @@ export function DatafyCampaignsPanel() {
             contentMode === "existing" &&
             selectedTemplate
         ) {
-            const approved = extractApprovedQuickReplyButtons(
+            const approvedQr = extractApprovedQuickReplyButtons(
                 selectedTemplate.components
             );
-            if (approved.length) {
+            const approvedUrl = extractApprovedUrlButtons(
+                selectedTemplate.components
+            );
+            if (approvedQr.length || approvedUrl.length) {
                 return {
-                    buttons: approved.map((b) => ({ title: b.text })),
+                    buttons: [
+                        ...approvedQr.map((b) => ({
+                            title: b.text,
+                            kind: "reply" as const,
+                        })),
+                        ...approvedUrl.map((b) => ({
+                            title: b.text,
+                            kind: "url" as const,
+                        })),
+                    ],
                     source: "approved" as const,
                 };
             }
@@ -2002,6 +2056,22 @@ export function DatafyCampaignsPanel() {
                     "Posicionamento «somente na última mensagem» é impossível: templates anteriores já possuem botões aprovados pela Meta. Escolha «conforme componentes aprovados» ou reordene a sequência."
                 );
                 return;
+            }
+            if (
+                consentButtonsEnabled &&
+                consentBtnExtraEnabled
+            ) {
+                if (!consentBtnExtra.trim()) {
+                    toast.error(
+                        "Informe o texto do botão «Entrar no grupo exclusivo»."
+                    );
+                    return;
+                }
+                const gu = validateWhatsappGroupInviteUrl(consentGroupUrl);
+                if (!gu.ok) {
+                    toast.error(gu.error);
+                    return;
+                }
             }
             if (!confirmGroupedSend && !effectiveDryRun) {
                 toast.error(
@@ -2157,6 +2227,13 @@ export function DatafyCampaignsPanel() {
                 );
                 return;
             }
+            if (consentButtonsEnabled && consentBtnExtraEnabled) {
+                const gu = validateWhatsappGroupInviteUrl(consentGroupUrl);
+                if (!gu.ok) {
+                    toast.error(gu.error);
+                    return;
+                }
+            }
             if (!effectiveDryRun && !sendReadiness.realSendReady) {
                 toast.error(
                     sendReadiness.blockReason ||
@@ -2286,21 +2363,18 @@ export function DatafyCampaignsPanel() {
                                       .trim()
                                       .slice(0, CAMPAIGN_BUTTON_TITLE_UI_MAX),
                               },
-                              ...(consentBtnExtraEnabled &&
-                              consentBtnExtra.trim()
-                                  ? [
-                                        {
-                                            id: CONSENT_BUTTON_IDS.EXTRA,
-                                            title: consentBtnExtra
-                                                .trim()
-                                                .slice(
-                                                    0,
-                                                    CAMPAIGN_BUTTON_TITLE_UI_MAX
-                                                ),
-                                        },
-                                    ]
-                                  : []),
                           ],
+                          urlButton: {
+                              enabled: Boolean(
+                                  consentBtnExtraEnabled &&
+                                      consentBtnExtra.trim() &&
+                                      consentGroupUrl.trim()
+                              ),
+                              title: (consentBtnExtra.trim() ||
+                                  DEFAULT_CONSENT_BUTTON_TITLES.groupInvite
+                              ).slice(0, META_CTA_URL_DISPLAY_TEXT_MAX),
+                              url: consentGroupUrl.trim(),
+                          },
                       }
                     : { enabled: false, placement: consentButtonPlacement },
                 messageParts:
@@ -3180,53 +3254,143 @@ export function DatafyCampaignsPanel() {
                                                     </div>
                                                 </div>
 
-                                                <div className="rounded-xl border border-dashed border-slate-200 bg-white/70 p-3 space-y-2">
+                                                <div className="rounded-xl border border-dashed border-[#0969E8]/30 bg-white/70 p-3 space-y-2">
                                                     <label className="flex items-center gap-2 cursor-pointer">
                                                         <Switch
                                                             checked={
                                                                 consentBtnExtraEnabled
                                                             }
-                                                            onCheckedChange={
-                                                                setConsentBtnExtraEnabled
-                                                            }
-                                                            aria-label="Terceiro botão opcional"
+                                                            onCheckedChange={(
+                                                                on
+                                                            ) => {
+                                                                setConsentBtnExtraEnabled(
+                                                                    on
+                                                                );
+                                                                if (
+                                                                    on &&
+                                                                    !consentGroupUrl.trim() &&
+                                                                    orgDefaultGroupUrl
+                                                                ) {
+                                                                    setConsentGroupUrl(
+                                                                        orgDefaultGroupUrl
+                                                                    );
+                                                                }
+                                                                if (
+                                                                    on &&
+                                                                    !consentBtnExtra.trim()
+                                                                ) {
+                                                                    setConsentBtnExtra(
+                                                                        DEFAULT_CONSENT_BUTTON_TITLES.groupInvite
+                                                                    );
+                                                                }
+                                                            }}
+                                                            aria-label="Terceiro botão — Link externo"
                                                         />
                                                         <span className="text-xs font-medium text-slate-700 inline-flex items-center gap-1.5">
                                                             <CirclePlus className="h-3.5 w-3.5 text-[#0969E8]" />
-                                                            Terceiro botão
-                                                            opcional
+                                                            Terceiro botão —
+                                                            Link externo
                                                         </span>
                                                     </label>
                                                     {consentBtnExtraEnabled && (
-                                                        <div className="space-y-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
-                                                            <Input
-                                                                maxLength={
-                                                                    CAMPAIGN_BUTTON_TITLE_UI_MAX
-                                                                }
-                                                                value={
-                                                                    consentBtnExtra
-                                                                }
-                                                                onChange={(e) =>
-                                                                    setConsentBtnExtra(
-                                                                        e.target
-                                                                            .value
-                                                                    )
-                                                                }
-                                                                className="h-10 rounded-lg"
-                                                                placeholder="Texto do 3º botão"
-                                                            />
-                                                            <p className="text-[10px] text-slate-400">
-                                                                ID:{" "}
-                                                                {
-                                                                    CONSENT_BUTTON_IDS.EXTRA
-                                                                }{" "}
-                                                                · máx.{" "}
-                                                                {
-                                                                    CAMPAIGN_BUTTON_TITLE_UI_MAX
-                                                                }{" "}
-                                                                · não altera
-                                                                consentimento
-                                                                automaticamente
+                                                        <div className="space-y-2.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs text-slate-600">
+                                                                    Texto do
+                                                                    botão
+                                                                </Label>
+                                                                <Input
+                                                                    maxLength={
+                                                                        META_CTA_URL_DISPLAY_TEXT_MAX
+                                                                    }
+                                                                    value={
+                                                                        consentBtnExtra
+                                                                    }
+                                                                    onChange={(
+                                                                        e
+                                                                    ) =>
+                                                                        setConsentBtnExtra(
+                                                                            e
+                                                                                .target
+                                                                                .value
+                                                                        )
+                                                                    }
+                                                                    className="h-10 rounded-lg"
+                                                                    placeholder="Entrar no grupo exclusivo"
+                                                                />
+                                                                <p className="text-[10px] text-slate-400">
+                                                                    Máx.{" "}
+                                                                    {
+                                                                        META_CTA_URL_DISPLAY_TEXT_MAX
+                                                                    }{" "}
+                                                                    caracteres
+                                                                    (CTA Meta)
+                                                                </p>
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs text-slate-600">
+                                                                    URL do grupo
+                                                                </Label>
+                                                                <Input
+                                                                    value={
+                                                                        consentGroupUrl
+                                                                    }
+                                                                    onChange={(
+                                                                        e
+                                                                    ) =>
+                                                                        setConsentGroupUrl(
+                                                                            e
+                                                                                .target
+                                                                                .value
+                                                                        )
+                                                                    }
+                                                                    className="h-10 rounded-lg font-mono text-xs"
+                                                                    placeholder="https://chat.whatsapp.com/CODIGO_DO_CONVITE"
+                                                                />
+                                                                {(() => {
+                                                                    const gu =
+                                                                        validateWhatsappGroupInviteUrl(
+                                                                            consentGroupUrl
+                                                                        );
+                                                                    if (
+                                                                        consentGroupUrl.trim() &&
+                                                                        !gu.ok
+                                                                    ) {
+                                                                        return (
+                                                                            <p className="text-[11px] text-red-700">
+                                                                                {
+                                                                                    gu.error
+                                                                                }
+                                                                            </p>
+                                                                        );
+                                                                    }
+                                                                    return (
+                                                                        <p className="text-[10px] text-slate-400">
+                                                                            Somente
+                                                                            HTTPS
+                                                                            ·
+                                                                            domínio
+                                                                            chat.whatsapp.com
+                                                                            {orgDefaultGroupUrl
+                                                                                ? " · pré-preenchido com o link padrão da empresa"
+                                                                                : ""}
+                                                                        </p>
+                                                                    );
+                                                                })()}
+                                                            </div>
+                                                            <p className="text-[11px] leading-relaxed text-slate-600 rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-2">
+                                                                Em texto livre,
+                                                                o link é enviado
+                                                                como CTA URL
+                                                                separado (a Meta
+                                                                não mistura
+                                                                resposta + URL no
+                                                                mesmo balão). Em
+                                                                templates
+                                                                APPROVED, só
+                                                                aparecem os
+                                                                botões já
+                                                                aprovados.
                                                             </p>
                                                         </div>
                                                     )}

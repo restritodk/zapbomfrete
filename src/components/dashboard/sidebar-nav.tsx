@@ -102,6 +102,10 @@ const navGroups: NavGroup[] = [
                         href: "/dashboard/contatos/consentimentos",
                         label: "Consentimentos",
                     },
+                    {
+                        href: "/dashboard/contatos/grupo",
+                        label: "Usuários no grupo",
+                    },
                     { href: "/dashboard/groups", label: "Grupos" },
                     { href: "/dashboard/labels", label: "Etiquetas" },
                 ],
