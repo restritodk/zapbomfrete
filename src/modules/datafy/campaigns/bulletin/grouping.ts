@@ -191,6 +191,9 @@ export type GroupedBulletinListItem = {
         lastSyncedAt: string | null;
         bodyPreview: string | null;
         libraryTemplateId: string | null;
+        language?: string | null;
+        category?: string | null;
+        templateComponents?: unknown;
     }>;
 };
 

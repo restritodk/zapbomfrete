@@ -397,6 +397,13 @@ export async function syncVersionCardStatuses(versionId: string) {
                 remoteTemplateId: managed.remoteTemplateId,
                 lastSyncedAt: managed.lastSyncedAt || new Date(),
                 lastSubmittedAt: managed.lastSubmittedAt,
+                bodyPreview: managed.bodyText
+                    ? managed.bodyText.slice(0, 4000)
+                    : card.bodyPreview,
+                language: managed.language || card.language,
+                category: managed.category || card.category,
+                templateComponents: (managed.componentsJson ??
+                    card.templateComponents) as Prisma.InputJsonValue,
             },
         });
     }
@@ -447,6 +454,9 @@ function toListItem(v: VersionRow): GroupedBulletinListItem {
             lastSyncedAt: c.lastSyncedAt?.toISOString() || null,
             bodyPreview: c.bodyPreview,
             libraryTemplateId: c.libraryTemplateId,
+            language: c.language || "pt_BR",
+            category: c.category || "MARKETING",
+            templateComponents: c.templateComponents ?? null,
         })),
     };
 }
@@ -621,6 +631,8 @@ export type OrphanManagedTemplateDto = {
     remoteStatus: string | null;
     lastSyncedAt: string | null;
     bodyPreview: string;
+    /** Meta/Datafy components JSON (BUTTONS, BODY, etc.) — source of truth for preview */
+    templateComponents: unknown;
     suggestedBundleKey: string | null;
     inLibrary: boolean;
     associationStatus: "unassociated";
@@ -662,6 +674,7 @@ export async function listOrphanManagedTemplates(): Promise<
             remoteStatus: t.remoteStatus,
             lastSyncedAt: t.lastSyncedAt?.toISOString() || null,
             bodyPreview: t.bodyText.slice(0, 800),
+            templateComponents: t.componentsJson ?? null,
             suggestedBundleKey: t.suggestedBundleKey,
             inLibrary: Boolean(t.inLibrary),
             associationStatus: "unassociated" as const,

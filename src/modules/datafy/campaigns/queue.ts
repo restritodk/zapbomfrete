@@ -695,7 +695,10 @@ async function sendPartsSequentially(opts: {
     sendMode: "template" | "freeform";
     purpose: string;
 }) {
-    const { campaign, parts, recipient, conversationId, phoneNumberId } = opts;
+    // Recipient-major: finish ALL parts for this recipient before the worker
+    // moves to the next contact (processCampaign uses take:1 for multi-part).
+    const parts = [...opts.parts].sort((a, b) => a.index - b.index);
+    const { campaign, recipient, conversationId, phoneNumberId } = opts;
     const prev = (recipient.partStatuses || {}) as {
         nextPartIndex?: number;
         parts?: PartStatusEntry[];
@@ -707,6 +710,7 @@ async function sendPartsSequentially(opts: {
 
     for (let i = nextIndex; i < parts.length; i++) {
         const part = parts[i];
+        const isLastPart = i >= parts.length - 1;
         const resolvedTemplateName =
             part.templateName || campaign.templateName || null;
         const resolvedTemplateLanguage =
@@ -902,7 +906,15 @@ async function sendPartsSequentially(opts: {
                 (campaign as { interactiveButtons?: unknown })
                     .interactiveButtons
             );
-            const interactiveButtons = toInteractiveSendButtons(consentBtns);
+            const placement = consentBtns.placement || "last_only";
+            // Freeform consent buttons: only on the last part of the sequence
+            // when placement is last_only (default for multi-template campaigns).
+            const allowFreeformButtons =
+                consentBtns.enabled &&
+                (placement !== "last_only" || isLastPart);
+            const interactiveButtons = allowFreeformButtons
+                ? toInteractiveSendButtons(consentBtns)
+                : [];
             const useInteractive = interactiveButtons.length > 0;
             // Utilidade/Transacional com botões: sempre texto completo + botões
             // num segundo balão (consentimento pós-recebimento).
@@ -1164,6 +1176,14 @@ async function processCampaign(campaignId: string) {
         while (keepSending && rounds < 20_000) {
             rounds++;
             const now = new Date();
+            // Multi-template campaigns: process ONE recipient at a time so
+            // T1→T2→T3 complete before the next contact (recipient-major order).
+            const partCount = Array.isArray(campaign.messageParts)
+                ? Math.max(1, (campaign.messageParts as unknown[]).length)
+                : 1;
+            const takeN =
+                partCount > 1 ? 1 : Math.max(1, campaign.batchSize || 1);
+
             const retryable = await prisma.datafyCampaignRecipient.findMany({
                 where: {
                     campaignId,
@@ -1174,7 +1194,7 @@ async function processCampaign(campaignId: string) {
                     ],
                 },
                 orderBy: { createdAt: "asc" },
-                take: Math.max(1, campaign.batchSize),
+                take: takeN,
             });
             if (!retryable.length) break;
 

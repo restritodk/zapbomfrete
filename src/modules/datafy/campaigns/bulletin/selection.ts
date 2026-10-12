@@ -18,6 +18,8 @@ export type BulletinCardPick = {
     libraryTemplateId: string | null;
     language?: string | null;
     category?: string | null;
+    /** Meta-approved components (BUTTONS etc.) — same source as send path */
+    templateComponents?: unknown;
 };
 
 /** Synthetic pick for an APPROVED template not yet linked to a bulletin card. */
@@ -30,6 +32,7 @@ export type OrphanTemplateSource = {
     loadsPerMessage: number;
     bodyPreview: string;
     remoteStatus?: string | null;
+    templateComponents?: unknown;
 };
 
 export function isOrphanVersionId(versionId: string): boolean {
@@ -68,6 +71,7 @@ export function orphanToBulletinPick(
                 libraryTemplateId: orphan.id,
                 language: orphan.language || "pt_BR",
                 category: orphan.category || "MARKETING",
+                templateComponents: orphan.templateComponents ?? null,
             },
         ],
     };
@@ -172,6 +176,7 @@ export function flattenBulletinSelections(
                 templateLanguage: card.language || "pt_BR",
                 templateCategory: card.category || "MARKETING",
                 templateApprovalStatus: approval,
+                templateComponents: card.templateComponents ?? null,
                 libraryTemplateId: card.libraryTemplateId,
                 variableMapping: { body: [] },
                 readyForRealSend: ready,

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+    ArrowDown,
+    ArrowUp,
     CheckCircle2,
     FileText,
     History,
@@ -36,6 +38,7 @@ type OrphanDto = {
     remoteStatus: string | null;
     lastSyncedAt: string | null;
     bodyPreview: string;
+    templateComponents?: unknown;
     suggestedBundleKey: string | null;
     associationStatus: string;
 };
@@ -68,6 +71,9 @@ function toPick(
             loadSummary: c.loadSummary,
             bodyPreview: c.bodyPreview,
             libraryTemplateId: c.libraryTemplateId,
+            language: c.language || "pt_BR",
+            category: c.category || "MARKETING",
+            templateComponents: c.templateComponents ?? null,
         })),
     };
 }
@@ -229,6 +235,17 @@ export function BulletinCampaignStep1(props: {
 
     const remove = (versionId: string) => {
         props.onChange(props.selections.filter((s) => s.versionId !== versionId));
+    };
+
+    const moveSelection = (versionId: string, dir: -1 | 1) => {
+        const idx = props.selections.findIndex((s) => s.versionId === versionId);
+        if (idx < 0) return;
+        const j = idx + dir;
+        if (j < 0 || j >= props.selections.length) return;
+        const next = [...props.selections];
+        const [row] = next.splice(idx, 1);
+        next.splice(j, 0, row);
+        props.onChange(next);
     };
 
     const useOrphanIndividual = (o: OrphanDto) => {
@@ -860,25 +877,71 @@ export function BulletinCampaignStep1(props: {
                         item(ns) · {prepared.meta.cardCount} mensagem(ns) por
                         destinatário
                     </p>
-                    <ol className="space-y-1.5 text-xs text-emerald-950 list-decimal pl-4">
-                        {prepared.meta.selections.map((s) => (
-                            <li key={s.versionId}>
-                                <span className="font-medium">{s.title}</span>{" "}
-                                <span className="font-mono">
-                                    {s.publicKey}
+                    <p className="text-[11px] text-emerald-900/80">
+                        Cada destinatário recebe todas as mensagens nesta ordem
+                        antes do próximo contato. Use as setas para reordenar.
+                    </p>
+                    <ul className="space-y-1.5">
+                        {props.selections.map((s, i) => (
+                            <li
+                                key={s.versionId}
+                                className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200/80 bg-white px-2.5 py-2 text-xs text-emerald-950"
+                            >
+                                <span className="font-semibold tabular-nums text-emerald-700 w-5">
+                                    {i + 1}.
                                 </span>
-                                {isOrphanVersionId(s.versionId)
-                                    ? " · template individual"
-                                    : ` v${s.version}${
-                                          s.isHistorical ? " (histórica)" : ""
-                                      } — ${s.cardCount} card(s)${
-                                          s.mode === "complete_bulletin"
-                                              ? " · completo"
-                                              : " · parcial"
-                                      }`}
+                                <span className="min-w-0 flex-1">
+                                    <span className="font-medium">{s.title}</span>{" "}
+                                    <span className="font-mono">
+                                        {s.publicKey}
+                                    </span>
+                                    {isOrphanVersionId(s.versionId)
+                                        ? " · template individual"
+                                        : ` v${s.version} — ${s.cardCount} card(s)`}
+                                </span>
+                                <div className="flex gap-1 shrink-0">
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 w-7 p-0 rounded-lg"
+                                        disabled={i === 0}
+                                        title="Mover para cima"
+                                        onClick={() =>
+                                            moveSelection(s.versionId, -1)
+                                        }
+                                    >
+                                        <ArrowUp className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 w-7 p-0 rounded-lg"
+                                        disabled={
+                                            i === props.selections.length - 1
+                                        }
+                                        title="Mover para baixo"
+                                        onClick={() =>
+                                            moveSelection(s.versionId, 1)
+                                        }
+                                    >
+                                        <ArrowDown className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 w-7 p-0 rounded-lg"
+                                        title="Remover"
+                                        onClick={() => remove(s.versionId)}
+                                    >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                </div>
                             </li>
                         ))}
-                    </ol>
+                    </ul>
                     {!validation.ok ? (
                         <ul className="text-[11px] text-amber-900 list-disc pl-4">
                             {validation.errors.map((e) => (

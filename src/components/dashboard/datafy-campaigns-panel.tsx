@@ -47,6 +47,11 @@ import {
     DEFAULT_CONSENT_BUTTON_TITLES,
     META_INTERACTIVE_REPLY_TITLE_MAX,
 } from "@/modules/crm/consent/constants";
+import type { ConsentButtonPlacementPref } from "@/modules/crm/consent/campaign-buttons";
+import {
+    assessConsentButtonPlacement,
+    extractApprovedQuickReplyButtons,
+} from "@/modules/datafy/campaigns/recipient-sequence";
 import { useSession } from "@/components/dashboard/session-provider";
 import {
     estimateMessageTotal,
@@ -305,6 +310,7 @@ function WhatsAppMessagePreview({
     warnings,
     interactiveButtons,
     interactiveDetached,
+    templateMeta,
 }: {
     previewText: string;
     imagePreview: string | null;
@@ -323,6 +329,13 @@ function WhatsAppMessagePreview({
     interactiveButtons?: Array<{ title: string }> | null;
     /** When true, buttons cannot ride on the same balloon (body > Meta interactive 1024). */
     interactiveDetached?: boolean;
+    templateMeta?: {
+        name?: string | null;
+        language?: string | null;
+        category?: string | null;
+        approvalStatus?: string | null;
+        buttonsSource?: "approved" | "freeform" | "none";
+    } | null;
 }) {
     const multi = (partCount || 0) > 1;
     const limit = charLimit > 0 ? charLimit : META_TEMPLATE_BODY_MAX;
@@ -409,6 +422,29 @@ function WhatsAppMessagePreview({
                     {deliveryHint ? (
                         <p className="text-[10px] text-center text-slate-500">
                             {deliveryHint}
+                        </p>
+                    ) : null}
+                    {templateMeta?.name ? (
+                        <p className="text-[10px] text-center text-slate-600 font-mono">
+                            {templateMeta.name}
+                            {templateMeta.language
+                                ? ` · ${templateMeta.language}`
+                                : ""}
+                            {templateMeta.category
+                                ? ` · ${templateMeta.category}`
+                                : ""}
+                            {templateMeta.approvalStatus
+                                ? ` · ${templateMeta.approvalStatus}`
+                                : ""}
+                        </p>
+                    ) : null}
+                    {templateMeta?.buttonsSource === "approved" ? (
+                        <p className="text-[10px] text-center text-emerald-800">
+                            Botões QUICK_REPLY aprovados pela Meta
+                        </p>
+                    ) : templateMeta?.buttonsSource === "freeform" ? (
+                        <p className="text-[10px] text-center text-sky-800">
+                            Botões de texto livre (janela 24h)
                         </p>
                     ) : null}
                 </div>
@@ -580,6 +616,8 @@ export function DatafyCampaignsPanel() {
     >("existing");
     /** Phase 9 — interactive reply / consent buttons (Step 1). */
     const [consentButtonsEnabled, setConsentButtonsEnabled] = useState(false);
+    const [consentButtonPlacement, setConsentButtonPlacement] =
+        useState<ConsentButtonPlacementPref>("last_only");
     const [consentBtnGrant, setConsentBtnGrant] = useState<string>(
         DEFAULT_CONSENT_BUTTON_TITLES.grant
     );
@@ -748,6 +786,11 @@ export function DatafyCampaignsPanel() {
         failed: number;
         dryRun?: boolean;
     } | null>(null);
+    const [progressMessageStats, setProgressMessageStats] = useState<{
+        processed: number;
+        total: number;
+        partCount: number;
+    } | null>(null);
     const [cancelling, setCancelling] = useState(false);
 
     const selectedTemplate = templates.find(
@@ -820,12 +863,15 @@ export function DatafyCampaignsPanel() {
             version?: number;
             cardCount?: number;
         } | null;
+        const msgParts = Array.isArray(camp.messageParts)
+            ? (camp.messageParts as Array<{ templateName?: string | null }>)
+            : [];
 
         setProgressName(
             meta?.publicKey
                 ? `${camp.name} · ${meta.publicKey}${
                       meta.version != null ? ` v${meta.version}` : ""
-                  } · ${partCount} card(s)/dest.`
+                  } · ${partCount} msg/dest.`
                 : camp.name
         );
         setProgressStartedAt(camp.startedAt);
@@ -837,29 +883,48 @@ export function DatafyCampaignsPanel() {
             failed: camp.totals.failed,
             dryRun: camp.dryRun,
         });
+
+        let messagesProcessed = 0;
+        const messagesTotal = recipients.length * partCount;
         setProgressRows(
             recipients.map((r) => {
                 const parts = r.partStatuses?.parts || [];
-                const cardProgress = parts.length
-                    ? parts
-                          .map((p, i) => {
-                              const st = String(p.status || "pending");
+                const byIndex = new Map(
+                    parts.map((p) => [Number(p.index ?? -1), p])
+                );
+                const cardProgress =
+                    partCount > 1
+                        ? Array.from({ length: partCount }, (_, i) => {
+                              const p = byIndex.get(i);
+                              const st = String(p?.status || "pending");
                               const label =
                                   st === "delivered"
                                       ? "Entregue"
-                                      : st === "accepted" || st === "sent"
-                                        ? "Aceito"
-                                        : st === "failed"
-                                          ? "Falha"
-                                          : st === "read"
-                                            ? "Lido"
-                                            : "Pendente";
-                              return `Card ${(p.index ?? i) + 1}/${parts.length || partCount} — ${label}`;
-                          })
-                          .join(" · ")
-                    : partCount > 1
-                      ? `${partCount} cards/destinatário`
-                      : "";
+                                      : st === "read"
+                                        ? "Lido"
+                                        : st === "accepted"
+                                          ? "Aceito (API)"
+                                          : st === "sent"
+                                            ? "Enviado"
+                                            : st === "failed"
+                                              ? "Falha"
+                                              : "Aguardando";
+                              if (
+                                  ["accepted", "sent", "delivered", "read", "failed"].includes(
+                                      st
+                                  )
+                              ) {
+                                  messagesProcessed++;
+                              }
+                              const tName =
+                                  msgParts[i]?.templateName ||
+                                  `Template ${i + 1}`;
+                              const err = p?.lastError
+                                  ? ` — ${String(p.lastError).slice(0, 80)}`
+                                  : "";
+                              return `T${i + 1} (${tName}): ${label}${err}`;
+                          }).join(" · ")
+                        : "";
                 const base = recipientDetail(
                     r.status,
                     r.skipReason,
@@ -884,6 +949,11 @@ export function DatafyCampaignsPanel() {
                 };
             })
         );
+        setProgressMessageStats({
+            processed: messagesProcessed,
+            total: messagesTotal,
+            partCount,
+        });
 
         if (["completed", "completed_with_errors"].includes(camp.status)) {
             setProgressPhase("completed");
@@ -1641,6 +1711,7 @@ export function DatafyCampaignsPanel() {
         setProgressStartedAt(new Date().toISOString());
         setProgressCompletedAt(null);
         setProgressCounters(null);
+        setProgressMessageStats(null);
         setProgressOpen(true);
     };
 
@@ -1731,11 +1802,39 @@ export function DatafyCampaignsPanel() {
         scheduledAt,
     });
 
-    const previewConsentButtons = useMemo(() => {
+    const freeformConsentModality =
+        purposeAllowsServiceWindowFreeform(purpose) &&
+        (contentMode === "direct" ||
+            bulletinDeliveryMode === "complete_single");
+
+    const consentPlacementAssessment = useMemo(
+        () =>
+            assessConsentButtonPlacement({
+                preference: consentButtonPlacement,
+                parts: bulletinParts,
+                consentConfigured: consentButtonsEnabled,
+                freeformModality: freeformConsentModality,
+            }),
+        [
+            consentButtonPlacement,
+            bulletinParts,
+            consentButtonsEnabled,
+            freeformConsentModality,
+        ]
+    );
+
+    const freeformConsentButtonList = useMemo(() => {
         if (!consentButtonsEnabled) return null;
         const buttons = [
-            { title: consentBtnGrant.trim() || DEFAULT_CONSENT_BUTTON_TITLES.grant },
-            { title: consentBtnDeny.trim() || DEFAULT_CONSENT_BUTTON_TITLES.deny },
+            {
+                title:
+                    consentBtnGrant.trim() ||
+                    DEFAULT_CONSENT_BUTTON_TITLES.grant,
+            },
+            {
+                title:
+                    consentBtnDeny.trim() || DEFAULT_CONSENT_BUTTON_TITLES.deny,
+            },
         ];
         if (consentBtnExtraEnabled && consentBtnExtra.trim()) {
             buttons.push({ title: consentBtnExtra.trim() });
@@ -1749,9 +1848,81 @@ export function DatafyCampaignsPanel() {
         consentBtnExtra,
     ]);
 
+    /** Preview buttons = approved Meta QUICK_REPLY for the part, never Etapa 1 fiction on templates. */
+    const previewPartButtons = useMemo(() => {
+        if (contentKind === "bulletin" && bulletinParts.length) {
+            const part = bulletinParts[previewPartIndex];
+            const approved = extractApprovedQuickReplyButtons(
+                part?.templateComponents
+            );
+            if (approved.length) {
+                return {
+                    buttons: approved.map((b) => ({ title: b.text })),
+                    source: "approved" as const,
+                };
+            }
+            if (freeformConsentModality && freeformConsentButtonList) {
+                const isLast =
+                    previewPartIndex >= bulletinParts.length - 1;
+                if (
+                    consentButtonPlacement === "last_only" &&
+                    !isLast
+                ) {
+                    return { buttons: null, source: "none" as const };
+                }
+                return {
+                    buttons: freeformConsentButtonList,
+                    source: "freeform" as const,
+                };
+            }
+            return { buttons: null, source: "none" as const };
+        }
+        if (
+            contentKind === "message" &&
+            contentMode === "existing" &&
+            selectedTemplate
+        ) {
+            const approved = extractApprovedQuickReplyButtons(
+                selectedTemplate.components
+            );
+            if (approved.length) {
+                return {
+                    buttons: approved.map((b) => ({ title: b.text })),
+                    source: "approved" as const,
+                };
+            }
+        }
+        if (freeformConsentModality && freeformConsentButtonList) {
+            return {
+                buttons: freeformConsentButtonList,
+                source: "freeform" as const,
+            };
+        }
+        return { buttons: null, source: "none" as const };
+    }, [
+        contentKind,
+        bulletinParts,
+        previewPartIndex,
+        freeformConsentModality,
+        freeformConsentButtonList,
+        consentButtonPlacement,
+        contentMode,
+        selectedTemplate,
+    ]);
+
+    const previewConsentButtons = previewPartButtons.buttons;
+
     const interactiveDetachedPreview =
-        Boolean(consentButtonsEnabled) &&
+        previewPartButtons.source === "freeform" &&
         messageBody.trim().length > META_INTERACTIVE_BODY_MAX;
+
+    const consentPlacementBlocked =
+        consentButtonsEnabled &&
+        contentKind === "bulletin" &&
+        bulletinParts.length > 1 &&
+        consentButtonPlacement === "last_only" &&
+        !freeformConsentModality &&
+        !consentPlacementAssessment.templateLastOnlyPossible;
 
     const createCampaign = async (action: LaunchAction) => {
         if (launchInFlightRef.current || saving) {
@@ -1823,6 +1994,12 @@ export function DatafyCampaignsPanel() {
                 toast.error(
                     pickValidation.errors[0] ||
                         "Seleção de boletins inválida — volte à Etapa 1."
+                );
+                return;
+            }
+            if (consentPlacementBlocked) {
+                toast.error(
+                    "Posicionamento «somente na última mensagem» é impossível: templates anteriores já possuem botões aprovados pela Meta. Escolha «conforme componentes aprovados» ou reordene a sequência."
                 );
                 return;
             }
@@ -2091,45 +2268,41 @@ export function DatafyCampaignsPanel() {
                 contentSource,
                 contentKind,
                 messageBody,
-                interactiveButtons:
-                    consentButtonsEnabled &&
-                    purposeAllowsServiceWindowFreeform(purpose) &&
-                    (contentMode === "direct" ||
-                        contentSource === "freeform_window" ||
-                        contentSource === "bulletin_complete_freeform")
-                        ? {
-                              enabled: true,
-                              purpose: "consent_offers",
-                              buttons: [
-                                  {
-                                      id: CONSENT_BUTTON_IDS.GRANT,
-                                      title: consentBtnGrant
-                                          .trim()
-                                          .slice(0, CAMPAIGN_BUTTON_TITLE_UI_MAX),
-                                  },
-                                  {
-                                      id: CONSENT_BUTTON_IDS.DENY,
-                                      title: consentBtnDeny
-                                          .trim()
-                                          .slice(0, CAMPAIGN_BUTTON_TITLE_UI_MAX),
-                                  },
-                                  ...(consentBtnExtraEnabled &&
-                                  consentBtnExtra.trim()
-                                      ? [
-                                            {
-                                                id: CONSENT_BUTTON_IDS.EXTRA,
-                                                title: consentBtnExtra
-                                                    .trim()
-                                                    .slice(
-                                                        0,
-                                                        CAMPAIGN_BUTTON_TITLE_UI_MAX
-                                                    ),
-                                            },
-                                        ]
-                                      : []),
-                              ],
-                          }
-                        : { enabled: false },
+                interactiveButtons: consentButtonsEnabled
+                    ? {
+                          enabled: true,
+                          purpose: "consent_offers",
+                          placement: consentButtonPlacement,
+                          buttons: [
+                              {
+                                  id: CONSENT_BUTTON_IDS.GRANT,
+                                  title: consentBtnGrant
+                                      .trim()
+                                      .slice(0, CAMPAIGN_BUTTON_TITLE_UI_MAX),
+                              },
+                              {
+                                  id: CONSENT_BUTTON_IDS.DENY,
+                                  title: consentBtnDeny
+                                      .trim()
+                                      .slice(0, CAMPAIGN_BUTTON_TITLE_UI_MAX),
+                              },
+                              ...(consentBtnExtraEnabled &&
+                              consentBtnExtra.trim()
+                                  ? [
+                                        {
+                                            id: CONSENT_BUTTON_IDS.EXTRA,
+                                            title: consentBtnExtra
+                                                .trim()
+                                                .slice(
+                                                    0,
+                                                    CAMPAIGN_BUTTON_TITLE_UI_MAX
+                                                ),
+                                        },
+                                    ]
+                                  : []),
+                          ],
+                      }
+                    : { enabled: false, placement: consentButtonPlacement },
                 messageParts:
                     contentKind === "bulletin" ? bulletinParts : null,
                 bulletinMeta:
@@ -3057,6 +3230,108 @@ export function DatafyCampaignsPanel() {
                                                             </p>
                                                         </div>
                                                     )}
+                                                </div>
+
+                                                <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+                                                    <p className="text-xs font-semibold text-slate-800">
+                                                        Posicionamento dos botões
+                                                    </p>
+                                                    <label className="flex items-start gap-2 cursor-pointer text-xs text-slate-700">
+                                                        <input
+                                                            type="radio"
+                                                            className="mt-0.5"
+                                                            name="consent-placement"
+                                                            checked={
+                                                                consentButtonPlacement ===
+                                                                "last_only"
+                                                            }
+                                                            onChange={() =>
+                                                                setConsentButtonPlacement(
+                                                                    "last_only"
+                                                                )
+                                                            }
+                                                        />
+                                                        <span>
+                                                            Somente na última
+                                                            mensagem da sequência
+                                                            (texto livre / quando
+                                                            tecnicamente possível)
+                                                        </span>
+                                                    </label>
+                                                    <label className="flex items-start gap-2 cursor-pointer text-xs text-slate-700">
+                                                        <input
+                                                            type="radio"
+                                                            className="mt-0.5"
+                                                            name="consent-placement"
+                                                            checked={
+                                                                consentButtonPlacement ===
+                                                                "per_template_approved"
+                                                            }
+                                                            onChange={() =>
+                                                                setConsentButtonPlacement(
+                                                                    "per_template_approved"
+                                                                )
+                                                            }
+                                                        />
+                                                        <span>
+                                                            Conforme os componentes
+                                                            aprovados de cada
+                                                            template
+                                                        </span>
+                                                    </label>
+                                                    {consentPlacementAssessment.warnings.map(
+                                                        (w) => (
+                                                            <p
+                                                                key={w}
+                                                                className="text-[11px] leading-relaxed text-amber-900 rounded-lg border border-amber-200/80 bg-amber-50/90 px-3 py-2"
+                                                            >
+                                                                {w}
+                                                            </p>
+                                                        )
+                                                    )}
+                                                    {consentPlacementBlocked ? (
+                                                        <p className="text-[11px] leading-relaxed text-red-900 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                                                            Configuração
+                                                            impossível de enviar:
+                                                            templates anteriores à
+                                                            última mensagem já têm
+                                                            botões QUICK_REPLY
+                                                            aprovados. Remova/
+                                                            reordene esses
+                                                            templates, use versões
+                                                            sem botões nas primeiras
+                                                            posições, ou selecione
+                                                            «conforme componentes
+                                                            aprovados».
+                                                        </p>
+                                                    ) : null}
+                                                    {consentButtonsEnabled &&
+                                                    contentKind === "bulletin" &&
+                                                    !freeformConsentModality &&
+                                                    bulletinParts.length > 0 &&
+                                                    !(
+                                                        consentPlacementAssessment
+                                                            .buttonsByPart[
+                                                            bulletinParts.length -
+                                                                1
+                                                        ] || []
+                                                    ).length ? (
+                                                        <p className="text-[11px] leading-relaxed text-slate-700 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                                                            A última mensagem não
+                                                            tem botões aprovados.
+                                                            Os textos da Etapa 1 não
+                                                            podem ser injetados em
+                                                            templates APPROVED.{" "}
+                                                            <strong className="font-medium">
+                                                                Prepare um template
+                                                                final com botões
+                                                                para aprovação da
+                                                                Meta
+                                                            </strong>{" "}
+                                                            e selecione-o como
+                                                            última mensagem.
+                                                        </p>
+                                                    ) : null}
                                                 </div>
 
                                                 {(consentBtnGrant.length >
@@ -4801,17 +5076,52 @@ export function DatafyCampaignsPanel() {
                                             </label>
                                         ) : null}
                                         <p className="text-xs text-slate-600 pt-1">
-                                            Botões de consentimento:{" "}
+                                            Botões:{" "}
                                             {!consentButtonsEnabled
                                                 ? "desativados"
-                                                : purposeAllowsServiceWindowFreeform(
-                                                        purpose
-                                                    ) &&
-                                                    bulletinDeliveryMode ===
-                                                        "complete_single"
-                                                  ? "ativados e compatíveis (texto livre)"
-                                                  : "configurados, mas indisponíveis nesta modalidade de template APPROVED"}
+                                                : freeformConsentModality
+                                                  ? `texto livre · ${
+                                                        consentButtonPlacement ===
+                                                        "last_only"
+                                                            ? "somente na última mensagem"
+                                                            : "conforme cada mensagem"
+                                                    }`
+                                                  : `templates APPROVED · ${
+                                                        consentButtonPlacement ===
+                                                        "last_only"
+                                                            ? "preferência última mensagem"
+                                                            : "componentes de cada template"
+                                                    }`}
+                                            {consentPlacementAssessment.warnings
+                                                .length
+                                                ? ` — ${consentPlacementAssessment.warnings[0]}`
+                                                : ""}
                                         </p>
+                                        <ol className="text-xs list-decimal pl-4 space-y-0.5 pt-1">
+                                            {bulletinParts.map((p, i) => {
+                                                const btns =
+                                                    extractApprovedQuickReplyButtons(
+                                                        p.templateComponents
+                                                    );
+                                                return (
+                                                    <li key={`${p.index}-${p.templateName}`}>
+                                                        Msg {i + 1}:{" "}
+                                                        <span className="font-mono">
+                                                            {p.templateName ||
+                                                                "—"}
+                                                        </span>
+                                                        {btns.length
+                                                            ? ` · botões Meta: ${btns
+                                                                  .map(
+                                                                      (b) =>
+                                                                          b.text
+                                                                  )
+                                                                  .join(" / ")}`
+                                                            : " · sem botões aprovados"}
+                                                    </li>
+                                                );
+                                            })}
+                                        </ol>
                                     </div>
                                 ) : null}
                                 <div className="grid gap-2 sm:grid-cols-2 text-slate-600">
@@ -5063,6 +5373,38 @@ export function DatafyCampaignsPanel() {
                                             interactiveDetached={
                                                 interactiveDetachedPreview
                                             }
+                                            templateMeta={
+                                                contentKind === "bulletin" &&
+                                                bulletinParts[
+                                                    previewPartIndex
+                                                ]
+                                                    ? {
+                                                          name: bulletinParts[
+                                                              previewPartIndex
+                                                          ].templateName,
+                                                          language:
+                                                              bulletinParts[
+                                                                  previewPartIndex
+                                                              ]
+                                                                  .templateLanguage,
+                                                          category:
+                                                              bulletinParts[
+                                                                  previewPartIndex
+                                                              ]
+                                                                  .templateCategory,
+                                                          approvalStatus:
+                                                              bulletinParts[
+                                                                  previewPartIndex
+                                                              ]
+                                                                  .templateApprovalStatus,
+                                                          buttonsSource:
+                                                              previewPartButtons.source,
+                                                      }
+                                                    : {
+                                                          buttonsSource:
+                                                              previewPartButtons.source,
+                                                      }
+                                            }
                                         />
                                     </div>
                                 )}
@@ -5132,7 +5474,18 @@ export function DatafyCampaignsPanel() {
                                 warnings={
                                     contentKind === "bulletin"
                                         ? bulletinParts.length
-                                            ? undefined
+                                            ? [
+                                                  ...(bulletinParts[
+                                                      previewPartIndex
+                                                  ]?.blockReason
+                                                      ? [
+                                                            bulletinParts[
+                                                                previewPartIndex
+                                                            ]!.blockReason!,
+                                                        ]
+                                                      : []),
+                                                  ...consentPlacementAssessment.warnings,
+                                              ]
                                             : [
                                                   "Selecione um boletim ou template APPROVED na Etapa 1.",
                                               ]
@@ -5140,6 +5493,33 @@ export function DatafyCampaignsPanel() {
                                 }
                                 interactiveButtons={previewConsentButtons}
                                 interactiveDetached={interactiveDetachedPreview}
+                                templateMeta={
+                                    contentKind === "bulletin" &&
+                                    bulletinParts[previewPartIndex]
+                                        ? {
+                                              name: bulletinParts[
+                                                  previewPartIndex
+                                              ].templateName,
+                                              language:
+                                                  bulletinParts[
+                                                      previewPartIndex
+                                                  ].templateLanguage,
+                                              category:
+                                                  bulletinParts[
+                                                      previewPartIndex
+                                                  ].templateCategory,
+                                              approvalStatus:
+                                                  bulletinParts[
+                                                      previewPartIndex
+                                                  ].templateApprovalStatus,
+                                              buttonsSource:
+                                                  previewPartButtons.source,
+                                          }
+                                        : {
+                                              buttonsSource:
+                                                  previewPartButtons.source,
+                                          }
+                                }
                             />
                         </aside>
                     </div>
@@ -5402,6 +5782,7 @@ export function DatafyCampaignsPanel() {
                 allowDismissWhileRunning
                 subtitle={progressName}
                 datafyCounters={progressCounters}
+                messageProgress={progressMessageStats}
                 cancelling={cancelling}
                 onCancelBroadcast={
                     progressCampaignId

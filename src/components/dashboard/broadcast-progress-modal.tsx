@@ -72,6 +72,12 @@ export interface BroadcastProgressModalProps {
         failed: number;
         dryRun?: boolean;
     } | null;
+    /** Multi-template campaigns: message units vs recipients. */
+    messageProgress?: {
+        processed: number;
+        total: number;
+        partCount: number;
+    } | null;
 }
 
 function formatDateTime(value: string | null | undefined, timeZone: string): string {
@@ -149,6 +155,7 @@ export function BroadcastProgressModal({
     allowDismissWhileRunning = false,
     subtitle = null,
     datafyCounters = null,
+    messageProgress = null,
 }: BroadcastProgressModalProps) {
     const titleId = useId();
     const descId = useId();
@@ -302,33 +309,114 @@ export function BroadcastProgressModal({
                     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4 sm:gap-5 sm:px-6 sm:py-5">
                         {isRunning ? (
                             <>
-                                <div className="space-y-2">
-                                    <div className="flex items-end justify-between gap-3">
-                                        <p className="text-sm font-semibold text-slate-800">
-                                            <span className="tabular-nums">
-                                                {counts.processed}
+                                <div className="space-y-3">
+                                    <div className="space-y-2">
+                                        <div className="flex items-end justify-between gap-3">
+                                            <p className="text-sm font-semibold text-slate-800">
+                                                Progresso de destinatários:{" "}
+                                                <span className="tabular-nums">
+                                                    {counts.processed}
+                                                </span>
+                                                {" de "}
+                                                <span className="tabular-nums">
+                                                    {counts.total}
+                                                </span>
+                                            </p>
+                                            <span className="text-sm font-semibold tabular-nums text-slate-700">
+                                                {counts.pct}%
                                             </span>
-                                            {" de "}
-                                            <span className="tabular-nums">{counts.total}</span>
-                                            {" destinatários processados"}
-                                        </p>
-                                        <span className="text-sm font-semibold tabular-nums text-slate-700">
-                                            {counts.pct}%
-                                        </span>
-                                    </div>
-                                    <div
-                                        className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100"
-                                        role="progressbar"
-                                        aria-valuemin={0}
-                                        aria-valuemax={100}
-                                        aria-valuenow={counts.pct}
-                                        aria-label="Progresso do disparo"
-                                    >
+                                        </div>
                                         <div
-                                            className="h-full rounded-full bg-blue-500 transition-[width] duration-300 ease-out"
-                                            style={{ width: `${counts.pct}%` }}
-                                        />
+                                            className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100"
+                                            role="progressbar"
+                                            aria-valuemin={0}
+                                            aria-valuemax={100}
+                                            aria-valuenow={counts.pct}
+                                            aria-label="Progresso de destinatários"
+                                        >
+                                            <div
+                                                className="h-full rounded-full bg-blue-500 transition-[width] duration-300 ease-out"
+                                                style={{
+                                                    width: `${counts.pct}%`,
+                                                }}
+                                            />
+                                        </div>
                                     </div>
+                                    {messageProgress &&
+                                    messageProgress.partCount > 1 ? (
+                                        <div className="space-y-2">
+                                            <div className="flex items-end justify-between gap-3">
+                                                <p className="text-sm font-semibold text-slate-800">
+                                                    Progresso de mensagens:{" "}
+                                                    <span className="tabular-nums">
+                                                        {
+                                                            messageProgress.processed
+                                                        }
+                                                    </span>
+                                                    {" de "}
+                                                    <span className="tabular-nums">
+                                                        {messageProgress.total}
+                                                    </span>
+                                                    <span className="font-normal text-slate-500">
+                                                        {" "}
+                                                        (
+                                                        {
+                                                            messageProgress.partCount
+                                                        }{" "}
+                                                        por destinatário)
+                                                    </span>
+                                                </p>
+                                                <span className="text-sm font-semibold tabular-nums text-slate-700">
+                                                    {messageProgress.total > 0
+                                                        ? Math.round(
+                                                              (messageProgress.processed /
+                                                                  messageProgress.total) *
+                                                                  100
+                                                          )
+                                                        : 0}
+                                                    %
+                                                </span>
+                                            </div>
+                                            <div
+                                                className="h-2 w-full overflow-hidden rounded-full bg-slate-100"
+                                                role="progressbar"
+                                                aria-valuemin={0}
+                                                aria-valuemax={100}
+                                                aria-valuenow={
+                                                    messageProgress.total > 0
+                                                        ? Math.round(
+                                                              (messageProgress.processed /
+                                                                  messageProgress.total) *
+                                                                  100
+                                                          )
+                                                        : 0
+                                                }
+                                                aria-label="Progresso de mensagens"
+                                            >
+                                                <div
+                                                    className="h-full rounded-full bg-sky-500 transition-[width] duration-300 ease-out"
+                                                    style={{
+                                                        width: `${
+                                                            messageProgress.total >
+                                                            0
+                                                                ? Math.round(
+                                                                      (messageProgress.processed /
+                                                                          messageProgress.total) *
+                                                                          100
+                                                                  )
+                                                                : 0
+                                                        }%`,
+                                                    }}
+                                                />
+                                            </div>
+                                            <p className="text-[11px] text-slate-500">
+                                                Aceite da API ≠ entrega no
+                                                aparelho. Por destinatário, veja
+                                                o status de cada template na
+                                                tabela.
+                                            </p>
+                                        </div>
+                                    ) : null}
                                 </div>
 
                                 {datafyCounters && (

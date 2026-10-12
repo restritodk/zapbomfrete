@@ -37,6 +37,9 @@ export const createCampaignBodySchema = z.object({
         .object({
             enabled: z.boolean(),
             purpose: z.string().optional(),
+            placement: z
+                .enum(["last_only", "per_template_approved"])
+                .optional(),
             buttons: z
                 .array(
                     z.object({

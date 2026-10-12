@@ -6,9 +6,15 @@ import {
     META_QUICK_REPLY_MAX_BUTTONS,
 } from "./constants";
 
+export type ConsentButtonPlacementPref =
+    | "last_only"
+    | "per_template_approved";
+
 export type CampaignConsentButtons = {
     enabled: boolean;
     purpose: "consent_offers";
+    /** Where freeform / preference applies in multi-message campaigns. */
+    placement?: ConsentButtonPlacementPref;
     buttons: Array<{
         id: string;
         title: string;
@@ -19,6 +25,7 @@ export function defaultCampaignConsentButtons(): CampaignConsentButtons {
     return {
         enabled: false,
         purpose: "consent_offers",
+        placement: "last_only",
         buttons: DEFAULT_CONSENT_BUTTONS.map((b) => ({
             id: b.payload,
             title: b.text.slice(0, CAMPAIGN_BUTTON_TITLE_UI_MAX),
@@ -49,9 +56,15 @@ export function parseCampaignConsentButtons(
     if (!buttons.length) {
         return { ...fallback, enabled };
     }
+    const placementRaw = String(o.placement || "").trim();
+    const placement: ConsentButtonPlacementPref =
+        placementRaw === "per_template_approved"
+            ? "per_template_approved"
+            : "last_only";
     return {
         enabled,
         purpose: "consent_offers",
+        placement,
         buttons: buttons.slice(0, META_QUICK_REPLY_MAX_BUTTONS),
     };
 }

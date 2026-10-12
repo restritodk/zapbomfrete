@@ -118,6 +118,15 @@ describe("bulletin campaign selection", () => {
     });
 
     it("orphan APPROVED template becomes selectable individual pick", () => {
+        const cottonButtons = [
+            {
+                type: "BUTTONS",
+                buttons: [
+                    { type: "QUICK_REPLY", text: "Continuar recebendo ofertas" },
+                    { type: "QUICK_REPLY", text: "Não receber mais novidades" },
+                ],
+            },
+        ];
         const orphanPick = orphanToBulletinPick({
             id: "mt1",
             technicalName: "boletim_v3_2_cargas",
@@ -126,6 +135,7 @@ describe("bulletin campaign selection", () => {
             category: "MARKETING",
             loadsPerMessage: 2,
             bodyPreview: "BODY REAL DO TEMPLATE",
+            templateComponents: cottonButtons,
         });
         assert.equal(isOrphanVersionId(orphanPick.versionId), true);
         const prepared = flattenBulletinSelections([orphanPick]);
@@ -133,6 +143,7 @@ describe("bulletin campaign selection", () => {
         assert.equal(prepared.parts[0].bodyText, "BODY REAL DO TEMPLATE");
         assert.equal(prepared.parts[0].templateName, "boletim_v3_2_cargas");
         assert.equal(prepared.parts[0].templateLanguage, "pt_BR");
+        assert.deepEqual(prepared.parts[0].templateComponents, cottonButtons);
         // Static BODY (no {{n}}) → ready; parameterized orphans stay blocked
         assert.equal(prepared.parts[0].readyForRealSend, true);
         const v = validateBulletinPicks([orphanPick]);
