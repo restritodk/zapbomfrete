@@ -236,7 +236,7 @@ export function assessBulletinLaunchIssues(opts: {
             level: "warning",
             code: "purpose_category_mismatch",
             message:
-                "Finalidade Utilidade com template(s) MARKETING: a Meta enviará na categoria MARKETING aprovada (não reclassificamos UTILITY). Confirme na Etapa 5 ou selecione templates UTILITY.",
+                "Esta campanha está marcada como Utilidade, mas o template selecionado está aprovado pela Meta como Marketing. O envio deste template não será convertido em Utilidade por essa seleção. Confirme na Etapa 5 ou use templates UTILITY.",
         });
     }
 

@@ -116,6 +116,15 @@ import {
     persistableBulletinVersionId,
 } from "@/modules/datafy/campaigns/create-payload";
 import {
+    categoryForNewTemplateSubmit,
+    detectPurposeCategoryMismatch,
+    expectedBillingCategory,
+    metaCategoryLabelPt,
+    normalizeMetaCategory,
+    purposeLabelPt,
+    summarizeTemplateCategories,
+} from "@/modules/datafy/campaigns/purpose-category";
+import {
     buildEstimateCopy,
     CAMPAIGN_DELAY_SEC_MAX,
     CAMPAIGN_DELAY_SEC_MIN,
@@ -1833,8 +1842,10 @@ export function DatafyCampaignsPanel() {
                     body: JSON.stringify({
                         name: name || `campanha_${Date.now()}`,
                         language: "pt_BR",
-                        category:
-                            purpose === "utility" ? "UTILITY" : "MARKETING",
+                        // Meta category for NEW template submit — never derived from Finalidade.
+                        category: categoryForNewTemplateSubmit({
+                            explicitCategory: "MARKETING",
+                        }),
                         bodyText: messageBody,
                         headerImageHandle: headerImageHandle,
                     }),
@@ -2308,9 +2319,13 @@ export function DatafyCampaignsPanel() {
             } else {
                 templateName = first.templateName || null;
                 templateLanguage = first.templateLanguage || "pt_BR";
-                templateCategory =
-                    first.templateCategory ||
-                    (purpose === "utility" ? "UTILITY" : "MARKETING");
+                // Persist synced Meta category only — never invent UTILITY from purpose.
+                templateCategory = first.templateCategory
+                    ? normalizeMetaCategory(first.templateCategory) ===
+                      "UNKNOWN"
+                        ? first.templateCategory
+                        : normalizeMetaCategory(first.templateCategory)
+                    : null;
                 templateApprovalStatus =
                     first.templateApprovalStatus || null;
                 contentSource = "bulletin_parts";
@@ -2399,8 +2414,9 @@ export function DatafyCampaignsPanel() {
                 }
                 templateName = custom.templateName;
                 templateLanguage = "pt_BR";
-                templateCategory =
-                    purpose === "utility" ? "UTILITY" : "MARKETING";
+                templateCategory = categoryForNewTemplateSubmit({
+                    explicitCategory: "MARKETING",
+                });
                 templateApprovalStatus = custom.approvalStatus || "PENDING";
                 contentSource = "custom_submitted";
                 vars = custom.bodyTokens.length
@@ -3336,7 +3352,7 @@ export function DatafyCampaignsPanel() {
                                 </div>
                                 <div className="space-y-1.5">
                                     <Label className="text-slate-700">
-                                        Finalidade
+                                        Finalidade da campanha
                                     </Label>
                                     <Select
                                         value={purpose}
@@ -3385,6 +3401,15 @@ export function DatafyCampaignsPanel() {
                                             </SelectItem>
                                         </SelectContent>
                                     </Select>
+                                    <p className="text-[11px] leading-relaxed text-slate-500">
+                                        Classificação interna (consentimento,
+                                        janela 24h, texto livre).{" "}
+                                        <strong className="font-medium text-slate-700">
+                                            Não altera
+                                        </strong>{" "}
+                                        a categoria aprovada pela Meta do
+                                        template nem a cobrança esperada.
+                                    </p>
                                     {purposeUsesBaileysFreeform(purpose) && (
                                         <p className="text-[11px] leading-relaxed text-emerald-900 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-2">
                                             Texto livre usa o WhatsApp conectado
@@ -5637,28 +5662,44 @@ export function DatafyCampaignsPanel() {
                                                     p.templateCategory || ""
                                                 ).toUpperCase() === "MARKETING"
                                         ) ? (
-                                            <label className="flex items-start gap-2 pt-1 text-sm cursor-pointer">
-                                                <input
-                                                    type="checkbox"
-                                                    className="mt-1"
-                                                    checked={
-                                                        confirmMarketingUtility
-                                                    }
-                                                    onChange={(e) =>
-                                                        setConfirmMarketingUtility(
-                                                            e.target.checked
-                                                        )
-                                                    }
-                                                />
-                                                <span>
-                                                    Entendo que a finalidade é
-                                                    Utilidade, mas os templates
-                                                    estão aprovados como{" "}
-                                                    <strong>MARKETING</strong> —
-                                                    a Meta enviará nessa categoria
-                                                    (sem reclassificar).
-                                                </span>
-                                            </label>
+                                            <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2.5 space-y-2">
+                                                <p className="text-sm text-amber-950 leading-relaxed">
+                                                    Esta campanha está marcada
+                                                    como{" "}
+                                                    <strong>Utilidade</strong>,
+                                                    mas o template selecionado
+                                                    está aprovado pela Meta como{" "}
+                                                    <strong>Marketing</strong>.
+                                                    O envio deste template{" "}
+                                                    <strong>
+                                                        não será convertido em
+                                                        Utilidade
+                                                    </strong>{" "}
+                                                    por essa seleção.
+                                                </p>
+                                                <label className="flex items-start gap-2 text-sm cursor-pointer text-amber-950">
+                                                    <input
+                                                        type="checkbox"
+                                                        className="mt-1"
+                                                        checked={
+                                                            confirmMarketingUtility
+                                                        }
+                                                        onChange={(e) =>
+                                                            setConfirmMarketingUtility(
+                                                                e.target.checked
+                                                            )
+                                                        }
+                                                    />
+                                                    <span>
+                                                        Confirmo que entendi: a
+                                                        cobrança/classificação
+                                                        esperada segue a
+                                                        categoria Meta{" "}
+                                                        <strong>MARKETING</strong>
+                                                        .
+                                                    </span>
+                                                </label>
+                                            </div>
                                         ) : null}
                                         <p className="text-xs text-slate-600 pt-1">
                                             Botões:{" "}
@@ -5682,21 +5723,35 @@ export function DatafyCampaignsPanel() {
                                                 ? ` — ${consentPlacementAssessment.warnings[0]}`
                                                 : ""}
                                         </p>
-                                        <ol className="text-xs list-decimal pl-4 space-y-0.5 pt-1">
-                                            {bulletinParts.map((p, i) => {
+                                        <ol className="text-xs list-decimal pl-4 space-y-1 pt-1">
+                                            {summarizeTemplateCategories(
+                                                bulletinParts
+                                            ).map((row, i) => {
+                                                const p = bulletinParts[i];
                                                 const btns =
                                                     extractApprovedQuickReplyButtons(
-                                                        p.templateComponents
+                                                        p?.templateComponents
                                                     );
                                                 return (
-                                                    <li key={`${p.index}-${p.templateName}`}>
+                                                    <li
+                                                        key={`${p?.index}-${row.name}`}
+                                                    >
                                                         Msg {i + 1}:{" "}
                                                         <span className="font-mono">
-                                                            {p.templateName ||
-                                                                "—"}
+                                                            {row.name}
                                                         </span>
+                                                        {" · "}
+                                                        <span className="font-semibold text-slate-700">
+                                                            Meta:{" "}
+                                                            {row.categoryLabel}
+                                                        </span>
+                                                        {row.approvalStatus
+                                                            ? ` · ${row.approvalStatus}`
+                                                            : ""}
+                                                        {" · cobrança esperada: "}
+                                                        {row.billingLabel}
                                                         {btns.length
-                                                            ? ` · botões Meta: ${btns
+                                                            ? ` · botões: ${btns
                                                                   .map(
                                                                       (b) =>
                                                                           b.text
@@ -5712,10 +5767,83 @@ export function DatafyCampaignsPanel() {
                                 <div className="grid gap-2 sm:grid-cols-2 text-slate-600">
                                     <p>
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
-                                            Finalidade
+                                            Finalidade da campanha
                                         </span>
-                                        {purpose}
+                                        {purposeLabelPt(purpose)}
                                     </p>
+                                    <p>
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Categoria Meta (template)
+                                        </span>
+                                        {contentKind === "bulletin" &&
+                                        bulletinParts.length
+                                            ? [
+                                                  ...new Set(
+                                                      bulletinParts.map((p) =>
+                                                          metaCategoryLabelPt(
+                                                              p.templateCategory
+                                                          )
+                                                      )
+                                                  ),
+                                              ].join(" · ")
+                                            : selectedTemplate
+                                              ? metaCategoryLabelPt(
+                                                    selectedTemplate.category
+                                                )
+                                              : "Não confirmado"}
+                                    </p>
+                                    <p>
+                                        <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
+                                            Cobrança esperada
+                                        </span>
+                                        {(() => {
+                                            const cats =
+                                                contentKind === "bulletin" &&
+                                                bulletinParts.length
+                                                    ? bulletinParts.map(
+                                                          (p) =>
+                                                              p.templateCategory
+                                                      )
+                                                    : [
+                                                          selectedTemplate?.category,
+                                                      ];
+                                            const uniq = [
+                                                ...new Set(
+                                                    cats.map((c) =>
+                                                        expectedBillingCategory(
+                                                            c
+                                                        ).label
+                                                    )
+                                                ),
+                                            ];
+                                            return uniq.join(" · ") || "Não confirmado";
+                                        })()}
+                                        <span className="block text-[11px] text-slate-400 mt-0.5">
+                                            Estimativa pela categoria aprovada.
+                                            Cobrança efetiva: relatórios
+                                            Meta/Datafy (não inventamos valores).
+                                        </span>
+                                    </p>
+                                    {contentKind !== "bulletin" &&
+                                        detectPurposeCategoryMismatch({
+                                            purpose,
+                                            templateCategories: [
+                                                selectedTemplate?.category,
+                                            ],
+                                        }).mismatch && (
+                                            <div className="sm:col-span-2 rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2.5 text-sm text-amber-950 leading-relaxed">
+                                                {
+                                                    detectPurposeCategoryMismatch(
+                                                        {
+                                                            purpose,
+                                                            templateCategories: [
+                                                                selectedTemplate?.category,
+                                                            ],
+                                                        }
+                                                    ).message
+                                                }
+                                            </div>
+                                        )}
                                     <p>
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
                                             Consentimento elegível
