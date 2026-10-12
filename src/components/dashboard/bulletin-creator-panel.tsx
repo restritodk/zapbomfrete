@@ -7,6 +7,7 @@ import {
     AlertTriangle,
     CheckCircle2,
     Copy,
+    FileText,
     Loader2,
     Plus,
     RefreshCw,
@@ -445,48 +446,76 @@ export function BulletinCreatorPanel() {
           })
         : "";
 
+    const premiumCard =
+        "rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_4px_rgba(15,23,42,0.06)]";
+    const premiumInput =
+        "h-11 rounded-xl border-slate-200 bg-white focus-visible:border-[#2563eb] focus-visible:ring-[#2563eb]/25";
+    const premiumBtn =
+        "rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-[0_6px_16px_-6px_rgba(37,99,235,0.55)] transition-all duration-200";
+    const premiumBtnOutline =
+        "rounded-xl border-slate-200 text-[#0f2744] hover:bg-slate-50 transition-all duration-200";
+
     return (
-        <div className="mx-auto w-full max-w-5xl space-y-6 px-1 pb-16">
-            <div className="space-y-1">
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">
-                    Criador inteligente de boletins
-                </h1>
-                <p className="max-w-2xl text-sm text-slate-600">
-                    Cole o boletim completo, revise cada carga e prepare a
-                    campanha oficial Datafy — sem disparo automático.
-                </p>
+        <div className="mx-auto w-full max-w-6xl space-y-5 pb-16">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-3 min-w-0">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#2563eb] text-white shadow-[0_8px_20px_-8px_rgba(37,99,235,0.7)]">
+                        <Sparkles className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0f2744]">
+                            Criador inteligente de boletins
+                        </h1>
+                        <p className="text-slate-500 text-sm mt-1 max-w-2xl">
+                            Transforme suas informações de cargas em boletins
+                            profissionais prontos para revisão e aprovação.
+                        </p>
+                        <p className="text-[12px] text-slate-400 mt-1.5">
+                            Este fluxo não realiza disparos automaticamente.
+                        </p>
+                    </div>
+                </div>
             </div>
 
-            <Card className="border-slate-200/80 shadow-sm">
+            <Card className={premiumCard}>
                 <CardHeader className="pb-3">
-                    <CardTitle className="text-lg">1. Colar boletim</CardTitle>
-                    <CardDescription>
-                        Aceita 1, 8, 30 ou mais cargas. Texto, emojis e
-                        separadores são preservados.
-                    </CardDescription>
+                    <div className="flex items-start gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-[#2563eb]">
+                            <FileText className="h-5 w-5" />
+                        </div>
+                        <div>
+                            <CardTitle className="text-lg text-[#0f2744]">
+                                1. Colar boletim
+                            </CardTitle>
+                            <CardDescription className="text-slate-500 mt-1">
+                                Aceita 1, 8, 30 ou mais cargas. Texto, emojis e
+                                separadores são preservados.
+                            </CardDescription>
+                        </div>
+                    </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
                     <Textarea
                         value={rawText}
                         onChange={(e) => setRawText(e.target.value)}
                         placeholder="Cole aqui o boletim completo (ex.: ATUALIZAÇÃO DE EMBARQUE COTTON)…"
-                        className="min-h-[220px] resize-y whitespace-pre-wrap rounded-xl border-slate-200 bg-white text-[15px] leading-relaxed"
+                        className="min-h-[240px] max-h-[min(70vh,640px)] resize-y overflow-x-hidden whitespace-pre-wrap rounded-xl border-slate-200 bg-white text-[15px] leading-relaxed text-[#0f2744] placeholder:text-slate-400 focus-visible:border-[#2563eb] focus-visible:ring-[#2563eb]/20 shadow-sm"
                     />
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-3">
                         <Button
                             type="button"
                             onClick={() => void analyze()}
-                            disabled={analyzing}
-                            className="rounded-xl"
+                            disabled={analyzing || !rawText.trim()}
+                            className={premiumBtn}
                         >
                             {analyzing ? (
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             ) : (
                                 <Wand2 className="mr-2 h-4 w-4" />
                             )}
-                            Analisar boletim
+                            {analyzing ? "Analisando…" : "Analisar boletim"}
                         </Button>
-                        <span className="text-xs tabular-nums text-slate-400">
+                        <span className="text-xs tabular-nums text-slate-400 font-medium">
                             {rawText.length.toLocaleString("pt-BR")} caracteres
                         </span>
                     </div>
@@ -495,21 +524,24 @@ export function BulletinCreatorPanel() {
 
             {draft && (
                 <>
-                    <Card className="border-slate-200/80 shadow-sm">
+                    <Card className={premiumCard}>
                         <CardHeader className="pb-3">
                             <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div>
-                                    <CardTitle className="text-lg">
+                                    <CardTitle className="text-lg text-[#0f2744]">
                                         2. Dados gerais
                                     </CardTitle>
-                                    <CardDescription>
+                                    <CardDescription className="text-slate-500">
                                         {draft.loads.length} carga(s)
                                         {incompleteCount
                                             ? ` · ${incompleteCount} incompleta(s)`
                                             : ""}
                                     </CardDescription>
                                 </div>
-                                <Badge variant="outline" className="rounded-lg">
+                                <Badge
+                                    variant="outline"
+                                    className="rounded-full border-blue-100 bg-blue-50 text-[#1d4ed8]"
+                                >
                                     <Sparkles className="mr-1 h-3 w-3" />
                                     Revisar antes de confirmar
                                 </Badge>
@@ -517,17 +549,19 @@ export function BulletinCreatorPanel() {
                         </CardHeader>
                         <CardContent className="grid gap-3 sm:grid-cols-2">
                             <div className="space-y-1.5 sm:col-span-2">
-                                <Label>Título</Label>
+                                <Label className="text-[#0f2744]">Título</Label>
                                 <Input
                                     value={draft.general.title}
                                     onChange={(e) =>
                                         updateGeneral("title", e.target.value)
                                     }
-                                    className="h-11 rounded-xl"
+                                    className={premiumInput}
                                 />
                             </div>
                             <div className="space-y-1.5">
-                                <Label>Tipo / mercadoria</Label>
+                                <Label className="text-[#0f2744]">
+                                    Tipo / mercadoria
+                                </Label>
                                 <Input
                                     value={draft.general.operationType || ""}
                                     onChange={(e) =>
@@ -536,12 +570,14 @@ export function BulletinCreatorPanel() {
                                             e.target.value
                                         )
                                     }
-                                    className="h-11 rounded-xl"
+                                    className={premiumInput}
                                     placeholder="Ex.: Cotton / Algodão"
                                 />
                             </div>
                             <div className="space-y-1.5">
-                                <Label>Data de referência</Label>
+                                <Label className="text-[#0f2744]">
+                                    Data de referência
+                                </Label>
                                 <Input
                                     value={draft.general.referenceDate || ""}
                                     onChange={(e) =>
@@ -550,11 +586,11 @@ export function BulletinCreatorPanel() {
                                             e.target.value
                                         )
                                     }
-                                    className="h-11 rounded-xl"
+                                    className={premiumInput}
                                 />
                             </div>
                             <div className="space-y-1.5 sm:col-span-2">
-                                <Label>
+                                <Label className="text-[#0f2744]">
                                     Link do grupo WhatsApp{" "}
                                     <span className="font-normal text-slate-400">
                                         (não entra automaticamente na campanha)
@@ -565,11 +601,13 @@ export function BulletinCreatorPanel() {
                                     onChange={(e) =>
                                         updateGeneral("groupUrl", e.target.value)
                                     }
-                                    className="h-11 rounded-xl font-mono text-sm"
+                                    className={`${premiumInput} font-mono text-sm`}
                                 />
                             </div>
                             <div className="space-y-1.5 sm:col-span-2">
-                                <Label>Observações gerais</Label>
+                                <Label className="text-[#0f2744]">
+                                    Observações gerais
+                                </Label>
                                 <Textarea
                                     value={draft.general.generalNotes || ""}
                                     onChange={(e) =>
@@ -578,7 +616,7 @@ export function BulletinCreatorPanel() {
                                             e.target.value
                                         )
                                     }
-                                    className="min-h-[72px] rounded-xl"
+                                    className="min-h-[72px] rounded-xl border-slate-200 focus-visible:border-[#2563eb] focus-visible:ring-[#2563eb]/25"
                                 />
                             </div>
                             {draft.warnings.length > 0 && (
@@ -596,14 +634,14 @@ export function BulletinCreatorPanel() {
 
                     <div className="space-y-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                            <h2 className="text-lg font-semibold text-slate-900">
+                            <h2 className="text-lg font-semibold text-[#0f2744]">
                                 3. Cargas
                             </h2>
                             <Button
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                className="rounded-xl"
+                                className={premiumBtnOutline}
                                 onClick={addManual}
                             >
                                 <Plus className="mr-1.5 h-4 w-4" />
@@ -617,11 +655,11 @@ export function BulletinCreatorPanel() {
                                 return (
                                     <Card
                                         key={`load-${index}`}
-                                        className="border-slate-200/80 shadow-sm overflow-hidden"
+                                        className={`${premiumCard} overflow-hidden transition-shadow duration-200 hover:shadow-[0_8px_20px_-10px_rgba(15,23,42,0.18)]`}
                                     >
-                                        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 space-y-0 pb-2">
+                                        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 space-y-0 pb-2 bg-[#eef4fb]/50">
                                             <div className="min-w-0 space-y-1">
-                                                <CardTitle className="text-base">
+                                                <CardTitle className="text-base text-[#0f2744]">
                                                     Carga {index + 1}
                                                     {load.fields.origem
                                                         ? ` · ${load.fields.origem}`
@@ -664,7 +702,7 @@ export function BulletinCreatorPanel() {
                                                     type="button"
                                                     size="sm"
                                                     variant="outline"
-                                                    className="rounded-lg"
+                                                    className="rounded-lg border-slate-200"
                                                     onClick={() =>
                                                         setEditIndex(index)
                                                     }
@@ -675,7 +713,7 @@ export function BulletinCreatorPanel() {
                                                     type="button"
                                                     size="sm"
                                                     variant="ghost"
-                                                    className="rounded-lg"
+                                                    className="rounded-lg text-slate-500"
                                                     onClick={() =>
                                                         dupLoad(index)
                                                     }
@@ -686,7 +724,7 @@ export function BulletinCreatorPanel() {
                                                     type="button"
                                                     size="sm"
                                                     variant="ghost"
-                                                    className="rounded-lg text-red-600 hover:text-red-700"
+                                                    className="rounded-lg text-red-600 hover:text-red-700 hover:bg-red-50"
                                                     onClick={() =>
                                                         removeLoad(index)
                                                     }
@@ -695,7 +733,7 @@ export function BulletinCreatorPanel() {
                                                 </Button>
                                             </div>
                                         </CardHeader>
-                                        <CardContent className="grid gap-x-4 gap-y-1 text-sm text-slate-600 sm:grid-cols-2">
+                                        <CardContent className="grid gap-x-4 gap-y-1.5 text-sm text-slate-600 sm:grid-cols-2 pt-3">
                                             {LOAD_FIELDS.filter(
                                                 (f) => load.fields[f.key]
                                             )
@@ -754,14 +792,14 @@ export function BulletinCreatorPanel() {
                         }
                     />
 
-                    <Card className="border-slate-200/80 shadow-sm overflow-hidden">
+                    <Card className={`${premiumCard} overflow-hidden`}>
                         <CardHeader className="pb-3">
                             <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div>
-                                    <CardTitle className="text-lg">
+                                    <CardTitle className="text-lg text-[#0f2744]">
                                         4. Aprovação Meta
                                     </CardTitle>
-                                    <CardDescription>
+                                    <CardDescription className="text-slate-500">
                                         Submeta templates oficiais via Datafy.
                                         HTTP 200 da criação = PENDING, não
                                         APPROVED.
@@ -771,7 +809,7 @@ export function BulletinCreatorPanel() {
                                     type="button"
                                     variant="outline"
                                     size="sm"
-                                    className="rounded-xl"
+                                    className={premiumBtnOutline}
                                     disabled={proposalLoading || !draft}
                                     onClick={() => void refreshMetaStatuses()}
                                 >
@@ -842,7 +880,7 @@ export function BulletinCreatorPanel() {
                                             <div
                                                 key={p.technicalName}
                                                 className={cn(
-                                                    "rounded-2xl border bg-white p-3.5 space-y-2.5 transition-shadow",
+                                                    "rounded-2xl border bg-white p-3.5 space-y-2.5 transition-all duration-200 hover:shadow-[0_8px_18px_-10px_rgba(15,23,42,0.2)]",
                                                     p.uiStatus === "approved"
                                                         ? "border-emerald-200 shadow-sm"
                                                         : "border-slate-200/90"
@@ -850,7 +888,7 @@ export function BulletinCreatorPanel() {
                                             >
                                                 <div className="flex items-start justify-between gap-2">
                                                     <div>
-                                                        <p className="text-sm font-semibold text-slate-900">
+                                                        <p className="text-sm font-semibold text-[#0f2744]">
                                                             {p.technicalName}
                                                         </p>
                                                         <p className="text-[11px] text-slate-500">
@@ -900,7 +938,7 @@ export function BulletinCreatorPanel() {
                                                 <Button
                                                     type="button"
                                                     size="sm"
-                                                    className="w-full rounded-xl"
+                                                    className={`w-full ${premiumBtn}`}
                                                     disabled={!p.canSubmit}
                                                     onClick={() =>
                                                         setSubmitTarget(p)
@@ -919,7 +957,7 @@ export function BulletinCreatorPanel() {
                                 <Button
                                     type="button"
                                     variant="outline"
-                                    className="rounded-xl"
+                                    className={premiumBtnOutline}
                                     onClick={() =>
                                         draft && void loadMetaProposal(draft)
                                     }
@@ -930,12 +968,12 @@ export function BulletinCreatorPanel() {
                         </CardContent>
                     </Card>
 
-                    <Card className="border-slate-200/80 shadow-sm">
+                    <Card className={premiumCard}>
                         <CardHeader className="pb-3">
-                            <CardTitle className="text-lg">
+                            <CardTitle className="text-lg text-[#0f2744]">
                                 5. Prévia e preparação
                             </CardTitle>
-                            <CardDescription>
+                            <CardDescription className="text-slate-500">
                                 Templates APPROVED entram no Disparo em massa.
                                 Este passo não dispara mensagens.
                             </CardDescription>
@@ -944,7 +982,7 @@ export function BulletinCreatorPanel() {
                             <Button
                                 type="button"
                                 variant="outline"
-                                className="rounded-xl"
+                                className={premiumBtnOutline}
                                 onClick={() => setPreviewOpen(true)}
                             >
                                 Prévia do boletim
@@ -952,7 +990,7 @@ export function BulletinCreatorPanel() {
                             <Button
                                 type="button"
                                 variant="outline"
-                                className="rounded-xl"
+                                className={premiumBtnOutline}
                                 onClick={() => void saveDraft()}
                                 disabled={saving}
                             >
@@ -965,7 +1003,7 @@ export function BulletinCreatorPanel() {
                             </Button>
                             <Button
                                 type="button"
-                                className="rounded-xl"
+                                className={premiumBtn}
                                 onClick={() => setConfirmOpen(true)}
                             >
                                 <CheckCircle2 className="mr-2 h-4 w-4" />
@@ -973,16 +1011,16 @@ export function BulletinCreatorPanel() {
                             </Button>
                         </CardContent>
                         {partsPreview.length > 0 && (
-                            <CardContent className="space-y-2 border-t pt-4">
+                            <CardContent className="space-y-2 border-t border-slate-100 pt-4">
                                 <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
                                     Estimativa de partes (templates)
                                 </p>
                                 {partsPreview.map((p, i) => (
                                     <div
                                         key={i}
-                                        className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 text-xs text-slate-600"
+                                        className="rounded-xl border border-slate-100 bg-[#eef4fb]/60 px-3 py-2 text-xs text-slate-600"
                                     >
-                                        <p className="font-medium text-slate-800">
+                                        <p className="font-medium text-[#0f2744]">
                                             {p.label}
                                             {p.templateName
                                                 ? ` · ${p.templateName}`
@@ -1003,9 +1041,9 @@ export function BulletinCreatorPanel() {
                 open={editIndex != null}
                 onOpenChange={(o) => !o && setEditIndex(null)}
             >
-                <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+                <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto rounded-2xl border-slate-200">
                     <DialogHeader>
-                        <DialogTitle>
+                        <DialogTitle className="text-[#0f2744]">
                             Editar carga {(editIndex ?? 0) + 1}
                         </DialogTitle>
                     </DialogHeader>
@@ -1013,7 +1051,9 @@ export function BulletinCreatorPanel() {
                         <div className="grid gap-3 py-1">
                             {LOAD_FIELDS.map((f) => (
                                 <div key={f.key} className="space-y-1">
-                                    <Label>{f.label}</Label>
+                                    <Label className="text-[#0f2744]">
+                                        {f.label}
+                                    </Label>
                                     <Input
                                         value={
                                             (editLoad.fields[
@@ -1027,14 +1067,16 @@ export function BulletinCreatorPanel() {
                                                 e.target.value
                                             )
                                         }
-                                        className="rounded-xl"
+                                        className="rounded-xl border-slate-200"
                                     />
                                 </div>
                             ))}
                             {editLoad.text && (
                                 <div className="space-y-1">
-                                    <Label>Texto original da carga</Label>
-                                    <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-xl border bg-slate-50 p-3 text-xs text-slate-600">
+                                    <Label className="text-[#0f2744]">
+                                        Texto original da carga
+                                    </Label>
+                                    <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-[#eef4fb]/50 p-3 text-xs text-slate-600">
                                         {editLoad.text}
                                     </pre>
                                 </div>
@@ -1044,7 +1086,7 @@ export function BulletinCreatorPanel() {
                     <DialogFooter>
                         <Button
                             type="button"
-                            className="rounded-xl"
+                            className={premiumBtn}
                             onClick={() => setEditIndex(null)}
                         >
                             Concluir
@@ -1054,20 +1096,24 @@ export function BulletinCreatorPanel() {
             </Dialog>
 
             <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-                <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+                <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto rounded-2xl border-slate-200">
                     <DialogHeader>
-                        <DialogTitle>Prévia do boletim final</DialogTitle>
+                        <DialogTitle className="text-[#0f2744]">
+                            Prévia do boletim final
+                        </DialogTitle>
                     </DialogHeader>
-                    <pre className="whitespace-pre-wrap rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">
+                    <pre className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-[#eef4fb]/40 p-4 text-sm text-[#0f2744]">
                         {finalPreview}
                     </pre>
                 </DialogContent>
             </Dialog>
 
             <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-                <DialogContent>
+                <DialogContent className="rounded-2xl border-slate-200">
                     <DialogHeader>
-                        <DialogTitle>Confirmar interpretação</DialogTitle>
+                        <DialogTitle className="text-[#0f2744]">
+                            Confirmar interpretação
+                        </DialogTitle>
                     </DialogHeader>
                     <p className="text-sm text-slate-600">
                         Você revisou {draft?.loads.length || 0} carga(s). O
@@ -1085,14 +1131,14 @@ export function BulletinCreatorPanel() {
                         <Button
                             type="button"
                             variant="outline"
-                            className="rounded-xl"
+                            className={premiumBtnOutline}
                             onClick={() => setConfirmOpen(false)}
                         >
                             Voltar
                         </Button>
                         <Button
                             type="button"
-                            className="rounded-xl"
+                            className={premiumBtn}
                             disabled={preparing}
                             onClick={() => void prepareCampaign()}
                         >
@@ -1109,9 +1155,9 @@ export function BulletinCreatorPanel() {
                 open={Boolean(submitTarget)}
                 onOpenChange={(o) => !o && setSubmitTarget(null)}
             >
-                <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto sm:max-w-xl">
+                <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto rounded-2xl border-slate-200 sm:max-w-xl">
                     <DialogHeader>
-                        <DialogTitle>
+                        <DialogTitle className="text-[#0f2744]">
                             Enviar para aprovação da Meta
                         </DialogTitle>
                     </DialogHeader>
@@ -1180,14 +1226,14 @@ export function BulletinCreatorPanel() {
                         <Button
                             type="button"
                             variant="outline"
-                            className="rounded-xl"
+                            className={premiumBtnOutline}
                             onClick={() => setSubmitTarget(null)}
                         >
                             Cancelar
                         </Button>
                         <Button
                             type="button"
-                            className="rounded-xl"
+                            className={premiumBtn}
                             disabled={submittingMeta || !submitTarget?.canSubmit}
                             onClick={() => void submitToMeta()}
                         >

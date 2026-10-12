@@ -87,15 +87,15 @@ export function BulletinGroupedCardsSection(props: {
             v.approvedCardCount === v.cardCount);
 
     return (
-        <Card className="border-slate-200/80 shadow-sm overflow-hidden">
+        <Card className="rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_4px_rgba(15,23,42,0.06)] overflow-hidden">
             <CardHeader className="pb-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <CardTitle className="text-lg inline-flex items-center gap-2">
-                            <Layers className="h-5 w-5 text-slate-700" />
+                        <CardTitle className="text-lg inline-flex items-center gap-2 text-[#0f2744]">
+                            <Layers className="h-5 w-5 text-[#2563eb]" />
                             Cards do boletim
                         </CardTitle>
-                        <CardDescription>
+                        <CardDescription className="text-slate-500">
                             Cada card fica vinculado ao boletim e à versão —
                             nunca só pelo nome do template.
                         </CardDescription>
@@ -105,7 +105,7 @@ export function BulletinGroupedCardsSection(props: {
                             <Button
                                 type="button"
                                 size="sm"
-                                className="rounded-xl"
+                                className="rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-sm"
                                 disabled={props.busy}
                                 onClick={() => props.onRegister?.()}
                             >
@@ -122,7 +122,7 @@ export function BulletinGroupedCardsSection(props: {
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                className="rounded-xl"
+                                className="rounded-xl border-slate-200"
                                 disabled={props.busy}
                                 onClick={() => props.onRefresh?.()}
                             >
