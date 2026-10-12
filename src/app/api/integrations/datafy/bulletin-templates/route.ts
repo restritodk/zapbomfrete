@@ -206,6 +206,26 @@ export async function GET(request: NextRequest) {
     const library = await listEffectiveManagedTemplates();
     const { remoteByName, remoteError } = await fetchRemoteMap();
 
+    const linkedIds = new Set<string>();
+    let lastSyncAt: string | null = null;
+    try {
+        const { prisma } = await import("@/lib/prisma");
+        const cards = await prisma.datafyBulletinCard.findMany({
+            where: { managedTemplateId: { not: null } },
+            select: { managedTemplateId: true },
+        });
+        for (const c of cards) {
+            if (c.managedTemplateId) linkedIds.add(c.managedTemplateId);
+        }
+        const syncState = await prisma.datafyTemplateSyncState.findFirst({
+            orderBy: { lastSyncAt: "desc" },
+            select: { lastSyncAt: true },
+        });
+        lastSyncAt = syncState?.lastSyncAt?.toISOString() ?? null;
+    } catch {
+        /* association / sync metadata optional */
+    }
+
     // Merge cached remote onto views
     const items = library.map((item) => {
         const remote =
@@ -218,12 +238,16 @@ export async function GET(request: NextRequest) {
                       rejected_reason: item.remoteRejectedReason,
                   }
                 : null);
+        const remoteStatus =
+            remote?.status || item.remoteStatus || "NÃO ENVIADO";
         return {
             ...item,
-            remoteStatus: remote?.status || item.remoteStatus || "NÃO ENVIADO",
+            remoteStatus,
             remoteTemplateId: remote?.id || item.remoteTemplateId,
             remoteRejectedReason:
                 remote?.rejected_reason ?? item.remoteRejectedReason,
+            associated: linkedIds.has(item.id),
+            lastSyncAt,
         };
     });
 
@@ -236,6 +260,7 @@ export async function GET(request: NextRequest) {
             metaNote:
                 "A Datafy encaminha POST message_templates à Meta. Exclusão local não remove templates da Meta.",
             library: items,
+            lastSyncAt,
             composeLibrary: managedToClientLibrary(library),
             remote: remoteByName,
             remoteError: remoteError ? redactSecrets(remoteError) : null,

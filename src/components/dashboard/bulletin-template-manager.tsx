@@ -1,35 +1,42 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
+    Ban,
+    CheckCircle2,
+    ChevronLeft,
+    ChevronRight,
+    Clock3,
     Copy,
     Eye,
+    FileStack,
+    FolderOpen,
+    Link2,
     Loader2,
     MoreHorizontal,
+    PauseCircle,
     Pencil,
     Plus,
     RefreshCw,
+    Search,
     Send,
     Trash2,
+    Unlink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
 import {
     Dialog,
     DialogContent,
     DialogFooter,
     DialogHeader,
     DialogTitle,
+    DialogDescription,
 } from "@/components/ui/dialog";
 import {
     AlertDialog,
@@ -55,10 +62,34 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import {
+    buildPageMeta,
+    rangeLabel,
+    visiblePageNumbers,
+} from "@/lib/mass-dispatch/pagination";
 import { FIELD_MAP_OPTIONS } from "@/modules/datafy/campaigns/bulletin/field-map";
 import { META_BODY_MAX } from "@/modules/datafy/campaigns/bulletin/template-validation";
 import { getRejectionDisplay } from "@/modules/datafy/campaigns/bulletin/rejection-reason";
+import {
+    computeLibraryCounters,
+    countComponents,
+    filterLibraryRows,
+    formatSaoPaulo,
+    libraryDateLines,
+    statusBucket,
+    statusLabelPt,
+    type LibraryTab,
+} from "@/modules/datafy/campaigns/bulletin/library-display";
+import type { GroupedVersionDto } from "@/components/dashboard/bulletin-grouped-cards";
 
 type ButtonsDraft = {
     enabled: boolean;
@@ -90,9 +121,16 @@ type ManagedItem = {
     description: string;
     previewFilled: string;
     remoteStatus: string | null;
+    remoteTemplateId?: string | null;
     remoteRejectedReason: string | null;
     readyForManualSubmit: boolean;
     notes: string[];
+    lastSubmittedAt?: string | null;
+    lastSyncedAt?: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+    wabaId?: string | null;
+    associated?: boolean;
 };
 
 type FieldOpt = { key: string; label: string };
@@ -165,15 +203,6 @@ function buttonsPayload(d: ButtonsDraft) {
     };
 }
 
-function statusBadgeClass(status: string) {
-    const s = status.toUpperCase();
-    if (s === "APPROVED")
-        return "border-emerald-300 bg-emerald-50 text-emerald-800";
-    if (s === "PENDING") return "border-amber-300 bg-amber-50 text-amber-900";
-    if (s === "REJECTED") return "border-red-300 bg-red-50 text-red-800";
-    return "border-slate-200 bg-slate-50 text-slate-600";
-}
-
 function syncMappingsToBody(body: string, mappings: string[], examples: string[]) {
     const vars = new Set<number>();
     for (const m of body.matchAll(/\{\{(\d+)\}\}/g)) {
@@ -191,39 +220,93 @@ function syncMappingsToBody(body: string, mappings: string[], examples: string[]
     };
 }
 
+function statusBadgeClass(status: string | null) {
+    const b = statusBucket(status);
+    if (b === "approved")
+        return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100 border-0";
+    if (b === "pending")
+        return "bg-orange-50 text-orange-700 ring-1 ring-orange-100 border-0";
+    if (b === "rejected")
+        return "bg-red-50 text-red-700 ring-1 ring-red-100 border-0";
+    if (b === "paused")
+        return "bg-amber-50 text-amber-800 ring-1 ring-amber-100 border-0";
+    if (b === "disabled")
+        return "bg-slate-100 text-slate-600 ring-1 ring-slate-200 border-0";
+    return "bg-slate-100 text-slate-600 ring-1 ring-slate-200 border-0";
+}
+
 type Props = {
     canManage: boolean;
     hasChannelToken: boolean;
+    /** When false, hides the page-level hero (settings embed). Default true. */
+    showPageChrome?: boolean;
+    /** Show approved-unassociated section. Default true. */
+    showOrphans?: boolean;
 };
 
 export function BulletinTemplateManager({
     canManage,
     hasChannelToken,
+    showPageChrome = true,
+    showOrphans = true,
 }: Props) {
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [items, setItems] = useState<ManagedItem[]>([]);
     const [fieldOpts, setFieldOpts] = useState<FieldOpt[]>(FIELD_MAP_OPTIONS);
     const [metaNote, setMetaNote] = useState<string | null>(null);
+    const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+    const [remoteError, setRemoteError] = useState<string | null>(null);
+    const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+    const hasLoadedOnceRef = useRef(false);
+    const loadInFlightRef = useRef(false);
+
+    const [qInput, setQInput] = useState("");
+    const [q, setQ] = useState("");
+    const [tab, setTab] = useState<LibraryTab>("all");
+    const [status, setStatus] = useState("all");
+    const [category, setCategory] = useState("all");
+    const [language, setLanguage] = useState("all");
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(10);
+
     const [editorOpen, setEditorOpen] = useState(false);
     const [editorMode, setEditorMode] = useState<"create" | "edit">("create");
     const [editingId, setEditingId] = useState<string | null>(null);
-    const [draft, setDraft] = useState<DraftForm>(emptyDraft);
+    const [draft, setDraft] = useState<DraftForm>(emptyDraft());
     const [saving, setSaving] = useState(false);
     const [submitting, setSubmitting] = useState<string | null>(null);
     const [previewId, setPreviewId] = useState<string | null>(null);
+    const [detailTab, setDetailTab] = useState<
+        "overview" | "content" | "vars" | "history"
+    >("overview");
     const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
     const [deleting, setDeleting] = useState(false);
     const [submitTarget, setSubmitTarget] = useState<ManagedItem | null>(null);
 
-    const load = useCallback(async (quiet = false) => {
-        setLoading(true);
+    const [associateTarget, setAssociateTarget] = useState<ManagedItem | null>(
+        null
+    );
+    const [associateVersions, setAssociateVersions] = useState<
+        GroupedVersionDto[]
+    >([]);
+    const [associateCardId, setAssociateCardId] = useState("");
+    const [associating, setAssociating] = useState(false);
+    const [loadingVersions, setLoadingVersions] = useState(false);
+
+    const load = useCallback(async (opts?: { silent?: boolean; toastOk?: boolean }) => {
+        const silent = Boolean(opts?.silent) && hasLoadedOnceRef.current;
+        if (loadInFlightRef.current) return;
+        loadInFlightRef.current = true;
+        if (!silent) setLoading(true);
+        else setRefreshing(true);
         try {
             const res = await fetch(
                 "/api/integrations/datafy/bulletin-templates"
             );
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                if (!quiet) toast.error(data.message || "Falha ao carregar");
+                if (!silent) toast.error(data.message || "Falha ao carregar");
                 return;
             }
             setItems(
@@ -233,21 +316,76 @@ export function BulletinTemplateManager({
                 setFieldOpts(data.data.fieldMapOptions);
             }
             setMetaNote(data.data?.metaNote || null);
-            if (data.data?.remoteError && !quiet) {
+            setLastSyncAt(data.data?.lastSyncAt || null);
+            setRemoteError(data.data?.remoteError || null);
+            hasLoadedOnceRef.current = true;
+            setHasLoadedOnce(true);
+            if (data.data?.remoteError && opts?.toastOk !== false && !silent) {
                 toast.message(`Remoto: ${data.data.remoteError}`);
-            } else if (!quiet) {
+            } else if (opts?.toastOk) {
                 toast.success("Biblioteca de templates atualizada");
             }
         } catch {
-            if (!quiet) toast.error("Erro ao carregar templates");
+            if (!silent) toast.error("Erro ao carregar templates");
         } finally {
             setLoading(false);
+            setRefreshing(false);
+            loadInFlightRef.current = false;
         }
     }, []);
 
     useEffect(() => {
-        void load(true);
+        void load({ silent: true });
     }, [load]);
+
+    useEffect(() => {
+        const t = setTimeout(() => {
+            const next = qInput.trim();
+            setQ((prev) => {
+                if (prev !== next) setPage(1);
+                return next;
+            });
+        }, 350);
+        return () => clearTimeout(t);
+    }, [qInput]);
+
+    const counters = useMemo(() => computeLibraryCounters(items), [items]);
+
+    const filtered = useMemo(
+        () =>
+            filterLibraryRows(items, {
+                q,
+                tab,
+                status,
+                category,
+                language,
+            }) as ManagedItem[],
+        [items, q, tab, status, category, language]
+    );
+
+    const listMeta = useMemo(
+        () => buildPageMeta(filtered.length, page, pageSize),
+        [filtered.length, page, pageSize]
+    );
+
+    useEffect(() => {
+        if (listMeta.page !== page) setPage(listMeta.page);
+    }, [listMeta.page, page]);
+
+    const pageRows = useMemo(() => {
+        const start = (listMeta.page - 1) * listMeta.limit;
+        return filtered.slice(start, start + listMeta.limit);
+    }, [filtered, listMeta.page, listMeta.limit]);
+
+    const pageNums = visiblePageNumbers(listMeta.page, listMeta.totalPages, 3);
+    const unassociated = useMemo(
+        () =>
+            items.filter(
+                (i) =>
+                    statusBucket(i.remoteStatus) === "approved" && !i.associated
+            ),
+        [items]
+    );
 
     const previewItem = useMemo(
         () => items.find((i) => i.id === previewId) || null,
@@ -267,6 +405,8 @@ export function BulletinTemplateManager({
     }, [draft]);
 
     const bodyLen = draft.bodyText.length;
+    const showInitialSkeleton = loading && !hasLoadedOnce;
+    const syncOk = !remoteError && Boolean(lastSyncAt || hasLoadedOnce);
 
     const openCreate = () => {
         setEditorMode("create");
@@ -358,7 +498,7 @@ export function BulletinTemplateManager({
                     : "Template atualizado"
             );
             setEditorOpen(false);
-            void load(true);
+            void load({ silent: true });
         } catch {
             toast.error("Erro ao salvar template");
         } finally {
@@ -382,7 +522,7 @@ export function BulletinTemplateManager({
                 return;
             }
             toast.success(`Cópia criada: ${data.data?.technicalName || ""}`);
-            void load(true);
+            void load({ silent: true });
         } catch {
             toast.error("Erro ao duplicar");
         }
@@ -408,7 +548,7 @@ export function BulletinTemplateManager({
                         : "Template removido da biblioteca local")
             );
             setDeleteTarget(null);
-            void load(true);
+            void load({ silent: true });
         } catch {
             toast.error("Erro ao excluir");
         } finally {
@@ -441,7 +581,7 @@ export function BulletinTemplateManager({
                 `${submitTarget.technicalName} → ${data.data?.approvalStatus || "PENDING"}`
             );
             setSubmitTarget(null);
-            void load(true);
+            void load({ silent: true });
         } catch {
             toast.error("Erro ao submeter");
         } finally {
@@ -449,271 +589,1260 @@ export function BulletinTemplateManager({
         }
     };
 
+    const openAssociate = async (item: ManagedItem) => {
+        setAssociateTarget(item);
+        setAssociateCardId("");
+        setLoadingVersions(true);
+        try {
+            const vRes = await fetch(
+                "/api/channels/datafy/bulletins/grouped?history=1"
+            );
+            const vJson = await vRes.json().catch(() => ({}));
+            if (!vRes.ok) throw new Error(vJson.message || "Falha versões");
+            setAssociateVersions([
+                ...(vJson.data.current || []),
+                ...(vJson.data.history || []),
+            ]);
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Erro ao carregar cards");
+            setAssociateTarget(null);
+        } finally {
+            setLoadingVersions(false);
+        }
+    };
+
+    const confirmAssociate = async () => {
+        if (!associateTarget || !associateCardId) {
+            toast.error("Escolha o card do boletim/versão");
+            return;
+        }
+        setAssociating(true);
+        try {
+            const res = await fetch("/api/channels/datafy/bulletins/grouped", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "associate",
+                    cardId: associateCardId,
+                    managedTemplateId: associateTarget.id,
+                }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json.message || "Falha na associação");
+            toast.success("Template associado ao card (sem reenvio Meta)");
+            setAssociateTarget(null);
+            void load({ silent: true });
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Erro");
+        } finally {
+            setAssociating(false);
+        }
+    };
+
+    const cardOptions = associateVersions.flatMap((v) =>
+        v.cards.map((c) => ({
+            value: c.id,
+            label: `${v.publicKey} v${v.version} · Card ${c.position}/${v.cardCount} · ${c.loadSummary}`,
+            loads: (c.loadSummary.match(/\d+/g) || []).length || 1,
+        }))
+    );
+
+    const premiumCard =
+        "rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_4px_rgba(15,23,42,0.06)]";
+    const premiumBtn =
+        "rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-[0_6px_16px_-6px_rgba(37,99,235,0.55)]";
+    const premiumBtnOutline =
+        "rounded-xl border-slate-200 bg-white text-[#0f2744] hover:bg-slate-50";
+
+    const tabs: Array<{ id: LibraryTab; label: string; count: number }> = [
+        { id: "all", label: "Todos os templates", count: counters.total },
+        { id: "local", label: "Modelos locais", count: counters.local },
+        {
+            id: "approved",
+            label: "Aprovados na Meta",
+            count: counters.approved,
+        },
+        { id: "pending", label: "Em análise", count: counters.pending },
+        { id: "rejected", label: "Rejeitados", count: counters.rejected },
+        { id: "not_sent", label: "Não enviados", count: counters.notSent },
+        {
+            id: "unassociated",
+            label: "Não associados",
+            count: counters.unassociatedApproved,
+        },
+    ];
+
+    const indicatorCards = [
+        {
+            label: "Total de templates",
+            value: counters.total,
+            desc: "Modelos locais e oficiais",
+            icon: FileStack,
+            iconBg: "bg-blue-50 text-blue-600",
+            accent: "text-[#1d4ed8]",
+        },
+        {
+            label: "Aprovados na Meta",
+            value: counters.approved,
+            desc: "Disponíveis para uso",
+            icon: CheckCircle2,
+            iconBg: "bg-emerald-50 text-emerald-600",
+            accent: "text-emerald-700",
+        },
+        {
+            label: "Em análise",
+            value: counters.pending,
+            desc: "Aguardando aprovação",
+            icon: Clock3,
+            iconBg: "bg-orange-50 text-orange-600",
+            accent: "text-orange-700",
+        },
+        {
+            label: "Rejeitados",
+            value: counters.rejected,
+            desc: "Requer ajustes",
+            icon: Ban,
+            iconBg: "bg-red-50 text-red-600",
+            accent: "text-red-700",
+        },
+        {
+            label: "Não enviados",
+            value: counters.notSent,
+            desc: "Criados no sistema",
+            icon: PauseCircle,
+            iconBg: "bg-slate-100 text-slate-600",
+            accent: "text-slate-700",
+        },
+        {
+            label: "Aprovados não associados",
+            value: counters.unassociatedApproved,
+            desc: "Precisam de vínculo",
+            icon: Link2,
+            iconBg: "bg-blue-50 text-blue-600",
+            accent: "text-[#1d4ed8]",
+        },
+    ];
+
+    const openPreview = (item: ManagedItem) => {
+        setDetailTab("overview");
+        setPreviewId(item.id);
+    };
+
+    const associationBadge = (item: ManagedItem) => {
+        const bucket = statusBucket(item.remoteStatus);
+        if (bucket === "not_sent" || bucket === "other") {
+            return (
+                <span className="text-slate-400 text-sm tabular-nums">—</span>
+            );
+        }
+        if (item.associated) {
+            return (
+                <Badge className="rounded-full bg-blue-50 text-blue-700 hover:bg-blue-50 border-0 ring-1 ring-blue-100 font-medium gap-1">
+                    <Link2 className="h-3 w-3" />
+                    Associado
+                </Badge>
+            );
+        }
+        if (bucket === "approved") {
+            return (
+                <Badge className="rounded-full bg-orange-50 text-orange-700 hover:bg-orange-50 border-0 ring-1 ring-orange-100 font-medium gap-1">
+                    <Unlink className="h-3 w-3" />
+                    Não associado
+                </Badge>
+            );
+        }
+        return (
+            <span className="text-slate-400 text-sm tabular-nums">—</span>
+        );
+    };
+
+    const rowActions = (item: ManagedItem) => {
+        const remoteStatus = statusBucket(item.remoteStatus);
+        const approved = remoteStatus === "approved";
+        const pending = remoteStatus === "pending";
+        return (
+            <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 rounded-lg"
+                        aria-label="Ações"
+                    >
+                        <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => openPreview(item)}>
+                        <Eye className="mr-2 h-3.5 w-3.5" />
+                        Visualizar
+                    </DropdownMenuItem>
+                    {canManage && (
+                        <DropdownMenuItem onClick={() => openEdit(item)}>
+                            <Pencil className="mr-2 h-3.5 w-3.5" />
+                            Editar
+                        </DropdownMenuItem>
+                    )}
+                    {canManage && (
+                        <DropdownMenuItem onClick={() => void duplicate(item)}>
+                            <Copy className="mr-2 h-3.5 w-3.5" />
+                            Duplicar
+                        </DropdownMenuItem>
+                    )}
+                    {canManage &&
+                        approved &&
+                        !item.associated &&
+                        !item.id.startsWith("builtin:") && (
+                            <DropdownMenuItem
+                                onClick={() => void openAssociate(item)}
+                            >
+                                <Link2 className="mr-2 h-3.5 w-3.5" />
+                                Associar
+                            </DropdownMenuItem>
+                        )}
+                    {canManage &&
+                        item.readyForManualSubmit &&
+                        !approved &&
+                        !pending &&
+                        hasChannelToken && (
+                            <DropdownMenuItem
+                                onClick={() => setSubmitTarget(item)}
+                            >
+                                <Send className="mr-2 h-3.5 w-3.5" />
+                                Enviar para aprovação
+                            </DropdownMenuItem>
+                        )}
+                    {canManage && (
+                        <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                                className="text-red-700 focus:text-red-700"
+                                onClick={() => setDeleteTarget(item)}
+                            >
+                                <Trash2 className="mr-2 h-3.5 w-3.5" />
+                                Excluir localmente
+                            </DropdownMenuItem>
+                        </>
+                    )}
+                </DropdownMenuContent>
+            </DropdownMenu>
+        );
+    };
+
     return (
         <>
-            <Card className="border-slate-200/80 shadow-sm overflow-hidden">
-                <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between space-y-0">
-                    <div className="min-w-0">
-                        <CardTitle className="text-lg">
-                            Templates de boletim (reutilizáveis)
-                        </CardTitle>
-                        <CardDescription>
-                            Gerencie modelos locais, mapeie variáveis aos campos
-                            da carga e envie para aprovação Meta via Datafy.
-                            Exclusão local não remove templates na Meta.
-                        </CardDescription>
-                    </div>
-                    <div className="flex flex-wrap gap-2 shrink-0">
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => void load()}
-                            disabled={loading}
-                        >
-                            {loading ? (
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                                <RefreshCw className="mr-2 h-4 w-4" />
-                            )}
-                            Atualizar status
-                        </Button>
-                        {canManage && (
-                            <Button
-                                size="sm"
-                                onClick={openCreate}
-                                className="rounded-xl"
-                            >
-                                <Plus className="mr-2 h-4 w-4" />
-                                Novo template
-                            </Button>
-                        )}
-                    </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    {metaNote && (
-                        <p className="text-xs text-slate-600 rounded-xl border bg-slate-50 px-3 py-2">
-                            {metaNote}
-                        </p>
-                    )}
-                    {loading && items.length === 0 ? (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            Carregando biblioteca…
+            <div className="mx-auto w-full max-w-[1400px] space-y-5 overflow-x-hidden">
+                {showPageChrome && (
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="flex items-start gap-3 min-w-0">
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#2563eb] text-white shadow-[0_8px_20px_-8px_rgba(37,99,235,0.7)]">
+                                <FolderOpen className="h-5 w-5" />
+                            </div>
+                            <div className="min-w-0">
+                                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0f2744]">
+                                    Biblioteca de templates
+                                </h1>
+                                <p className="text-slate-500 text-sm mt-1 max-w-2xl">
+                                    Gerencie, visualize e associe seus modelos
+                                    de mensagens do WhatsApp.
+                                </p>
+                                <p className="text-[12px] text-slate-400 mt-1 max-w-2xl">
+                                    Templates oficiais aprovados pela Meta
+                                    sincronizados via Datafy e modelos locais
+                                    criados no sistema.
+                                </p>
+                            </div>
                         </div>
-                    ) : items.length === 0 ? (
-                        <p className="text-sm text-muted-foreground py-4">
-                            Nenhum template na biblioteca. Crie um modelo ou
-                            restaure os predefinidos no código (se ocultados).
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <div
+                                className={cn(
+                                    "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ring-1",
+                                    syncOk
+                                        ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
+                                        : "bg-amber-50 text-amber-800 ring-amber-100"
+                                )}
+                            >
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                <span>
+                                    {syncOk
+                                        ? "Meta sincronizada"
+                                        : "Sync com avisos"}
+                                </span>
+                                <span className="text-[11px] opacity-80 font-normal">
+                                    Última sync:{" "}
+                                    {formatSaoPaulo(lastSyncAt) || "—"}
+                                </span>
+                            </div>
+                            <Button
+                                variant="outline"
+                                size="icon"
+                                className={cn("h-9 w-9", premiumBtnOutline)}
+                                disabled={loading || refreshing}
+                                onClick={() =>
+                                    void load({ silent: true, toastOk: true })
+                                }
+                                aria-label="Atualizar"
+                            >
+                                <RefreshCw
+                                    className={cn(
+                                        "h-4 w-4",
+                                        (loading || refreshing) &&
+                                            "animate-spin"
+                                    )}
+                                />
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={loading || refreshing}
+                                onClick={() =>
+                                    void load({ silent: false, toastOk: true })
+                                }
+                                className={premiumBtnOutline}
+                            >
+                                <RefreshCw
+                                    className={cn(
+                                        "h-4 w-4 mr-1.5",
+                                        (loading || refreshing) &&
+                                            "animate-spin"
+                                    )}
+                                />
+                                Atualizar status
+                            </Button>
+                            {canManage && (
+                                <Button
+                                    size="sm"
+                                    onClick={openCreate}
+                                    className={premiumBtn}
+                                >
+                                    <Plus className="h-4 w-4 mr-1.5" />
+                                    Novo template
+                                </Button>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {!showPageChrome && (
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <h2 className="text-lg font-semibold text-[#0f2744]">
+                                Templates de boletim
+                            </h2>
+                            <p className="text-xs text-slate-500">
+                                Biblioteca local mapeada para compose e disparo
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={loading || refreshing}
+                                onClick={() =>
+                                    void load({ silent: true, toastOk: true })
+                                }
+                                className={premiumBtnOutline}
+                            >
+                                <RefreshCw
+                                    className={cn(
+                                        "h-4 w-4 mr-1.5",
+                                        (loading || refreshing) &&
+                                            "animate-spin"
+                                    )}
+                                />
+                                Atualizar status
+                            </Button>
+                            {canManage && (
+                                <Button
+                                    size="sm"
+                                    onClick={openCreate}
+                                    className={premiumBtn}
+                                >
+                                    <Plus className="h-4 w-4 mr-1.5" />
+                                    Novo template
+                                </Button>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+                    {indicatorCards.map((c) => {
+                        const Icon = c.icon;
+                        return (
+                            <div
+                                key={c.label}
+                                className={`${premiumCard} px-3.5 py-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_20px_-8px_rgba(15,23,42,0.18)] motion-reduce:transform-none`}
+                            >
+                                <div
+                                    className={`flex h-9 w-9 items-center justify-center rounded-xl ${c.iconBg}`}
+                                >
+                                    <Icon className="h-4 w-4" />
+                                </div>
+                                <p
+                                    className={`mt-3 text-2xl font-semibold tracking-tight tabular-nums ${c.accent}`}
+                                >
+                                    {showInitialSkeleton ? "—" : c.value}
+                                </p>
+                                <p className="mt-0.5 text-[12px] font-medium text-slate-700 leading-snug">
+                                    {c.label}
+                                </p>
+                                <p className="text-[11px] text-slate-400 mt-0.5">
+                                    {c.desc}
+                                </p>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <div className={`${premiumCard} overflow-hidden`}>
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center justify-between px-4 sm:px-5 pt-4 pb-3">
+                        <div className="relative w-full xl:max-w-md">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                            <Input
+                                className="pl-9 h-10 rounded-xl border-slate-200 bg-slate-50/60"
+                                placeholder="Pesquisar por nome, categoria ou idioma..."
+                                value={qInput}
+                                onChange={(e) => setQInput(e.target.value)}
+                            />
+                        </div>
+                        <div className="flex flex-wrap gap-2 items-center">
+                            <Select
+                                value={status}
+                                onValueChange={(v) => {
+                                    setPage(1);
+                                    setStatus(v);
+                                }}
+                            >
+                                <SelectTrigger className="w-[160px] h-10 rounded-xl border-slate-200">
+                                    <SelectValue placeholder="Status" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">
+                                        Todos os status
+                                    </SelectItem>
+                                    <SelectItem value="APPROVED">
+                                        Aprovados
+                                    </SelectItem>
+                                    <SelectItem value="PENDING">
+                                        Em análise
+                                    </SelectItem>
+                                    <SelectItem value="REJECTED">
+                                        Rejeitados
+                                    </SelectItem>
+                                    <SelectItem value="NOT_SENT">
+                                        Não enviados
+                                    </SelectItem>
+                                    <SelectItem value="PAUSED_OR_DISABLED">
+                                        Pausados/desabilitados
+                                    </SelectItem>
+                                </SelectContent>
+                            </Select>
+                            <Select
+                                value={category}
+                                onValueChange={(v) => {
+                                    setPage(1);
+                                    setCategory(v);
+                                }}
+                            >
+                                <SelectTrigger className="w-[160px] h-10 rounded-xl border-slate-200">
+                                    <SelectValue placeholder="Categoria" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">
+                                        Todas as categorias
+                                    </SelectItem>
+                                    <SelectItem value="MARKETING">
+                                        MARKETING
+                                    </SelectItem>
+                                    <SelectItem value="UTILITY">
+                                        UTILITY
+                                    </SelectItem>
+                                    <SelectItem value="AUTHENTICATION">
+                                        AUTHENTICATION
+                                    </SelectItem>
+                                </SelectContent>
+                            </Select>
+                            <Select
+                                value={language}
+                                onValueChange={(v) => {
+                                    setPage(1);
+                                    setLanguage(v);
+                                }}
+                            >
+                                <SelectTrigger className="w-[140px] h-10 rounded-xl border-slate-200">
+                                    <SelectValue placeholder="Idioma" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">
+                                        Todos os idiomas
+                                    </SelectItem>
+                                    <SelectItem value="pt_BR">pt_BR</SelectItem>
+                                    <SelectItem value="en">en</SelectItem>
+                                    <SelectItem value="en_US">en_US</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+
+                    <div className="px-4 sm:px-5 pb-3 overflow-x-auto">
+                        <div className="flex gap-1.5 min-w-max">
+                            {tabs.map((t) => (
+                                <button
+                                    key={t.id}
+                                    type="button"
+                                    onClick={() => {
+                                        setTab(t.id);
+                                        setPage(1);
+                                    }}
+                                    className={cn(
+                                        "rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors whitespace-nowrap",
+                                        tab === t.id
+                                            ? "bg-[#2563eb] text-white shadow-sm"
+                                            : "bg-slate-100 text-slate-600 hover:bg-slate-200/80"
+                                    )}
+                                >
+                                    {t.label} ({t.count})
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {remoteError && items.length > 0 && (
+                        <div className="mx-4 sm:mx-5 mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                            Aviso remoto: {remoteError}
+                        </div>
+                    )}
+
+                    <div className="overflow-x-auto">
+                        <Table>
+                            <TableHeader>
+                                <TableRow className="border-slate-100 hover:bg-transparent bg-[#eef4fb]">
+                                    <TableHead className="w-10 text-[#3b5b7c] font-semibold">
+                                        #
+                                    </TableHead>
+                                    <TableHead className="text-[#3b5b7c] font-semibold">
+                                        Template
+                                    </TableHead>
+                                    <TableHead className="text-[#3b5b7c] font-semibold">
+                                        Categoria
+                                    </TableHead>
+                                    <TableHead className="text-[#3b5b7c] font-semibold">
+                                        Idioma
+                                    </TableHead>
+                                    <TableHead className="text-[#3b5b7c] font-semibold">
+                                        Status Meta
+                                    </TableHead>
+                                    <TableHead className="text-[#3b5b7c] font-semibold">
+                                        Associação
+                                    </TableHead>
+                                    <TableHead className="text-[#3b5b7c] font-semibold min-w-[160px]">
+                                        Datas
+                                    </TableHead>
+                                    <TableHead className="text-[#3b5b7c] font-semibold text-right">
+                                        Ações
+                                    </TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {showInitialSkeleton ? (
+                                    <TableRow>
+                                        <TableCell
+                                            colSpan={8}
+                                            className="py-10 text-center text-sm text-slate-500"
+                                        >
+                                            <Loader2 className="inline h-4 w-4 animate-spin mr-2" />
+                                            Carregando biblioteca…
+                                        </TableCell>
+                                    </TableRow>
+                                ) : pageRows.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell
+                                            colSpan={8}
+                                            className="py-10 text-center text-sm text-slate-500"
+                                        >
+                                            Nenhum template encontrado com os
+                                            filtros atuais.
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    pageRows.map((item, idx) => {
+                                        const n =
+                                            (listMeta.page - 1) *
+                                                listMeta.limit +
+                                            idx +
+                                            1;
+                                        const dates = libraryDateLines(item);
+                                        const rejection = getRejectionDisplay(
+                                            item.remoteStatus,
+                                            item.remoteRejectedReason
+                                        );
+                                        return (
+                                            <TableRow
+                                                key={item.id}
+                                                className="border-slate-100 hover:bg-slate-50/80"
+                                            >
+                                                <TableCell className="text-slate-400 text-sm tabular-nums">
+                                                    {n}
+                                                </TableCell>
+                                                <TableCell className="min-w-[200px]">
+                                                    <button
+                                                        type="button"
+                                                        className="text-left group"
+                                                        onClick={() =>
+                                                            openPreview(item)
+                                                        }
+                                                    >
+                                                        <p className="font-semibold text-sm text-[#0f2744] font-mono group-hover:text-[#2563eb] transition-colors">
+                                                            {item.technicalName}
+                                                        </p>
+                                                        <p className="text-[11px] text-slate-400 mt-0.5">
+                                                            {item.remoteTemplateId
+                                                                ? `ID ${item.remoteTemplateId}`
+                                                                : item.kind ===
+                                                                    "builtin"
+                                                                  ? "Modelo local · predefinido"
+                                                                  : "Modelo local · personalizado"}
+                                                        </p>
+                                                    </button>
+                                                    {rejection.show &&
+                                                        rejection.message && (
+                                                            <p className="text-[11px] text-red-600 mt-1 max-w-[240px]">
+                                                                Motivo:{" "}
+                                                                {
+                                                                    rejection.message
+                                                                }
+                                                            </p>
+                                                        )}
+                                                </TableCell>
+                                                <TableCell className="text-sm text-slate-600">
+                                                    {item.category}
+                                                </TableCell>
+                                                <TableCell className="text-sm font-mono text-slate-600">
+                                                    {item.language || "pt_BR"}
+                                                </TableCell>
+                                                <TableCell>
+                                                    <Badge
+                                                        className={cn(
+                                                            "rounded-full font-medium",
+                                                            statusBadgeClass(
+                                                                item.remoteStatus
+                                                            )
+                                                        )}
+                                                    >
+                                                        {statusLabelPt(
+                                                            item.remoteStatus
+                                                        )}
+                                                    </Badge>
+                                                </TableCell>
+                                                <TableCell>
+                                                    {associationBadge(item)}
+                                                </TableCell>
+                                                <TableCell>
+                                                    <div className="space-y-0.5 text-[11px] text-slate-500 leading-snug">
+                                                        {dates.length === 0 ? (
+                                                            <span>—</span>
+                                                        ) : (
+                                                            dates.map((d) => (
+                                                                <p key={d.label}>
+                                                                    <span className="text-slate-400">
+                                                                        {
+                                                                            d.label
+                                                                        }
+                                                                        :{" "}
+                                                                    </span>
+                                                                    {d.value}
+                                                                </p>
+                                                            ))
+                                                        )}
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                    {rowActions(item)}
+                                                </TableCell>
+                                            </TableRow>
+                                        );
+                                    })
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 sm:px-5 py-3 border-t border-slate-100">
+                        <p className="text-xs text-slate-500">
+                            {rangeLabel({
+                                ...listMeta,
+                                total: filtered.length,
+                            }).replace(/campanhas/g, "templates")}
+                            {refreshing ? (
+                                <span className="ml-2 inline-flex items-center gap-1 text-[#2563eb]">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    Atualizando…
+                                </span>
+                            ) : null}
                         </p>
-                    ) : (
-                        <div className="space-y-3">
-                            {items.map((item) => {
-                                const remoteStatus = (
-                                    item.remoteStatus || "NÃO ENVIADO"
-                                ).toUpperCase();
-                                const approved = remoteStatus === "APPROVED";
-                                const pending = remoteStatus === "PENDING";
-                                return (
-                                    <div
-                                        key={item.id}
-                                        className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3 min-w-0"
-                                    >
-                                        <div className="flex items-start justify-between gap-2 min-w-0">
-                                            <div className="min-w-0 flex-1">
-                                                <p className="font-semibold text-sm truncate">
-                                                    {item.displayName}
-                                                </p>
-                                                <p className="text-xs text-muted-foreground mt-0.5 font-mono truncate">
-                                                    {item.technicalName}
-                                                    {item.kind === "builtin"
-                                                        ? " · predefinido"
-                                                        : " · personalizado"}{" "}
-                                                    · {item.variableCount} vars
-                                                    · {item.bodyCharCount}/
-                                                    {META_BODY_MAX} ·{" "}
-                                                    {item.category} ·{" "}
-                                                    {item.language}
-                                                </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 rounded-lg"
+                                disabled={listMeta.page <= 1}
+                                onClick={() =>
+                                    setPage((p) => Math.max(1, p - 1))
+                                }
+                            >
+                                <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                            {pageNums.map((n) => (
+                                <Button
+                                    key={n}
+                                    variant={
+                                        n === listMeta.page
+                                            ? "default"
+                                            : "outline"
+                                    }
+                                    size="sm"
+                                    className={cn(
+                                        "h-8 w-8 rounded-lg p-0",
+                                        n === listMeta.page && premiumBtn
+                                    )}
+                                    onClick={() => setPage(n)}
+                                >
+                                    {n}
+                                </Button>
+                            ))}
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 rounded-lg"
+                                disabled={
+                                    listMeta.page >= listMeta.totalPages
+                                }
+                                onClick={() =>
+                                    setPage((p) =>
+                                        Math.min(listMeta.totalPages, p + 1)
+                                    )
+                                }
+                            >
+                                <ChevronRight className="h-4 w-4" />
+                            </Button>
+                            <Select
+                                value={String(pageSize)}
+                                onValueChange={(v) => {
+                                    setPageSize(Number(v));
+                                    setPage(1);
+                                }}
+                            >
+                                <SelectTrigger className="w-[120px] h-8 rounded-lg text-xs">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="10">
+                                        10 por página
+                                    </SelectItem>
+                                    <SelectItem value="20">
+                                        20 por página
+                                    </SelectItem>
+                                    <SelectItem value="50">
+                                        50 por página
+                                    </SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+                </div>
+
+                {showOrphans && canManage && (
+                    <div className={`${premiumCard} p-4 sm:p-5 space-y-4`}>
+                        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                            <div className="flex items-start gap-3">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                                    <Link2 className="h-4 w-4" />
+                                </div>
+                                <div>
+                                    <h2 className="text-base font-semibold text-[#0f2744]">
+                                        Templates aprovados não associados (
+                                        {unassociated.length})
+                                    </h2>
+                                    <p className="text-sm text-slate-500 mt-0.5 max-w-xl">
+                                        Templates oficiais aprovados que ainda
+                                        não estão vinculados a um card de
+                                        boletim/versão.
+                                    </p>
+                                </div>
+                            </div>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className={premiumBtnOutline}
+                                asChild
+                            >
+                                <Link href="/dashboard/boletim">
+                                    Ir para associações
+                                </Link>
+                            </Button>
+                        </div>
+                        {unassociated.length === 0 ? (
+                            <p className="text-sm text-slate-500">
+                                Nenhum template órfão — todos os APPROVED já
+                                estão ligados a algum card, ou ainda não há
+                                registros.
+                            </p>
+                        ) : (
+                            <div className="grid gap-3 md:grid-cols-2">
+                                {unassociated.map((o) => {
+                                    const comps = countComponents(o);
+                                    return (
+                                        <div
+                                            key={o.id}
+                                            className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]"
+                                        >
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <p className="font-semibold font-mono text-sm text-[#0f2744] truncate">
+                                                        {o.technicalName}
+                                                    </p>
+                                                    <p className="text-[11px] text-slate-400 mt-0.5">
+                                                        {o.remoteTemplateId
+                                                            ? `ID ${o.remoteTemplateId}`
+                                                            : o.id}{" "}
+                                                        · {o.category} ·{" "}
+                                                        {o.language || "pt_BR"}
+                                                    </p>
+                                                </div>
+                                                <div className="flex items-center gap-1">
+                                                    <Badge className="rounded-full bg-emerald-50 text-emerald-700 hover:bg-emerald-50 border-0 ring-1 ring-emerald-100">
+                                                        Aprovado
+                                                    </Badge>
+                                                    {rowActions(o)}
+                                                </div>
                                             </div>
-                                            <div className="flex items-center gap-1.5 shrink-0">
-                                                <span
-                                                    className={cn(
-                                                        "text-[11px] font-medium rounded-lg border px-2 py-1 whitespace-nowrap",
-                                                        statusBadgeClass(
-                                                            remoteStatus
-                                                        )
-                                                    )}
-                                                >
-                                                    {remoteStatus}
+                                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+                                                <span>
+                                                    Aprovado: Data de aprovação
+                                                    indisponível
                                                 </span>
-                                                {canManage && (
-                                                    <DropdownMenu>
-                                                        <DropdownMenuTrigger
-                                                            asChild
-                                                        >
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8 rounded-lg"
-                                                                aria-label="Ações"
-                                                            >
-                                                                <MoreHorizontal className="h-4 w-4" />
-                                                            </Button>
-                                                        </DropdownMenuTrigger>
-                                                        <DropdownMenuContent align="end">
-                                                            <DropdownMenuItem
-                                                                onClick={() =>
-                                                                    openEdit(
-                                                                        item
-                                                                    )
-                                                                }
-                                                            >
-                                                                <Pencil className="mr-2 h-3.5 w-3.5" />
-                                                                Editar
-                                                            </DropdownMenuItem>
-                                                            <DropdownMenuItem
-                                                                onClick={() =>
-                                                                    void duplicate(
-                                                                        item
-                                                                    )
-                                                                }
-                                                            >
-                                                                <Copy className="mr-2 h-3.5 w-3.5" />
-                                                                Duplicar
-                                                            </DropdownMenuItem>
-                                                            <DropdownMenuSeparator />
-                                                            <DropdownMenuItem
-                                                                className="text-red-700 focus:text-red-700"
-                                                                onClick={() =>
-                                                                    setDeleteTarget(
-                                                                        item
-                                                                    )
-                                                                }
-                                                            >
-                                                                <Trash2 className="mr-2 h-3.5 w-3.5" />
-                                                                Excluir
-                                                            </DropdownMenuItem>
-                                                        </DropdownMenuContent>
-                                                    </DropdownMenu>
-                                                )}
+                                                <span>
+                                                    {comps} componente
+                                                    {comps === 1 ? "" : "s"} ·{" "}
+                                                    {o.bodyCharCount}/
+                                                    {META_BODY_MAX} caracteres ·{" "}
+                                                    {o.variableCount} var
+                                                    {o.variableCount === 1
+                                                        ? ""
+                                                        : "s"}
+                                                </span>
                                             </div>
-                                        </div>
-                                        {(() => {
-                                            const rejection = getRejectionDisplay(
-                                                item.remoteStatus,
-                                                item.remoteRejectedReason
-                                            );
-                                            if (
-                                                !rejection.show ||
-                                                !rejection.message
-                                            ) {
-                                                return null;
-                                            }
-                                            return (
-                                                <p className="text-xs text-red-700">
-                                                    Motivo: {rejection.message}
-                                                </p>
-                                            );
-                                        })()}
-                                        <div className="flex flex-wrap gap-2">
                                             <Button
-                                                type="button"
                                                 size="sm"
-                                                variant="outline"
-                                                className="rounded-xl"
+                                                className={premiumBtn}
+                                                disabled={o.id.startsWith(
+                                                    "builtin:"
+                                                )}
                                                 onClick={() =>
-                                                    setPreviewId(item.id)
+                                                    void openAssociate(o)
                                                 }
                                             >
-                                                <Eye className="mr-1.5 h-3.5 w-3.5" />
-                                                Visualizar
+                                                <Link2 className="h-3.5 w-3.5 mr-1.5" />
+                                                Associar template
                                             </Button>
-                                            {canManage && (
-                                                <Button
-                                                    type="button"
-                                                    size="sm"
-                                                    className="rounded-xl"
-                                                    disabled={
-                                                        !item.readyForManualSubmit ||
-                                                        submitting ===
-                                                            item.technicalName ||
-                                                        approved ||
-                                                        pending ||
-                                                        !hasChannelToken
-                                                    }
-                                                    onClick={() =>
-                                                        setSubmitTarget(item)
-                                                    }
-                                                >
-                                                    {submitting ===
-                                                    item.technicalName ? (
-                                                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                                                    ) : (
-                                                        <Send className="mr-1.5 h-3.5 w-3.5" />
-                                                    )}
-                                                    Enviar para aprovação Meta
-                                                </Button>
-                                            )}
                                         </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
-                </CardContent>
-            </Card>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                )}
 
-            {/* Preview */}
+                {metaNote && !showPageChrome ? (
+                    <p className="text-xs text-slate-500">{metaNote}</p>
+                ) : null}
+            </div>
+
+            {/* Detail modal */}
             <Dialog
                 open={!!previewItem}
                 onOpenChange={(o) => !o && setPreviewId(null)}
             >
-                <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
-                        <DialogTitle>
-                            {previewItem?.displayName || "Prévia"}
+                        <DialogTitle className="font-mono text-base">
+                            {previewItem?.technicalName || "Detalhes"}
                         </DialogTitle>
+                        <DialogDescription>
+                            {previewItem?.displayName}
+                        </DialogDescription>
                     </DialogHeader>
                     {previewItem && (
-                        <div className="space-y-3 text-sm">
-                            <p className="font-mono text-xs text-muted-foreground">
-                                {previewItem.technicalName}
-                            </p>
-                            <pre className="whitespace-pre-wrap rounded-xl border bg-slate-50 p-3 text-[13px] leading-relaxed font-sans">
-                                {previewItem.previewFilled}
-                            </pre>
-                            {previewItem.buttons?.enabled &&
-                                previewItem.buttons.buttons?.length ? (
-                                <div className="flex flex-wrap gap-2">
-                                    {previewItem.buttons.buttons.map((b, i) => (
-                                        <span
-                                            key={i}
-                                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
-                                        >
-                                            {b.text}
-                                        </span>
-                                    ))}
+                        <div className="space-y-4">
+                            {statusBucket(previewItem.remoteStatus) ===
+                                "approved" && (
+                                <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100 px-3 py-1 text-xs font-medium">
+                                    <CheckCircle2 className="h-3.5 w-3.5" />
+                                    Aprovado pela Meta
                                 </div>
-                            ) : null}
-                            <details className="text-xs">
-                                <summary className="cursor-pointer text-slate-500">
-                                    Corpo com variáveis
-                                </summary>
-                                <pre className="mt-1.5 whitespace-pre-wrap rounded-lg border p-2.5 font-mono text-[11px]">
-                                    {previewItem.bodyText}
-                                </pre>
-                            </details>
-                            <p className="text-xs text-slate-500">
-                                Mapeamento:{" "}
-                                {previewItem.fieldMappings
-                                    .map(
-                                        (k, i) =>
-                                            `{{${i + 1}}}→${k}`
-                                    )
-                                    .join(" · ")}
-                            </p>
+                            )}
+                            {(() => {
+                                const rejection = getRejectionDisplay(
+                                    previewItem.remoteStatus,
+                                    previewItem.remoteRejectedReason
+                                );
+                                if (!rejection.show || !rejection.message)
+                                    return null;
+                                return (
+                                    <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-800 flex gap-2">
+                                        <Ban className="h-4 w-4 shrink-0 mt-0.5" />
+                                        <div>
+                                            <p className="font-medium text-xs uppercase tracking-wide">
+                                                Motivo da rejeição
+                                            </p>
+                                            <p className="mt-0.5">
+                                                {rejection.message}
+                                            </p>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
+                            <div className="flex flex-wrap gap-1.5 border-b border-slate-100 pb-2">
+                                {(
+                                    [
+                                        ["overview", "Visão geral"],
+                                        ["content", "Conteúdo"],
+                                        ["vars", "Variáveis"],
+                                        ["history", "Histórico"],
+                                    ] as const
+                                ).map(([id, label]) => (
+                                    <button
+                                        key={id}
+                                        type="button"
+                                        onClick={() => setDetailTab(id)}
+                                        className={cn(
+                                            "rounded-lg px-3 py-1.5 text-xs font-medium",
+                                            detailTab === id
+                                                ? "bg-[#2563eb] text-white"
+                                                : "bg-slate-100 text-slate-600"
+                                        )}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {detailTab === "overview" && (
+                                <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                                    <div>
+                                        <dt className="text-[11px] text-slate-400">
+                                            Nome técnico
+                                        </dt>
+                                        <dd className="font-mono font-medium">
+                                            {previewItem.technicalName}
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt className="text-[11px] text-slate-400">
+                                            ID oficial
+                                        </dt>
+                                        <dd className="font-mono">
+                                            {previewItem.remoteTemplateId ||
+                                                "—"}
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt className="text-[11px] text-slate-400">
+                                            WABA
+                                        </dt>
+                                        <dd className="font-mono">
+                                            {previewItem.wabaId || "—"}
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt className="text-[11px] text-slate-400">
+                                            Categoria
+                                        </dt>
+                                        <dd>{previewItem.category}</dd>
+                                    </div>
+                                    <div>
+                                        <dt className="text-[11px] text-slate-400">
+                                            Idioma
+                                        </dt>
+                                        <dd className="font-mono">
+                                            {previewItem.language}
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt className="text-[11px] text-slate-400">
+                                            Status
+                                        </dt>
+                                        <dd>
+                                            <Badge
+                                                className={cn(
+                                                    "rounded-full",
+                                                    statusBadgeClass(
+                                                        previewItem.remoteStatus
+                                                    )
+                                                )}
+                                            >
+                                                {statusLabelPt(
+                                                    previewItem.remoteStatus
+                                                )}
+                                            </Badge>
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt className="text-[11px] text-slate-400">
+                                            Associação
+                                        </dt>
+                                        <dd className="mt-1">
+                                            {associationBadge(previewItem)}
+                                        </dd>
+                                    </div>
+                                    <div className="sm:col-span-2">
+                                        <dt className="text-[11px] text-slate-400 mb-1">
+                                            Datas
+                                        </dt>
+                                        <dd className="space-y-0.5 text-xs text-slate-600">
+                                            {libraryDateLines(previewItem).map(
+                                                (d) => (
+                                                    <p key={d.label}>
+                                                        {d.label}: {d.value}
+                                                    </p>
+                                                )
+                                            )}
+                                            {previewItem.lastSyncedAt && (
+                                                <p>
+                                                    Última sincronização:{" "}
+                                                    {formatSaoPaulo(
+                                                        previewItem.lastSyncedAt
+                                                    )}
+                                                </p>
+                                            )}
+                                        </dd>
+                                    </div>
+                                </dl>
+                            )}
+
+                            {detailTab === "content" && (
+                                <div className="space-y-3 text-sm">
+                                    {previewItem.headerText ? (
+                                        <div>
+                                            <p className="text-[11px] text-slate-400 mb-1">
+                                                Header
+                                            </p>
+                                            <pre className="whitespace-pre-wrap rounded-xl border bg-slate-50 p-3 text-[13px]">
+                                                {previewItem.headerText}
+                                            </pre>
+                                        </div>
+                                    ) : null}
+                                    <div>
+                                        <p className="text-[11px] text-slate-400 mb-1">
+                                            Body
+                                        </p>
+                                        <pre className="whitespace-pre-wrap rounded-xl border bg-slate-50 p-3 text-[13px] font-mono">
+                                            {previewItem.bodyText}
+                                        </pre>
+                                    </div>
+                                    {previewItem.footerText ? (
+                                        <div>
+                                            <p className="text-[11px] text-slate-400 mb-1">
+                                                Footer
+                                            </p>
+                                            <pre className="whitespace-pre-wrap rounded-xl border bg-slate-50 p-3 text-[13px]">
+                                                {previewItem.footerText}
+                                            </pre>
+                                        </div>
+                                    ) : null}
+                                    {previewItem.buttons?.enabled &&
+                                    previewItem.buttons.buttons?.length ? (
+                                        <div>
+                                            <p className="text-[11px] text-slate-400 mb-1">
+                                                Botões oficiais
+                                            </p>
+                                            <div className="flex flex-wrap gap-2">
+                                                {previewItem.buttons.buttons.map(
+                                                    (b, i) => (
+                                                        <span
+                                                            key={i}
+                                                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium"
+                                                        >
+                                                            {b.text}
+                                                        </span>
+                                                    )
+                                                )}
+                                            </div>
+                                        </div>
+                                    ) : null}
+                                    <div>
+                                        <p className="text-[11px] text-slate-400 mb-1">
+                                            Prévia
+                                        </p>
+                                        <pre className="whitespace-pre-wrap rounded-xl border bg-white p-3 text-[13px] leading-relaxed">
+                                            {previewItem.previewFilled}
+                                        </pre>
+                                    </div>
+                                </div>
+                            )}
+
+                            {detailTab === "vars" && (
+                                <div className="space-y-2 text-sm">
+                                    <p>
+                                        {previewItem.variableCount} parâmetro
+                                        {previewItem.variableCount === 1
+                                            ? ""
+                                            : "s"}
+                                    </p>
+                                    <ul className="space-y-1.5">
+                                        {previewItem.fieldMappings.map(
+                                            (k, i) => (
+                                                <li
+                                                    key={i}
+                                                    className="flex items-center gap-2 text-xs rounded-lg border px-2.5 py-2"
+                                                >
+                                                    <span className="font-mono text-slate-500">
+                                                        {`{{${i + 1}}}`}
+                                                    </span>
+                                                    <span className="font-medium">
+                                                        {k}
+                                                    </span>
+                                                    <span className="text-slate-400 ml-auto">
+                                                        ex:{" "}
+                                                        {previewItem.exampleRow[
+                                                            i
+                                                        ] || "—"}
+                                                    </span>
+                                                </li>
+                                            )
+                                        )}
+                                    </ul>
+                                </div>
+                            )}
+
+                            {detailTab === "history" && (
+                                <ul className="space-y-2 text-sm text-slate-600">
+                                    {previewItem.createdAt && (
+                                        <li>
+                                            Criação:{" "}
+                                            {formatSaoPaulo(
+                                                previewItem.createdAt
+                                            )}
+                                        </li>
+                                    )}
+                                    {previewItem.lastSubmittedAt && (
+                                        <li>
+                                            Envio para aprovação:{" "}
+                                            {formatSaoPaulo(
+                                                previewItem.lastSubmittedAt
+                                            )}
+                                        </li>
+                                    )}
+                                    <li>
+                                        Status atual:{" "}
+                                        {statusLabelPt(
+                                            previewItem.remoteStatus
+                                        )}
+                                    </li>
+                                    {statusBucket(previewItem.remoteStatus) ===
+                                        "approved" && (
+                                        <li>
+                                            Aprovação: data oficial
+                                            indisponível (Meta/Datafy não
+                                            forneceu timestamp de aprovação)
+                                        </li>
+                                    )}
+                                    {previewItem.lastSyncedAt && (
+                                        <li>
+                                            Última sincronização:{" "}
+                                            {formatSaoPaulo(
+                                                previewItem.lastSyncedAt
+                                            )}
+                                        </li>
+                                    )}
+                                    {!previewItem.createdAt &&
+                                        !previewItem.lastSubmittedAt &&
+                                        !previewItem.lastSyncedAt && (
+                                            <li className="text-slate-400">
+                                                Nenhum evento histórico
+                                                registrado para este modelo.
+                                            </li>
+                                        )}
+                                </ul>
+                            )}
                         </div>
                     )}
+                </DialogContent>
+            </Dialog>
+
+            {/* Associate modal */}
+            <Dialog
+                open={!!associateTarget}
+                onOpenChange={(o) => !o && setAssociateTarget(null)}
+            >
+                <DialogContent className="max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>Associar template</DialogTitle>
+                        <DialogDescription>
+                            Vincule{" "}
+                            <span className="font-mono">
+                                {associateTarget?.technicalName}
+                            </span>{" "}
+                            a um card de boletim/versão compatível. Não reenvia
+                            à Meta.
+                        </DialogDescription>
+                    </DialogHeader>
+                    {loadingVersions ? (
+                        <p className="text-sm text-slate-500 inline-flex items-center gap-2">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Carregando cards…
+                        </p>
+                    ) : (
+                        <div className="space-y-2">
+                            <Label>Card do boletim/versão</Label>
+                            <Select
+                                value={associateCardId}
+                                onValueChange={setAssociateCardId}
+                            >
+                                <SelectTrigger className="bg-white">
+                                    <SelectValue placeholder="Selecione o card compatível" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {cardOptions
+                                        .filter(
+                                            (c) =>
+                                                !associateTarget ||
+                                                c.loads ===
+                                                    associateTarget.loadsPerMessage ||
+                                                c.loads === 0
+                                        )
+                                        .map((c) => (
+                                            <SelectItem
+                                                key={c.value}
+                                                value={c.value}
+                                            >
+                                                {c.label}
+                                            </SelectItem>
+                                        ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    )}
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            onClick={() => setAssociateTarget(null)}
+                        >
+                            Cancelar
+                        </Button>
+                        <Button
+                            className={premiumBtn}
+                            disabled={associating || !associateCardId}
+                            onClick={() => void confirmAssociate()}
+                        >
+                            {associating && (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            )}
+                            Confirmar associação
+                        </Button>
+                    </DialogFooter>
                 </DialogContent>
             </Dialog>
 
@@ -840,7 +1969,9 @@ export function BulletinTemplateManager({
                                 className="min-h-[160px] font-mono text-xs"
                                 value={draft.bodyText}
                                 onChange={(e) => onBodyChange(e.target.value)}
-                                placeholder={"*ATUALIZAÇÃO*\nOrigem: {{1}}\nDestino: {{2}}"}
+                                placeholder={
+                                    "*ATUALIZAÇÃO*\nOrigem: {{1}}\nDestino: {{2}}"
+                                }
                             />
                         </div>
                         <div className="space-y-1.5 sm:col-span-2">
@@ -862,8 +1993,9 @@ export function BulletinTemplateManager({
                                     <Label>Botões interativos</Label>
                                     <p className="text-[11px] text-muted-foreground mt-0.5">
                                         Solicitar confirmação de recebimento de
-                                        ofertas (QUICK_REPLY · máx. 25 caracteres).
-                                        Templates APPROVED exigem nova versão.
+                                        ofertas (QUICK_REPLY · máx. 25
+                                        caracteres). Templates APPROVED exigem
+                                        nova versão.
                                     </p>
                                 </div>
                                 <Button
@@ -1025,6 +2157,7 @@ export function BulletinTemplateManager({
                         <Button
                             onClick={() => void saveDraft()}
                             disabled={saving}
+                            className={premiumBtn}
                         >
                             {saving && (
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1035,7 +2168,6 @@ export function BulletinTemplateManager({
                 </DialogContent>
             </Dialog>
 
-            {/* Delete confirm */}
             <AlertDialog
                 open={!!deleteTarget}
                 onOpenChange={(o) => !o && setDeleteTarget(null)}
@@ -1076,7 +2208,6 @@ export function BulletinTemplateManager({
                 </AlertDialogContent>
             </AlertDialog>
 
-            {/* Submit confirm */}
             <AlertDialog
                 open={!!submitTarget}
                 onOpenChange={(o) => !o && setSubmitTarget(null)}

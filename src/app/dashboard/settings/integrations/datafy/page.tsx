@@ -649,6 +649,8 @@ function DatafyIntegrationPageInner() {
             <BulletinTemplateManager
                 canManage={canManageTemplates}
                 hasChannelToken={!!status?.hasChannelToken}
+                showPageChrome={false}
+                showOrphans={false}
             />
 
             <Card className="border-slate-200/80 shadow-sm">

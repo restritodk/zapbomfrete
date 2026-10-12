@@ -44,6 +44,10 @@ export type ManagedTemplateView = {
     remoteTemplateId: string | null;
     remoteRejectedReason: string | null;
     lastSubmittedAt: string | null;
+    lastSyncedAt: string | null;
+    createdAt: string | null;
+    updatedAt: string | null;
+    wabaId: string | null;
     readyForManualSubmit: boolean;
     notes: string[];
     /** Spec id used in compose (builtin id or custom:technicalName) */
@@ -72,6 +76,9 @@ type DbRow = {
     remoteTemplateId: string | null;
     remoteRejectedReason: string | null;
     lastSubmittedAt: Date | null;
+    lastSyncedAt?: Date | null;
+    createdAt?: Date | null;
+    updatedAt?: Date | null;
     /** Present after approvals sync migration */
     inLibrary?: boolean;
     origin?: string;
@@ -129,6 +136,10 @@ function specFromBuiltin(spec: BulletinTemplateSpec): ManagedTemplateView {
         remoteTemplateId: null,
         remoteRejectedReason: null,
         lastSubmittedAt: null,
+        lastSyncedAt: null,
+        createdAt: null,
+        updatedAt: null,
+        wabaId: null,
         readyForManualSubmit: sub.checks.readyForManualSubmit,
         notes: sub.checks.notes,
         libraryId: spec.id,
@@ -189,6 +200,10 @@ function viewFromDbRow(row: DbRow): ManagedTemplateView {
         remoteTemplateId: row.remoteTemplateId,
         remoteRejectedReason: row.remoteRejectedReason,
         lastSubmittedAt: row.lastSubmittedAt?.toISOString() ?? null,
+        lastSyncedAt: row.lastSyncedAt?.toISOString() ?? null,
+        createdAt: row.createdAt?.toISOString() ?? null,
+        updatedAt: row.updatedAt?.toISOString() ?? null,
+        wabaId: row.wabaId?.trim() ? row.wabaId : null,
         readyForManualSubmit: validation.ok,
         notes: [...validation.errors, ...validation.warnings],
         libraryId:
