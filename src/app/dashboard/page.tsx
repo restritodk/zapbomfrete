@@ -11,9 +11,6 @@ import {
     ArrowRight,
     Activity,
     Zap,
-    BadgeCheck,
-    MessageSquare,
-    Inbox,
     Bot,
 } from "lucide-react";
 
@@ -22,7 +19,7 @@ import { getAccessibleSessions, canAccessChannel } from "@/lib/api-auth";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { isDatafyChannelId } from "@/modules/channels/ids";
-import { getDatafyDashboardStats, datafyProvider } from "@/modules/datafy";
+import { PremiumDatafyDashboard } from "@/components/dashboard/premium-datafy-dashboard";
 
 export const dynamic = "force-dynamic";
 
@@ -44,122 +41,7 @@ export default async function DashboardPage() {
         ));
 
     if (datafySelected) {
-        const [stats, status] = await Promise.all([
-            getDatafyDashboardStats(),
-            datafyProvider.getPublicStatus(),
-        ]);
-
-        const cards = [
-            {
-                title: "Estado do canal",
-                value: status.enabled
-                    ? status.lastError
-                        ? "Atenção"
-                        : "Ativo"
-                    : "Desligado",
-                icon: BadgeCheck,
-                description: status.displayPhoneNumber || "Número sob consulta",
-                color: "text-emerald-600",
-                bg: "bg-emerald-50",
-            },
-            {
-                title: "Conversas",
-                value: stats.conversations,
-                icon: Inbox,
-                description: "Registradas no canal oficial",
-                color: "text-blue-600",
-                bg: "bg-blue-50",
-            },
-            {
-                title: "Não lidas",
-                value: stats.unreadConversations,
-                icon: MessageSquare,
-                description: "Mensagens aguardando leitura",
-                color: "text-amber-600",
-                bg: "bg-amber-50",
-            },
-            {
-                title: "Atendimentos",
-                value: stats.assignedOpen,
-                icon: Activity,
-                description: "Conversas atribuídas abertas",
-                color: "text-violet-600",
-                bg: "bg-violet-50",
-            },
-            {
-                title: "Recebidas",
-                value: stats.messagesInbound,
-                icon: Wifi,
-                description: "Mensagens inbound",
-                color: "text-emerald-600",
-                bg: "bg-emerald-50",
-            },
-            {
-                title: "Enviadas",
-                value: stats.messagesOutbound,
-                icon: Send,
-                description: "Mensagens outbound",
-                color: "text-sky-600",
-                bg: "bg-sky-50",
-            },
-        ];
-
-        return (
-            <div className="space-y-8">
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-                    <div>
-                        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
-                            Painel · Canal oficial
-                        </h2>
-                        <p className="text-sm text-slate-500 mt-1">
-                            Métricas reais do WhatsApp Oficial (Datafy) — sem
-                            misturar sessões Baileys.
-                        </p>
-                    </div>
-                    <Link href="/dashboard/chat">
-                        <Button size="sm" className="gap-2">
-                            <MessageSquare className="h-4 w-4" /> Abrir Chat
-                            oficial
-                        </Button>
-                    </Link>
-                </div>
-
-                <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-                    {cards.map((stat) => {
-                        const Icon = stat.icon;
-                        return (
-                            <Card
-                                key={stat.title}
-                                className="glass-panel border-border/50 shadow-sm"
-                            >
-                                <CardContent className="p-4 sm:p-5">
-                                    <div className="flex items-start justify-between">
-                                        <div className="space-y-1 min-w-0">
-                                            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
-                                                {stat.title}
-                                            </p>
-                                            <p className="text-2xl sm:text-3xl font-extrabold text-foreground truncate">
-                                                {stat.value}
-                                            </p>
-                                            <p className="text-xs text-muted-foreground/70 truncate">
-                                                {stat.description}
-                                            </p>
-                                        </div>
-                                        <div
-                                            className={`${stat.bg} p-2.5 rounded-xl border shadow-sm`}
-                                        >
-                                            <Icon
-                                                className={`h-5 w-5 ${stat.color}`}
-                                            />
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        );
-                    })}
-                </div>
-            </div>
-        );
+        return <PremiumDatafyDashboard />;
     }
 
     const sessions = await getAccessibleSessions(
@@ -248,18 +130,19 @@ export default async function DashboardPage() {
     ];
 
     return (
-        <div className="space-y-8">
+        <div className="mx-auto w-full max-w-[1400px] space-y-8 overflow-x-hidden">
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
                 <div>
-                    <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
+                    <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0f2744]">
                         Painel
                     </h2>
                     <p className="text-sm text-slate-500 mt-1">
-                        Visão geral das sessões Baileys
+                        Visão geral das sessões Baileys. Selecione o canal
+                        oficial no cabeçalho para o painel Datafy.
                     </p>
                 </div>
                 <Link href="/dashboard/sessions">
-                    <Button size="sm" className="gap-2">
+                    <Button size="sm" className="gap-2 rounded-xl">
                         <Plus className="h-4 w-4" /> Adicionar sessão
                     </Button>
                 </Link>
@@ -271,7 +154,7 @@ export default async function DashboardPage() {
                     return (
                         <Card
                             key={stat.title}
-                            className="glass-panel border-border/50 shadow-sm hover:shadow-md hover:shadow-primary/5 transition-all duration-300"
+                            className="rounded-2xl border border-[#dbe7f3] bg-white shadow-[0_1px_4px_rgba(15,23,42,0.05)]"
                         >
                             <CardContent className="p-4 sm:p-5">
                                 <div className="flex items-start justify-between">
@@ -287,7 +170,7 @@ export default async function DashboardPage() {
                                         </p>
                                     </div>
                                     <div
-                                        className={`${stat.bg} p-2.5 rounded-xl border object-contain border-white/20 dark:border-white/10 shadow-sm`}
+                                        className={`${stat.bg} p-2.5 rounded-xl border shadow-sm`}
                                     >
                                         <Icon
                                             className={`h-5 w-5 ${stat.color}`}
@@ -309,7 +192,7 @@ export default async function DashboardPage() {
                         const Icon = action.icon;
                         return (
                             <Link key={action.href} href={action.href}>
-                                <Card className="glass-panel border-border/50 shadow-sm hover:shadow-md hover:shadow-primary/10 hover:-translate-y-0.5 transition-all duration-300 group cursor-pointer h-full">
+                                <Card className="rounded-2xl border border-[#dbe7f3] bg-white shadow-sm hover:shadow-md transition-all duration-300 group cursor-pointer h-full">
                                     <CardContent className="p-4 flex items-center gap-3">
                                         <div className="bg-muted/50 p-2.5 rounded-xl group-hover:bg-primary transition-colors border border-border/50 shadow-sm">
                                             <Icon className="h-5 w-5 text-muted-foreground group-hover:text-primary-foreground transition-colors" />
@@ -344,7 +227,7 @@ export default async function DashboardPage() {
                 </div>
 
                 {sessions.length === 0 ? (
-                    <Card className="border-dashed border-2 border-slate-200 shadow-none">
+                    <Card className="border-dashed border-2 border-slate-200 shadow-none rounded-2xl">
                         <CardContent className="py-12 text-center">
                             <div className="bg-slate-100 h-12 w-12 rounded-full flex items-center justify-center mx-auto mb-3">
                                 <QrCode className="h-6 w-6 text-slate-400" />
@@ -360,7 +243,7 @@ export default async function DashboardPage() {
                                 <Button
                                     size="sm"
                                     variant="outline"
-                                    className="gap-2"
+                                    className="gap-2 rounded-xl"
                                 >
                                     <Plus className="h-4 w-4" /> Criar sessão
                                 </Button>
@@ -376,7 +259,7 @@ export default async function DashboardPage() {
                                     key={s.id}
                                     href={`/dashboard/sessions/${s.sessionId}`}
                                 >
-                                    <Card className="glass-panel border-border/50 shadow-sm hover:shadow-md hover:shadow-primary/5 hover:-translate-y-0.5 transition-all duration-300 cursor-pointer h-full">
+                                    <Card className="rounded-2xl border border-[#dbe7f3] bg-white shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer h-full">
                                         <CardContent className="p-4">
                                             <div className="flex items-start justify-between mb-2">
                                                 <div className="min-w-0 flex-1">
