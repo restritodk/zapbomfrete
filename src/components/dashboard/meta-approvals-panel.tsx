@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
@@ -19,7 +19,16 @@ import {
     AlertTriangle,
     Megaphone,
     Download,
+    ShieldCheck,
+    ChevronLeft,
+    ChevronRight,
+    Loader2,
 } from "lucide-react";
+import {
+    rangeLabel,
+    visiblePageNumbers,
+    buildPageMeta,
+} from "@/lib/mass-dispatch/pagination";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -94,16 +103,16 @@ type FieldOpt = { key: string; label: string };
 function statusStyle(status: string | null) {
     const s = String(status || "").toUpperCase();
     if (s === "APPROVED")
-        return "bg-emerald-500/15 text-emerald-700 border-emerald-500/30";
+        return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100 border-0";
     if (s === "PENDING")
-        return "bg-amber-500/15 text-amber-800 border-amber-500/30";
+        return "bg-orange-50 text-orange-700 ring-1 ring-orange-100 border-0";
     if (s === "REJECTED")
-        return "bg-red-500/15 text-red-700 border-red-500/30";
+        return "bg-red-50 text-red-700 ring-1 ring-red-100 border-0";
     if (s === "PAUSED")
-        return "bg-orange-500/15 text-orange-800 border-orange-500/30";
+        return "bg-amber-50 text-amber-800 ring-1 ring-amber-100 border-0";
     if (s === "DISABLED")
-        return "bg-zinc-500/15 text-zinc-700 border-zinc-500/30";
-    return "bg-muted text-muted-foreground border-border";
+        return "bg-slate-100 text-slate-600 ring-1 ring-slate-200 border-0";
+    return "bg-slate-100 text-slate-600 ring-1 ring-slate-200 border-0";
 }
 
 function statusLabel(status: string | null) {
@@ -131,7 +140,11 @@ export function MetaApprovalsPanel() {
     const focusId = searchParams.get("focus");
 
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [syncing, setSyncing] = useState(false);
+    const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+    const hasLoadedOnceRef = useRef(false);
+    const loadInFlightRef = useRef(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [items, setItems] = useState<ApprovalItem[]>([]);
     const [counters, setCounters] = useState<Counters>({
@@ -143,7 +156,8 @@ export function MetaApprovalsPanel() {
     });
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
-    const [pageSize] = useState(10);
+    const [pageSize, setPageSize] = useState(10);
+    const [qInput, setQInput] = useState("");
     const [q, setQ] = useState("");
     const [status, setStatus] = useState<string>("all");
     const [category, setCategory] = useState<string>("all");
@@ -154,6 +168,7 @@ export function MetaApprovalsPanel() {
     const [importTarget, setImportTarget] = useState<ApprovalItem | null>(null);
     const [fieldOpts, setFieldOpts] = useState<FieldOpt[]>([]);
     const [mappings, setMappings] = useState<string[]>([]);
+    const [importing, setImporting] = useState(false);
 
     const friendlyClientMessage = (raw: string | undefined, fallback: string) => {
         const msg = String(raw || "").trim();
@@ -168,59 +183,87 @@ export function MetaApprovalsPanel() {
         return msg;
     };
 
-    const load = useCallback(async () => {
-        setLoading(true);
-        setLoadError(null);
-        try {
-            const params = new URLSearchParams();
-            params.set("page", String(page));
-            params.set("pageSize", String(pageSize));
-            if (q.trim()) params.set("q", q.trim());
-            if (status !== "all") params.set("status", status);
-            if (category !== "all") params.set("category", category);
-            if (language !== "all") params.set("language", language);
-            const res = await fetch(
-                `/api/channels/datafy/approvals?${params.toString()}`
-            );
-            const json = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                throw new Error(
-                    friendlyClientMessage(
-                        json.message,
-                        "Não foi possível carregar os templates. Verifique a conexão e tente novamente."
-                    )
+    useEffect(() => {
+        const t = setTimeout(() => {
+            const next = qInput.trim();
+            setQ((prev) => {
+                if (prev !== next) setPage(1);
+                return next;
+            });
+        }, 350);
+        return () => clearTimeout(t);
+    }, [qInput]);
+
+    const load = useCallback(
+        async (opts?: { silent?: boolean }) => {
+            const silent = Boolean(opts?.silent) && hasLoadedOnceRef.current;
+            if (loadInFlightRef.current) return;
+            loadInFlightRef.current = true;
+            if (!silent) setLoading(true);
+            else setRefreshing(true);
+            if (!silent) setLoadError(null);
+            try {
+                const params = new URLSearchParams();
+                params.set("page", String(page));
+                params.set("pageSize", String(pageSize));
+                if (q.trim()) params.set("q", q.trim());
+                if (status !== "all") params.set("status", status);
+                if (category !== "all") params.set("category", category);
+                if (language !== "all") params.set("language", language);
+                const res = await fetch(
+                    `/api/channels/datafy/approvals?${params.toString()}`
                 );
-            }
-            setItems(json.data?.items || []);
-            setTotal(json.data?.total || 0);
-            setCounters(
-                json.data?.counters || {
-                    total: 0,
-                    pending: 0,
-                    approved: 0,
-                    rejected: 0,
-                    pausedOrDisabled: 0,
+                const json = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    throw new Error(
+                        friendlyClientMessage(
+                            json.message,
+                            "Não foi possível carregar os templates. Verifique a conexão e tente novamente."
+                        )
+                    );
                 }
-            );
-            setLastSyncAt(json.data?.lastSyncAt || null);
-            setWabaId(json.data?.wabaId || null);
-            setFieldOpts(json.data?.fieldMapOptions || []);
-        } catch (e) {
-            const msg =
-                e instanceof Error
-                    ? e.message
-                    : "Não foi possível carregar os templates. Tente novamente.";
-            setLoadError(msg);
-            setItems([]);
-            setTotal(0);
-            toast.error(msg);
-        } finally {
-            setLoading(false);
-        }
-    }, [page, pageSize, q, status, category, language]);
+                setItems(json.data?.items || []);
+                const nextTotal = json.data?.total || 0;
+                setTotal(nextTotal);
+                const meta = buildPageMeta(nextTotal, page, pageSize);
+                if (meta.page !== page) setPage(meta.page);
+                setCounters(
+                    json.data?.counters || {
+                        total: 0,
+                        pending: 0,
+                        approved: 0,
+                        rejected: 0,
+                        pausedOrDisabled: 0,
+                    }
+                );
+                setLastSyncAt(json.data?.lastSyncAt || null);
+                setWabaId(json.data?.wabaId || null);
+                setFieldOpts(json.data?.fieldMapOptions || []);
+                setLoadError(null);
+                hasLoadedOnceRef.current = true;
+                setHasLoadedOnce(true);
+            } catch (e) {
+                const msg =
+                    e instanceof Error
+                        ? e.message
+                        : "Não foi possível carregar os templates. Tente novamente.";
+                setLoadError(msg);
+                if (!hasLoadedOnceRef.current) {
+                    setItems([]);
+                    setTotal(0);
+                }
+                if (!silent) toast.error(msg);
+            } finally {
+                setLoading(false);
+                setRefreshing(false);
+                loadInFlightRef.current = false;
+            }
+        },
+        [page, pageSize, q, status, category, language]
+    );
 
     useEffect(() => {
-        void load();
+        void load({ silent: false });
     }, [load]);
 
     useEffect(() => {
@@ -230,6 +273,7 @@ export function MetaApprovalsPanel() {
     }, [focusId, items]);
 
     const runSync = async (action: "sync" | "refresh") => {
+        if (syncing) return;
         setSyncing(true);
         try {
             const res = await fetch("/api/channels/datafy/approvals", {
@@ -248,7 +292,7 @@ export function MetaApprovalsPanel() {
             }
             toast.success(json.data?.message || "Sincronizado");
             setLoadError(null);
-            await load();
+            await load({ silent: true });
         } catch (e) {
             const msg =
                 e instanceof Error
@@ -270,7 +314,8 @@ export function MetaApprovalsPanel() {
     };
 
     const confirmImport = async () => {
-        if (!importTarget) return;
+        if (!importTarget || importing) return;
+        setImporting(true);
         try {
             const res = await fetch("/api/channels/datafy/approvals", {
                 method: "POST",
@@ -285,69 +330,104 @@ export function MetaApprovalsPanel() {
             if (!res.ok) throw new Error(json.message || "Falha ao importar");
             toast.success(json.data?.message || "Importado");
             setImportTarget(null);
-            await load();
+            await load({ silent: true });
         } catch (e) {
             toast.error(e instanceof Error ? e.message : "Erro ao importar");
+        } finally {
+            setImporting(false);
         }
     };
 
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const listMeta = useMemo(
+        () => buildPageMeta(total, page, pageSize),
+        [total, page, pageSize]
+    );
+    const pageNums = visiblePageNumbers(listMeta.page, listMeta.totalPages, 3);
+    const showInitialSkeleton = loading && !hasLoadedOnce;
 
     const cards = useMemo(
         () => [
             {
-                label: "Total",
+                label: "Total de templates",
                 value: counters.total,
                 icon: Layers,
-                tone: "text-foreground",
+                accent: "text-[#1d4ed8]",
+                iconBg: "bg-blue-50 text-blue-600",
             },
             {
                 label: "Em análise",
                 value: counters.pending,
                 icon: Clock3,
-                tone: "text-amber-700",
+                accent: "text-orange-700",
+                iconBg: "bg-orange-50 text-orange-600",
             },
             {
                 label: "Aprovados",
                 value: counters.approved,
                 icon: CheckCircle2,
-                tone: "text-emerald-700",
+                accent: "text-emerald-700",
+                iconBg: "bg-emerald-50 text-emerald-600",
             },
             {
                 label: "Rejeitados",
                 value: counters.rejected,
                 icon: Ban,
-                tone: "text-red-700",
+                accent: "text-red-700",
+                iconBg: "bg-red-50 text-red-600",
             },
             {
                 label: "Pausados / desabilitados",
                 value: counters.pausedOrDisabled,
                 icon: PauseCircle,
-                tone: "text-orange-700",
+                accent: "text-slate-600",
+                iconBg: "bg-slate-100 text-slate-600",
             },
         ],
         [counters]
     );
 
+    const premiumCard =
+        "rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_4px_rgba(15,23,42,0.06)]";
+    const premiumBtn =
+        "rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-[0_6px_16px_-6px_rgba(37,99,235,0.55)]";
+    const premiumBtnOutline =
+        "rounded-xl border-slate-200 bg-white text-[#0f2744] hover:bg-slate-50";
+
     return (
-        <div className="mx-auto w-full max-w-[1400px] space-y-6 overflow-x-hidden">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-                <div className="min-w-0">
-                    <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-foreground">
-                        Aprovações Meta
-                    </h1>
-                    <p className="mt-1.5 text-sm text-muted-foreground max-w-2xl">
-                        Gerencie e acompanhe os modelos de mensagens enviados
-                        para análise da Meta, sincronizados pela Datafy.
-                    </p>
-                    {wabaId && (
-                        <p className="mt-1 text-xs text-muted-foreground/80 font-mono truncate">
-                            WABA {wabaId}
-                            {lastSyncAt
-                                ? ` · última sync ${formatWhen(lastSyncAt)}`
-                                : ""}
+        <div className="mx-auto w-full max-w-[1400px] space-y-5 overflow-x-hidden">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex items-start gap-3 min-w-0">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#2563eb] text-white shadow-[0_8px_20px_-8px_rgba(37,99,235,0.7)]">
+                        <ShieldCheck className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0f2744]">
+                            Aprovações Meta
+                        </h1>
+                        <p className="text-slate-500 text-sm mt-1 max-w-2xl">
+                            Acompanhe templates oficiais enviados para análise
+                            da Meta, sincronizados pela Datafy.
                         </p>
-                    )}
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-slate-400">
+                            {wabaId ? (
+                                <span className="font-mono truncate">
+                                    WABA {wabaId}
+                                </span>
+                            ) : (
+                                <span>WABA não identificada</span>
+                            )}
+                            <span>
+                                Última sincronização:{" "}
+                                {formatWhen(lastSyncAt)}
+                            </span>
+                            {(syncing || refreshing) && (
+                                <span className="inline-flex items-center gap-1.5 text-[#2563eb]">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    Sincronizando…
+                                </span>
+                            )}
+                        </div>
+                    </div>
                 </div>
                 <div className="flex flex-wrap gap-2 shrink-0">
                     <Button
@@ -355,6 +435,7 @@ export function MetaApprovalsPanel() {
                         size="sm"
                         disabled={syncing}
                         onClick={() => void runSync("refresh")}
+                        className={premiumBtnOutline}
                     >
                         <RefreshCw
                             className={`h-4 w-4 mr-1.5 ${syncing ? "animate-spin" : ""}`}
@@ -365,13 +446,14 @@ export function MetaApprovalsPanel() {
                         size="sm"
                         disabled={syncing}
                         onClick={() => void runSync("sync")}
+                        className={premiumBtn}
                     >
                         <RefreshCw
                             className={`h-4 w-4 mr-1.5 ${syncing ? "animate-spin" : ""}`}
                         />
                         Sincronizar com a Meta
                     </Button>
-                    <Button size="sm" variant="secondary" asChild>
+                    <Button size="sm" className={premiumBtn} asChild>
                         <Link href="/dashboard/boletim">
                             <Plus className="h-4 w-4 mr-1.5" />
                             Novo template
@@ -386,125 +468,144 @@ export function MetaApprovalsPanel() {
                     return (
                         <div
                             key={c.label}
-                            className="rounded-xl border border-border/60 bg-card/40 px-3 py-3 sm:px-4"
+                            className={`${premiumCard} px-3.5 py-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_20px_-8px_rgba(15,23,42,0.18)] motion-reduce:transform-none`}
                         >
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                <Icon className={`h-3.5 w-3.5 ${c.tone}`} />
+                            <div
+                                className={`flex h-9 w-9 items-center justify-center rounded-xl ${c.iconBg}`}
+                            >
+                                <Icon className="h-4 w-4" />
+                            </div>
+                            <p
+                                className={`mt-3 text-2xl font-semibold tracking-tight tabular-nums ${c.accent}`}
+                            >
+                                {showInitialSkeleton ? "—" : c.value}
+                            </p>
+                            <p className="mt-0.5 text-[12px] font-medium text-slate-500 leading-snug">
                                 {c.label}
-                            </div>
-                            <div className={`mt-1 text-2xl font-semibold tabular-nums ${c.tone}`}>
-                                {loading ? "—" : c.value}
-                            </div>
+                            </p>
                         </div>
                     );
                 })}
             </div>
 
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div className="relative w-full lg:max-w-sm">
-                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                        className="pl-9"
-                        placeholder="Pesquisar por nome técnico…"
-                        value={q}
-                        onChange={(e) => {
-                            setPage(1);
-                            setQ(e.target.value);
-                        }}
-                    />
+            <div className={`${premiumCard} overflow-hidden`}>
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center justify-between px-4 sm:px-5 pt-4 pb-3">
+                    <div className="relative w-full xl:max-w-md">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                        <Input
+                            className="pl-9 h-10 rounded-xl border-slate-200 bg-slate-50/60"
+                            placeholder="Pesquisar templates pelo nome..."
+                            value={qInput}
+                            onChange={(e) => setQInput(e.target.value)}
+                        />
+                    </div>
+                    <div className="flex flex-wrap gap-2 items-center">
+                        <Select
+                            value={status}
+                            onValueChange={(v) => {
+                                setPage(1);
+                                setStatus(v);
+                            }}
+                        >
+                            <SelectTrigger className="w-[170px] h-10 rounded-xl border-slate-200">
+                                <SelectValue placeholder="Status" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">Todos os status</SelectItem>
+                                <SelectItem value="APPROVED">Aprovados</SelectItem>
+                                <SelectItem value="PENDING">Em análise</SelectItem>
+                                <SelectItem value="REJECTED">Rejeitados</SelectItem>
+                                <SelectItem value="PAUSED_OR_DISABLED">
+                                    Pausados/desabilitados
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Select
+                            value={category}
+                            onValueChange={(v) => {
+                                setPage(1);
+                                setCategory(v);
+                            }}
+                        >
+                            <SelectTrigger className="w-[150px] h-10 rounded-xl border-slate-200">
+                                <SelectValue placeholder="Categoria" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">Todas categorias</SelectItem>
+                                <SelectItem value="MARKETING">MARKETING</SelectItem>
+                                <SelectItem value="UTILITY">UTILITY</SelectItem>
+                                <SelectItem value="AUTHENTICATION">
+                                    AUTHENTICATION
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Select
+                            value={language}
+                            onValueChange={(v) => {
+                                setPage(1);
+                                setLanguage(v);
+                            }}
+                        >
+                            <SelectTrigger className="w-[130px] h-10 rounded-xl border-slate-200">
+                                <SelectValue placeholder="Idioma" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">Todos idiomas</SelectItem>
+                                <SelectItem value="pt_BR">pt_BR</SelectItem>
+                                <SelectItem value="en">en</SelectItem>
+                                <SelectItem value="en_US">en_US</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            asChild
+                            className="h-10 rounded-xl text-slate-600"
+                        >
+                            <Link href="/dashboard/boletim/biblioteca">
+                                <Library className="h-3.5 w-3.5 mr-1" />
+                                Biblioteca
+                            </Link>
+                        </Button>
+                    </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                    <Select
-                        value={status}
-                        onValueChange={(v) => {
-                            setPage(1);
-                            setStatus(v);
-                        }}
-                    >
-                        <SelectTrigger className="w-[160px]">
-                            <SelectValue placeholder="Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">Todos status</SelectItem>
-                            <SelectItem value="PENDING">Em análise</SelectItem>
-                            <SelectItem value="APPROVED">Aprovados</SelectItem>
-                            <SelectItem value="REJECTED">Rejeitados</SelectItem>
-                            <SelectItem value="PAUSED_OR_DISABLED">
-                                Pausados / desabilitados
-                            </SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <Select
-                        value={category}
-                        onValueChange={(v) => {
-                            setPage(1);
-                            setCategory(v);
-                        }}
-                    >
-                        <SelectTrigger className="w-[150px]">
-                            <SelectValue placeholder="Categoria" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">Categorias</SelectItem>
-                            <SelectItem value="MARKETING">MARKETING</SelectItem>
-                            <SelectItem value="UTILITY">UTILITY</SelectItem>
-                            <SelectItem value="AUTHENTICATION">
-                                AUTHENTICATION
-                            </SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <Select
-                        value={language}
-                        onValueChange={(v) => {
-                            setPage(1);
-                            setLanguage(v);
-                        }}
-                    >
-                        <SelectTrigger className="w-[130px]">
-                            <SelectValue placeholder="Idioma" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">Idiomas</SelectItem>
-                            <SelectItem value="pt_BR">pt_BR</SelectItem>
-                            <SelectItem value="en">en</SelectItem>
-                            <SelectItem value="en_US">en_US</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-            </div>
 
-            <div className="rounded-xl border border-border/60 overflow-hidden">
-                <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between text-xs text-muted-foreground">
-                    <span>
-                        {loading
-                            ? "Carregando…"
-                            : `${total} resultado${total === 1 ? "" : "s"}`}
-                    </span>
-                    <Button variant="ghost" size="sm" asChild className="h-7 text-xs">
-                        <Link href="/dashboard/boletim/biblioteca">
-                            <Library className="h-3.5 w-3.5 mr-1" />
-                            Biblioteca
-                        </Link>
-                    </Button>
-                </div>
+                {loadError && items.length > 0 && (
+                    <div className="mx-4 sm:mx-5 mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 flex items-center gap-2">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                        {loadError}
+                    </div>
+                )}
 
                 <div className="overflow-x-auto">
                     <Table>
                         <TableHeader>
-                            <TableRow>
-                                <TableHead>Nome</TableHead>
-                                <TableHead>Categoria</TableHead>
-                                <TableHead>Idioma</TableHead>
-                                <TableHead>Origem</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Última atualização</TableHead>
-                                <TableHead className="w-12 text-right">
+                            <TableRow className="border-slate-100 hover:bg-transparent bg-[#eef4fb]">
+                                <TableHead className="text-[#3b5b7c] font-semibold">
+                                    Nome
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold">
+                                    Categoria
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold">
+                                    Idioma
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold hidden sm:table-cell">
+                                    Origem
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold">
+                                    Status
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold hidden md:table-cell">
+                                    Última atualização
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold w-12 text-right">
                                     Ações
                                 </TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {loading &&
+                            {showInitialSkeleton &&
                                 Array.from({ length: 5 }).map((_, i) => (
                                     <TableRow key={i}>
                                         {Array.from({ length: 7 }).map((__, j) => (
@@ -514,7 +615,7 @@ export function MetaApprovalsPanel() {
                                         ))}
                                     </TableRow>
                                 ))}
-                            {!loading && loadError && (
+                            {!showInitialSkeleton && loadError && items.length === 0 && (
                                 <TableRow>
                                     <TableCell
                                         colSpan={7}
@@ -522,18 +623,21 @@ export function MetaApprovalsPanel() {
                                     >
                                         <div className="mx-auto max-w-md space-y-3">
                                             <AlertTriangle className="mx-auto h-8 w-8 text-amber-600" />
-                                            <p className="font-medium">
+                                            <p className="font-medium text-[#0f2744]">
                                                 Não foi possível carregar os
                                                 templates
                                             </p>
-                                            <p className="text-sm text-muted-foreground">
+                                            <p className="text-sm text-slate-500">
                                                 {loadError}
                                             </p>
                                             <Button
                                                 size="sm"
                                                 variant="outline"
                                                 disabled={loading || syncing}
-                                                onClick={() => void load()}
+                                                className={premiumBtnOutline}
+                                                onClick={() =>
+                                                    void load({ silent: false })
+                                                }
                                             >
                                                 <RefreshCw className="h-4 w-4 mr-1.5" />
                                                 Tentar novamente
@@ -542,33 +646,41 @@ export function MetaApprovalsPanel() {
                                     </TableCell>
                                 </TableRow>
                             )}
-                            {!loading && !loadError && items.length === 0 && (
+                            {!showInitialSkeleton &&
+                                !loadError &&
+                                items.length === 0 && (
                                 <TableRow>
                                     <TableCell
                                         colSpan={7}
                                         className="py-16 text-center"
                                     >
                                         <div className="mx-auto max-w-md space-y-2">
-                                            <AlertTriangle className="mx-auto h-8 w-8 text-muted-foreground/50" />
-                                            <p className="font-medium">
-                                                Nenhum template sincronizado
+                                            <AlertTriangle className="mx-auto h-8 w-8 text-slate-300" />
+                                            <p className="font-medium text-[#0f2744]">
+                                                {q ||
+                                                status !== "all" ||
+                                                category !== "all" ||
+                                                language !== "all"
+                                                    ? "Nenhum template encontrado com os filtros atuais"
+                                                    : "Nenhum template sincronizado"}
                                             </p>
-                                            <p className="text-sm text-muted-foreground">
+                                            <p className="text-sm text-slate-500">
                                                 Clique em{" "}
                                                 <strong>Sincronizar com a Meta</strong>{" "}
-                                                para importar modelos da WABA,
-                                                incluindo os criados no Gerenciador
-                                                do WhatsApp.
+                                                para importar modelos da WABA.
                                             </p>
                                         </div>
                                     </TableCell>
                                 </TableRow>
                             )}
-                            {!loading &&
+                            {!showInitialSkeleton &&
                                 items.map((item) => (
-                                    <TableRow key={item.id}>
-                                        <TableCell className="font-medium max-w-[220px]">
-                                            <div className="truncate font-mono text-xs sm:text-sm">
+                                    <TableRow
+                                        key={item.id}
+                                        className="border-slate-100 hover:bg-slate-50/80 transition-colors"
+                                    >
+                                        <TableCell className="font-medium max-w-[240px]">
+                                            <div className="truncate font-mono text-xs sm:text-sm text-[#0f2744]">
                                                 {item.technicalName}
                                             </div>
                                             {item.syncError && (
@@ -577,26 +689,26 @@ export function MetaApprovalsPanel() {
                                                 </div>
                                             )}
                                         </TableCell>
-                                        <TableCell className="text-xs">
+                                        <TableCell className="text-xs text-slate-600">
                                             {item.category}
                                         </TableCell>
-                                        <TableCell className="text-xs font-mono">
+                                        <TableCell className="text-xs font-mono text-slate-600">
                                             {item.language}
                                         </TableCell>
-                                        <TableCell className="text-xs">
+                                        <TableCell className="text-xs text-slate-600 hidden sm:table-cell">
                                             {item.originLabel}
                                         </TableCell>
                                         <TableCell>
                                             <Badge
                                                 variant="outline"
-                                                className={statusStyle(
+                                                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusStyle(
                                                     item.status
-                                                )}
+                                                )}`}
                                             >
                                                 {statusLabel(item.status)}
                                             </Badge>
                                         </TableCell>
-                                        <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                                        <TableCell className="text-xs text-slate-500 whitespace-nowrap hidden md:table-cell">
                                             {formatWhen(
                                                 item.lastSyncedAt ||
                                                     item.updatedAt
@@ -608,7 +720,7 @@ export function MetaApprovalsPanel() {
                                                     <Button
                                                         variant="ghost"
                                                         size="icon"
-                                                        className="h-8 w-8"
+                                                        className="h-8 w-8 text-slate-500"
                                                     >
                                                         <MoreHorizontal className="h-4 w-4" />
                                                     </Button>
@@ -683,133 +795,186 @@ export function MetaApprovalsPanel() {
                     </Table>
                 </div>
 
-                <div className="flex items-center justify-between px-4 py-3 border-t border-border/50">
-                    <span className="text-xs text-muted-foreground">
-                        Página {page} de {totalPages}
-                    </span>
-                    <div className="flex gap-2">
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={page <= 1}
-                            onClick={() => setPage((p) => Math.max(1, p - 1))}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between px-4 sm:px-5 py-3.5 border-t border-slate-100 bg-slate-50/40">
+                    <p className="text-xs text-slate-500 font-medium">
+                        {rangeLabel({
+                            ...listMeta,
+                            total,
+                        }).replace("campanhas", "templates")}
+                        {" · "}
+                        Página {listMeta.page} de {listMeta.totalPages}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 justify-between sm:justify-end">
+                        <div className="flex items-center gap-1">
+                            <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-8 w-8 rounded-lg border-slate-200"
+                                disabled={listMeta.page <= 1}
+                                onClick={() =>
+                                    setPage((p) => Math.max(1, p - 1))
+                                }
+                                aria-label="Página anterior"
+                            >
+                                <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                            {pageNums.map((n) => (
+                                <Button
+                                    key={n}
+                                    variant={
+                                        n === listMeta.page
+                                            ? "default"
+                                            : "outline"
+                                    }
+                                    size="icon"
+                                    className={`h-8 w-8 rounded-lg text-xs ${
+                                        n === listMeta.page
+                                            ? "bg-[#2563eb] hover:bg-[#1d4ed8] text-white"
+                                            : "border-slate-200"
+                                    }`}
+                                    onClick={() => setPage(n)}
+                                >
+                                    {n}
+                                </Button>
+                            ))}
+                            <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-8 w-8 rounded-lg border-slate-200"
+                                disabled={
+                                    listMeta.page >= listMeta.totalPages
+                                }
+                                onClick={() =>
+                                    setPage((p) =>
+                                        Math.min(listMeta.totalPages, p + 1)
+                                    )
+                                }
+                                aria-label="Próxima página"
+                            >
+                                <ChevronRight className="h-4 w-4" />
+                            </Button>
+                        </div>
+                        <Select
+                            value={String(pageSize)}
+                            onValueChange={(v) => {
+                                setPage(1);
+                                setPageSize(Number(v));
+                            }}
                         >
-                            Anterior
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={page >= totalPages}
-                            onClick={() =>
-                                setPage((p) => Math.min(totalPages, p + 1))
-                            }
-                        >
-                            Próxima
-                        </Button>
+                            <SelectTrigger className="w-[130px] h-8 rounded-lg border-slate-200 text-xs">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="10">10 por página</SelectItem>
+                                <SelectItem value="20">20 por página</SelectItem>
+                                <SelectItem value="50">50 por página</SelectItem>
+                            </SelectContent>
+                        </Select>
                     </div>
                 </div>
             </div>
 
             <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
-                <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+                <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto rounded-2xl border-slate-200">
                     <DialogHeader>
-                        <DialogTitle className="font-mono text-base">
+                        <DialogTitle className="font-mono text-base text-[#0f2744]">
                             {detail?.technicalName}
                         </DialogTitle>
-                        <DialogDescription>
-                            Detalhes oficiais sincronizados via Datafy
+                        <DialogDescription className="text-slate-500">
+                            Detalhes oficiais sincronizados via Datafy — componentes
+                            exatamente como aprovados pela Meta.
                         </DialogDescription>
                     </DialogHeader>
                     {detail && (
                         <div className="space-y-4 text-sm">
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                    <div className="text-xs text-muted-foreground">
+                                    <div className="text-xs text-slate-400">
                                         ID oficial
                                     </div>
-                                    <div className="font-mono text-xs break-all">
+                                    <div className="font-mono text-xs break-all text-[#0f2744]">
                                         {detail.remoteTemplateId || "—"}
                                     </div>
                                 </div>
                                 <div>
-                                    <div className="text-xs text-muted-foreground">
+                                    <div className="text-xs text-slate-400">
                                         WABA
                                     </div>
-                                    <div className="font-mono text-xs break-all">
+                                    <div className="font-mono text-xs break-all text-[#0f2744]">
                                         {detail.wabaId || "—"}
                                     </div>
                                 </div>
                                 <div>
-                                    <div className="text-xs text-muted-foreground">
+                                    <div className="text-xs text-slate-400">
                                         Categoria / Idioma
                                     </div>
-                                    <div>
+                                    <div className="text-[#0f2744]">
                                         {detail.category} · {detail.language}
                                     </div>
                                 </div>
                                 <div>
-                                    <div className="text-xs text-muted-foreground">
+                                    <div className="text-xs text-slate-400">
                                         Status
                                     </div>
                                     <Badge
                                         variant="outline"
-                                        className={statusStyle(detail.status)}
+                                        className={`rounded-full ${statusStyle(detail.status)}`}
                                     >
                                         {statusLabel(detail.status)}
                                     </Badge>
                                 </div>
                             </div>
                             {detail.rejectedReason && (
-                                <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+                                <div className="rounded-xl border border-red-200 bg-red-50 p-3">
                                     <div className="text-xs font-medium text-red-700 mb-1">
                                         Motivo da rejeição
                                     </div>
-                                    <p className="text-sm whitespace-pre-wrap">
+                                    <p className="text-sm whitespace-pre-wrap text-red-900">
                                         {detail.rejectedReason}
                                     </p>
                                 </div>
                             )}
                             {detail.headerText && (
                                 <div>
-                                    <div className="text-xs text-muted-foreground mb-1">
+                                    <div className="text-xs text-slate-400 mb-1">
                                         HEADER
                                     </div>
-                                    <pre className="whitespace-pre-wrap rounded-lg bg-muted/40 p-3 text-xs">
+                                    <pre className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-[#eef4fb]/40 p-3 text-xs text-[#0f2744]">
                                         {detail.headerText}
                                     </pre>
                                 </div>
                             )}
                             <div>
-                                <div className="text-xs text-muted-foreground mb-1">
+                                <div className="text-xs text-slate-400 mb-1">
                                     BODY ({detail.variableCount} variáveis)
                                 </div>
-                                <pre className="whitespace-pre-wrap rounded-lg bg-muted/40 p-3 text-xs">
+                                <pre className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-[#eef4fb]/40 p-3 text-xs text-[#0f2744]">
                                     {detail.bodyText}
                                 </pre>
                             </div>
                             {detail.footerText && (
                                 <div>
-                                    <div className="text-xs text-muted-foreground mb-1">
+                                    <div className="text-xs text-slate-400 mb-1">
                                         FOOTER
                                     </div>
-                                    <pre className="whitespace-pre-wrap rounded-lg bg-muted/40 p-3 text-xs">
+                                    <pre className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-[#eef4fb]/40 p-3 text-xs text-[#0f2744]">
                                         {detail.footerText}
                                     </pre>
                                 </div>
                             )}
                             {detail.exampleRow?.length > 0 && (
                                 <div>
-                                    <div className="text-xs text-muted-foreground mb-1">
+                                    <div className="text-xs text-slate-400 mb-1">
                                         Exemplos
                                     </div>
-                                    <ol className="list-decimal pl-5 text-xs space-y-0.5">
+                                    <ol className="list-decimal pl-5 text-xs space-y-0.5 text-slate-600">
                                         {detail.exampleRow.map((ex, i) => (
                                             <li key={i}>{ex}</li>
                                         ))}
                                     </ol>
                                 </div>
                             )}
-                            <div className="text-xs text-muted-foreground">
+                            <div className="text-xs text-slate-400">
                                 Criado {formatWhen(detail.createdAt)} · Atualizado{" "}
                                 {formatWhen(detail.updatedAt)} · Sync{" "}
                                 {formatWhen(detail.lastSyncedAt)}
@@ -823,23 +988,25 @@ export function MetaApprovalsPanel() {
                 open={!!importTarget}
                 onOpenChange={(o) => !o && setImportTarget(null)}
             >
-                <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+                <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto rounded-2xl border-slate-200">
                     <DialogHeader>
-                        <DialogTitle>Importar para biblioteca</DialogTitle>
-                        <DialogDescription>
+                        <DialogTitle className="text-[#0f2744]">
+                            Importar para biblioteca
+                        </DialogTitle>
+                        <DialogDescription className="text-slate-500">
                             Mapeie as variáveis do template para os campos de
                             carga do boletim.
                         </DialogDescription>
                     </DialogHeader>
                     {importTarget && (
                         <div className="space-y-3">
-                            <p className="text-xs font-mono text-muted-foreground">
+                            <p className="text-xs font-mono text-slate-500">
                                 {importTarget.technicalName} ·{" "}
                                 {importTarget.variableCount} variáveis
                             </p>
                             {mappings.map((m, i) => (
                                 <div key={i} className="space-y-1">
-                                    <label className="text-xs text-muted-foreground">
+                                    <label className="text-xs text-slate-500">
                                         {"{{" + (i + 1) + "}}"}
                                     </label>
                                     <Select
@@ -850,7 +1017,7 @@ export function MetaApprovalsPanel() {
                                             setMappings(next);
                                         }}
                                     >
-                                        <SelectTrigger>
+                                        <SelectTrigger className="rounded-xl border-slate-200">
                                             <SelectValue placeholder="Campo…" />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -867,10 +1034,15 @@ export function MetaApprovalsPanel() {
                                 </div>
                             ))}
                             <Button
-                                className="w-full"
+                                className={`w-full ${premiumBtn}`}
                                 onClick={() => void confirmImport()}
-                                disabled={mappings.some((x) => !x)}
+                                disabled={
+                                    importing || mappings.some((x) => !x)
+                                }
                             >
+                                {importing ? (
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                ) : null}
                                 Confirmar importação
                             </Button>
                         </div>
