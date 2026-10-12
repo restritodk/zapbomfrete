@@ -139,19 +139,31 @@ export function Navbar({ appName, logoUrl }: NavbarProps) {
     };
 
     return (
-        <header className="bg-white/90 backdrop-blur-xl border-b border-slate-200/80 h-16 flex items-center justify-between px-4 sm:px-6 sticky top-0 z-30 w-full shadow-[0_1px_0_rgba(15,23,42,0.04)]">
-            <div className="flex items-center gap-3 min-w-0">
+        <header className="bg-white/90 backdrop-blur-xl border-b border-slate-200/80 h-16 flex items-center justify-between gap-3 px-3 sm:px-5 lg:px-6 sticky top-0 z-30 w-full max-w-full overflow-hidden shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+            {/* Left: mobile nav */}
+            <div className="flex items-center gap-3 shrink-0 min-w-0">
                 <MobileNav appName={appName} logoUrl={logoUrl} />
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-                <span className="hidden md:inline"><RealtimeClock /></span>
-                <SessionSelector />
-                <div className="h-6 w-px bg-slate-200 hidden sm:block" />
+            {/* Right: clock · channel · user — no horizontal page scroll */}
+            <div className="flex items-center justify-end gap-1.5 sm:gap-2.5 lg:gap-3 min-w-0 flex-1 overflow-hidden">
+                {/* Group 1 — Horário */}
+                <div className="hidden md:flex items-center shrink-0">
+                    <RealtimeClock />
+                </div>
+
+                {/* Group 2 — Canal (may shrink; never overlaps user controls) */}
+                <div className="min-w-0 shrink">
+                    <SessionSelector />
+                </div>
+
+                {/* Group 3 — Usuário */}
+                <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                    <div className="h-6 w-px bg-slate-200 hidden sm:block" />
 
                 <Popover open={isOpen} onOpenChange={setIsOpen}>
                     <PopoverTrigger asChild>
-                        <Button variant="ghost" size="icon" className="relative hover:bg-muted/50 rounded-full h-10 w-10">
+                        <Button variant="ghost" size="icon" className="relative hover:bg-muted/50 rounded-full h-10 w-10 shrink-0">
                             <Bell className={`h-5 w-5 transition-colors ${unreadCount > 0 ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`} />
                             {unreadCount > 0 && (
                                 <span className="absolute top-1.5 right-2.5 h-2.5 w-2.5 bg-red-500 rounded-full animate-pulse border-2 border-background" />
@@ -232,17 +244,17 @@ export function Navbar({ appName, logoUrl }: NavbarProps) {
                 </Popover>
 
                 {session?.user && (
-                    <div className="hidden sm:flex items-center gap-2 pl-1 min-w-0">
+                    <div className="hidden sm:flex items-center gap-2 pl-1 min-w-0 shrink-0">
                         <div className="h-9 w-9 rounded-full bg-[#0f2744] text-white flex items-center justify-center text-sm font-semibold shrink-0">
                             {(session.user.name || session.user.email || "U")
                                 .charAt(0)
                                 .toUpperCase()}
                         </div>
-                        <div className="min-w-0 hidden lg:block">
-                            <p className="text-sm font-semibold text-[#0f2744] truncate max-w-[140px]">
+                        <div className="min-w-0 hidden xl:block">
+                            <p className="text-sm font-semibold text-[#0f2744] truncate max-w-[120px]">
                                 {session.user.name || "Usuário"}
                             </p>
-                            <p className="text-[10px] text-slate-500 truncate max-w-[140px]">
+                            <p className="text-[10px] text-slate-500 truncate max-w-[120px]">
                                 {String(
                                     (session.user as { role?: string }).role ||
                                         "Conta"
@@ -251,6 +263,7 @@ export function Navbar({ appName, logoUrl }: NavbarProps) {
                         </div>
                     </div>
                 )}
+                </div>
             </div>
         </header>
     );

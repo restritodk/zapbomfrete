@@ -37,10 +37,12 @@ export function RealtimeClock() {
     if (!mounted) return null;
 
     return (
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-md border border-slate-200 text-sm font-medium text-slate-700">
-            <Clock className="h-4 w-4 text-slate-500" />
-            <span>{time}</span>
-            <span className="text-xs text-slate-400 border-l border-slate-300 pl-2 ml-1">{timezone}</span>
+        <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-50 rounded-xl border border-slate-200/80 text-sm font-medium text-slate-700 shrink-0 whitespace-nowrap">
+            <Clock className="h-4 w-4 text-slate-500 shrink-0" />
+            <span className="tabular-nums">{time}</span>
+            <span className="text-[10px] text-slate-400 border-l border-slate-200 pl-2 ml-0.5 hidden lg:inline">
+                {timezone}
+            </span>
         </div>
     );
 }
