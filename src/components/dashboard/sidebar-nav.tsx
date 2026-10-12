@@ -149,12 +149,17 @@ const navGroups: NavGroup[] = [
     },
 ];
 
-export function SidebarNav() {
+export function SidebarNav({
+    variant = "default",
+}: {
+    variant?: "default" | "navy";
+}) {
     const pathname = usePathname();
     const { data: session } = useSession();
     const { isCollapsed, toggleCollapse } = useSidebar();
     // @ts-ignore
     const userRole = session?.user?.role;
+    const navy = variant === "navy";
 
     // Track collapsed groups — all expanded by default
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
@@ -197,7 +202,6 @@ export function SidebarNav() {
 
                     const isGroupCollapsed = collapsedGroups[group.label] ?? false;
 
-                    // "Main" group doesn't show a collapsible header
                     if (group.label === "Main") {
                         return (
                             <div key={group.label} className="mb-1">
@@ -207,6 +211,7 @@ export function SidebarNav() {
                                         item={item}
                                         active={isActive(item.href)}
                                         isCollapsed={isCollapsed}
+                                        navy={navy}
                                     />
                                 ))}
                             </div>
@@ -215,11 +220,14 @@ export function SidebarNav() {
 
                     return (
                         <div key={group.label} className="mb-1">
-                            {/* Group header — hidden when sidebar collapsed */}
                             {!isCollapsed && (
                                 <button
                                     onClick={() => toggleGroup(group.label)}
-                                    className="flex items-center justify-between w-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 hover:text-foreground/80 transition-colors group"
+                                    className={`flex items-center justify-between w-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-colors group ${
+                                        navy
+                                            ? "text-slate-400/80 hover:text-slate-200"
+                                            : "text-muted-foreground/60 hover:text-foreground/80"
+                                    }`}
                                 >
                                     {group.label}
                                     <ChevronDown
@@ -229,9 +237,12 @@ export function SidebarNav() {
                                 </button>
                             )}
 
-                            {/* Collapsed sidebar: show a thin divider between groups */}
                             {isCollapsed && (
-                                <div className="mx-3 my-2 border-t border-border/30" />
+                                <div
+                                    className={`mx-3 my-2 border-t ${
+                                        navy ? "border-white/10" : "border-border/30"
+                                    }`}
+                                />
                             )}
 
                             {(!isGroupCollapsed || isCollapsed) && (
@@ -241,6 +252,7 @@ export function SidebarNav() {
                                             const open =
                                                 openSubmenus[item.href] ??
                                                 isActive(item.href);
+                                            const parentActive = isActive(item.href);
                                             return (
                                                 <div key={item.href} className="space-y-0.5">
                                                     <button
@@ -252,12 +264,16 @@ export function SidebarNav() {
                                                             }))
                                                         }
                                                         className={`
-                                                            flex items-center justify-between w-full rounded-lg text-sm font-medium
+                                                            flex items-center justify-between w-full rounded-xl text-sm font-medium
                                                             gap-3 px-3 py-2 transition-all duration-200
                                                             ${
-                                                                isActive(item.href)
-                                                                    ? "text-primary bg-primary/10"
-                                                                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                                                                navy
+                                                                    ? parentActive
+                                                                        ? "text-white bg-[#2563eb] shadow-[0_6px_16px_-8px_rgba(37,99,235,0.9)]"
+                                                                        : "text-slate-300 hover:bg-white/10 hover:text-white"
+                                                                    : parentActive
+                                                                      ? "text-primary bg-primary/10"
+                                                                      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                                                             }
                                                         `}
                                                     >
@@ -265,9 +281,13 @@ export function SidebarNav() {
                                                             <item.icon
                                                                 size={17}
                                                                 className={`flex-shrink-0 ${
-                                                                    isActive(item.href)
-                                                                        ? "text-primary"
-                                                                        : "text-muted-foreground/70"
+                                                                    navy
+                                                                        ? parentActive
+                                                                            ? "text-white"
+                                                                            : "text-slate-400"
+                                                                        : parentActive
+                                                                          ? "text-primary"
+                                                                          : "text-muted-foreground/70"
                                                                 }`}
                                                             />
                                                             <span className="truncate">
@@ -282,19 +302,31 @@ export function SidebarNav() {
                                                         />
                                                     </button>
                                                     {open && (
-                                                        <div className="ml-4 pl-3 border-l border-border/40 space-y-0.5">
+                                                        <div
+                                                            className={`ml-4 pl-3 space-y-0.5 ${
+                                                                navy
+                                                                    ? "border-l border-white/15"
+                                                                    : "border-l border-border/40"
+                                                            }`}
+                                                        >
                                                             {item.children.map((child) => (
                                                                 <Link
                                                                     key={child.href}
                                                                     href={child.href}
                                                                     className={`
-                                                                        block rounded-md px-2.5 py-1.5 text-[13px] transition-colors
+                                                                        block rounded-lg px-2.5 py-1.5 text-[13px] transition-colors
                                                                         ${
-                                                                            isChildActive(
-                                                                                child.href
-                                                                            )
-                                                                                ? "text-primary font-medium bg-primary/5"
-                                                                                : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                                                                            navy
+                                                                                ? isChildActive(
+                                                                                      child.href
+                                                                                  )
+                                                                                    ? "text-white font-medium bg-white/10"
+                                                                                    : "text-slate-400 hover:text-white hover:bg-white/5"
+                                                                                : isChildActive(
+                                                                                        child.href
+                                                                                    )
+                                                                                  ? "text-primary font-medium bg-primary/5"
+                                                                                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
                                                                         }
                                                                     `}
                                                                 >
@@ -312,6 +344,7 @@ export function SidebarNav() {
                                                 item={item}
                                                 active={isActive(item.href)}
                                                 isCollapsed={isCollapsed}
+                                                navy={navy}
                                             />
                                         );
                                     })}
@@ -322,18 +355,25 @@ export function SidebarNav() {
                 })}
             </nav>
 
-            {/* Collapse Toggle Button */}
-            <div className="px-2 py-2 border-t border-border/30">
+            <div
+                className={`px-2 py-2 border-t ${
+                    navy ? "border-white/10" : "border-border/30"
+                }`}
+            >
                 <button
                     onClick={toggleCollapse}
-                    className="flex items-center justify-center w-full gap-2 px-3 py-2 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all duration-200"
+                    className={`flex items-center justify-center w-full gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200 ${
+                        navy
+                            ? "text-slate-400 hover:text-white hover:bg-white/10"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    }`}
                 >
                     {isCollapsed ? (
                         <PanelLeft size={18} />
                     ) : (
                         <>
                             <PanelLeftClose size={16} />
-                            <span>Collapse</span>
+                            <span>Recolher</span>
                         </>
                     )}
                 </button>
@@ -342,7 +382,17 @@ export function SidebarNav() {
     );
 }
 
-function NavLink({ item, active, isCollapsed }: { item: NavItem; active: boolean; isCollapsed: boolean }) {
+function NavLink({
+    item,
+    active,
+    isCollapsed,
+    navy = false,
+}: {
+    item: NavItem;
+    active: boolean;
+    isCollapsed: boolean;
+    navy?: boolean;
+}) {
     const Icon = item.icon;
 
     const linkContent = (
@@ -350,21 +400,34 @@ function NavLink({ item, active, isCollapsed }: { item: NavItem; active: boolean
             href={item.href}
             target={item.external ? "_blank" : undefined}
             className={`
-                flex items-center rounded-lg text-sm font-medium
+                flex items-center rounded-xl text-sm font-medium
                 transition-all duration-200 group relative
                 ${isCollapsed ? "justify-center px-2 py-2.5 mx-1" : "gap-3 px-3 py-2"}
-                ${active
-                    ? "text-primary bg-primary/10 shadow-sm"
-                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                ${
+                    navy
+                        ? active
+                            ? "text-white bg-[#2563eb] shadow-[0_6px_16px_-8px_rgba(37,99,235,0.9)]"
+                            : "text-slate-300 hover:bg-white/10 hover:text-white"
+                        : active
+                          ? "text-primary bg-primary/10 shadow-sm"
+                          : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 }
             `}
         >
-            {active && !isCollapsed && (
+            {!navy && active && !isCollapsed && (
                 <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 bg-primary rounded-r-full" />
             )}
             <Icon
                 size={isCollapsed ? 20 : 17}
-                className={`flex-shrink-0 transition-colors duration-200 ${active ? "text-primary" : "text-muted-foreground/70 group-hover:text-foreground"}`}
+                className={`flex-shrink-0 transition-colors duration-200 ${
+                    navy
+                        ? active
+                            ? "text-white"
+                            : "text-slate-400 group-hover:text-white"
+                        : active
+                          ? "text-primary"
+                          : "text-muted-foreground/70 group-hover:text-foreground"
+                }`}
             />
             {!isCollapsed && <span className="truncate">{item.label}</span>}
         </Link>

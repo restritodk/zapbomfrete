@@ -28,11 +28,10 @@ export default async function DashboardLayout({
                     role={session?.user?.role as string}
                     registrationEnabled={registrationEnabled}
                 />
-                <div className="flex h-screen bg-background relative overflow-hidden" suppressHydrationWarning={true}>
-                    {/* Subtle ambient background */}
+                <div className="flex h-screen bg-[#f4f7fb] relative overflow-hidden" suppressHydrationWarning={true}>
                     <div className="absolute inset-0 overflow-hidden pointer-events-none z-0" suppressHydrationWarning={true}>
-                        <div className="absolute -top-[20%] -left-[10%] w-[35rem] h-[35rem] bg-primary/[0.03] rounded-full blur-[100px]" />
-                        <div className="absolute -bottom-[20%] -right-[10%] w-[25rem] h-[25rem] bg-blue-500/[0.03] rounded-full blur-[80px]" />
+                        <div className="absolute -top-[20%] -left-[10%] w-[35rem] h-[35rem] bg-blue-500/[0.04] rounded-full blur-[100px]" />
+                        <div className="absolute -bottom-[20%] -right-[10%] w-[25rem] h-[25rem] bg-slate-400/[0.04] rounded-full blur-[80px]" />
                     </div>
 
                     {/* Sidebar */}

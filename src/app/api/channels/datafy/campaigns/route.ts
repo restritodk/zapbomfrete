@@ -26,7 +26,9 @@ export async function GET(request: NextRequest) {
             status: sp.get("status") || undefined,
             search: sp.get("search") || undefined,
             page: Number(sp.get("page") || 1) || 1,
-            limit: Number(sp.get("limit") || 20) || 20,
+            limit: Number(sp.get("limit") || 10) || 10,
+            from: sp.get("from") || undefined,
+            to: sp.get("to") || undefined,
         });
         return NextResponse.json({ status: true, data });
     } catch (e) {

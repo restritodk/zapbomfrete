@@ -111,6 +111,9 @@ export async function listCampaigns(opts: {
     search?: string;
     page?: number;
     limit?: number;
+    /** ISO — filter by createdAt (list period), not invented send times */
+    from?: string | null;
+    to?: string | null;
 }) {
     const page = Math.max(1, opts.page || 1);
     const limit = Math.min(100, Math.max(1, opts.limit || 20));
@@ -118,9 +121,32 @@ export async function listCampaigns(opts: {
         organizationKey: CAMPAIGN_ORG_DEFAULT,
         channelId: DATAFY_OFFICIAL_CHANNEL_ID,
     };
-    if (opts.status) where.status = opts.status;
+    if (opts.status === "running") {
+        where.status = { in: ["running", "preparing"] };
+    } else if (opts.status === "completed") {
+        where.status = { in: ["completed", "completed_with_errors"] };
+    } else if (opts.status) {
+        where.status = opts.status;
+    }
     if (opts.search?.trim()) {
-        where.name = { contains: opts.search.trim(), mode: "insensitive" };
+        const q = opts.search.trim();
+        where.OR = [
+            { name: { contains: q, mode: "insensitive" } },
+            { templateName: { contains: q, mode: "insensitive" } },
+            { description: { contains: q, mode: "insensitive" } },
+        ];
+    }
+    if (opts.from || opts.to) {
+        const createdAt: Prisma.DateTimeFilter = {};
+        if (opts.from) {
+            const d = new Date(opts.from);
+            if (!Number.isNaN(d.getTime())) createdAt.gte = d;
+        }
+        if (opts.to) {
+            const d = new Date(opts.to);
+            if (!Number.isNaN(d.getTime())) createdAt.lte = d;
+        }
+        if (createdAt.gte || createdAt.lte) where.createdAt = createdAt;
     }
     const [total, rows] = await Promise.all([
         prisma.datafyCampaign.count({ where }),

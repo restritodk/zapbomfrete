@@ -139,15 +139,15 @@ export function Navbar({ appName, logoUrl }: NavbarProps) {
     };
 
     return (
-        <header className="bg-background/40 backdrop-blur-2xl border-b border-border/50 h-16 flex items-center justify-between px-4 sm:px-6 sticky top-0 z-30 w-full shadow-sm">
-            <div className="flex items-center gap-3">
+        <header className="bg-white/90 backdrop-blur-xl border-b border-slate-200/80 h-16 flex items-center justify-between px-4 sm:px-6 sticky top-0 z-30 w-full shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+            <div className="flex items-center gap-3 min-w-0">
                 <MobileNav appName={appName} logoUrl={logoUrl} />
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-                <span className="hidden sm:inline"><RealtimeClock /></span>
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                <span className="hidden md:inline"><RealtimeClock /></span>
                 <SessionSelector />
-                <div className="h-6 w-px bg-border/50 hidden sm:block" />
+                <div className="h-6 w-px bg-slate-200 hidden sm:block" />
 
                 <Popover open={isOpen} onOpenChange={setIsOpen}>
                     <PopoverTrigger asChild>
@@ -230,6 +230,27 @@ export function Navbar({ appName, logoUrl }: NavbarProps) {
                         </div>
                     </PopoverContent>
                 </Popover>
+
+                {session?.user && (
+                    <div className="hidden sm:flex items-center gap-2 pl-1 min-w-0">
+                        <div className="h-9 w-9 rounded-full bg-[#0f2744] text-white flex items-center justify-center text-sm font-semibold shrink-0">
+                            {(session.user.name || session.user.email || "U")
+                                .charAt(0)
+                                .toUpperCase()}
+                        </div>
+                        <div className="min-w-0 hidden lg:block">
+                            <p className="text-sm font-semibold text-[#0f2744] truncate max-w-[140px]">
+                                {session.user.name || "Usuário"}
+                            </p>
+                            <p className="text-[10px] text-slate-500 truncate max-w-[140px]">
+                                {String(
+                                    (session.user as { role?: string }).role ||
+                                        "Conta"
+                                )}
+                            </p>
+                        </div>
+                    </div>
+                )}
             </div>
         </header>
     );

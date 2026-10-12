@@ -39,7 +39,23 @@ import {
     ShieldCheck,
     Smartphone,
     Layers,
+    Search,
 } from "lucide-react";
+import { MassDispatchStatsCards } from "@/components/dashboard/mass-dispatch/stats-cards";
+import { CampaignStatusBadge } from "@/components/dashboard/mass-dispatch/status-badge";
+import {
+    formatCampaignDateParts,
+    periodToDateRange,
+    resolveCampaignFinishedAt,
+    resolveCampaignStartedAt,
+    type PeriodKey,
+} from "@/lib/mass-dispatch/datetime";
+import {
+    buildPageMeta,
+    rangeLabel,
+    visiblePageNumbers,
+    type PageMeta,
+} from "@/lib/mass-dispatch/pagination";
 import { Switch } from "@/components/ui/switch";
 import {
     CAMPAIGN_BUTTON_TITLE_UI_MAX,
@@ -208,6 +224,8 @@ type Stats = {
     running: number;
     paused: number;
     completed: number;
+    cancelled?: number;
+    failed?: number;
     totalEligible: number;
     totalAccepted: number;
     totalDelivered: number;
@@ -219,6 +237,7 @@ type Stats = {
 type Campaign = {
     id: string;
     name: string;
+    description?: string | null;
     status: string;
     purpose: string;
     templateName: string | null;
@@ -237,6 +256,8 @@ type Campaign = {
     scheduledAt: string | null;
     startedAt: string | null;
     completedAt: string | null;
+    cancelledAt?: string | null;
+    pausedAt?: string | null;
     delayMs: number;
     totals: {
         selected: number;
@@ -252,6 +273,18 @@ type Campaign = {
         messagesPlanned?: number;
     };
     createdAt: string;
+};
+
+const STATUS_UI_LABEL: Record<string, string> = {
+    draft: "Rascunho",
+    scheduled: "Agendada",
+    preparing: "Em andamento",
+    running: "Em andamento",
+    paused: "Pausada",
+    completed: "Concluída",
+    completed_with_errors: "Falha parcial",
+    cancelled: "Cancelada",
+    failed: "Falha",
 };
 
 type Template = {
@@ -585,7 +618,26 @@ export function DatafyCampaignsPanel() {
     const [stats, setStats] = useState<Stats | null>(null);
     const [campaigns, setCampaigns] = useState<Campaign[]>([]);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [syncOk, setSyncOk] = useState(true);
     const [statusFilter, setStatusFilter] = useState("all");
+    const [providerFilter, setProviderFilter] = useState<"all" | "datafy" | "baileys">(
+        "all"
+    );
+    const [periodFilter, setPeriodFilter] = useState<PeriodKey>("all");
+    const [searchInput, setSearchInput] = useState("");
+    const [searchQuery, setSearchQuery] = useState("");
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(10);
+    const [listMeta, setListMeta] = useState<PageMeta>({
+        total: 0,
+        page: 1,
+        limit: 10,
+        totalPages: 1,
+    });
+    const loadInFlightRef = useRef(false);
+    const hasLoadedOnceRef = useRef(false);
+    const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
     const [wizardOpen, setWizardOpen] = useState(false);
     const [step, setStep] = useState(1);
     const [saving, setSaving] = useState(false);
@@ -818,29 +870,90 @@ export function DatafyCampaignsPanel() {
         (t) => `${t.name}::${t.language}` === templateKey
     );
 
-    const load = useCallback(async () => {
-        setLoading(true);
-        try {
-            const params = new URLSearchParams({ limit: "40" });
-            if (statusFilter !== "all") params.set("status", statusFilter);
-            const [sRes, cRes] = await Promise.all([
-                fetch("/api/channels/datafy/campaigns/stats"),
-                fetch(`/api/channels/datafy/campaigns?${params}`),
-            ]);
-            const sJson = await sRes.json().catch(() => ({}));
-            const cJson = await cRes.json().catch(() => ({}));
-            if (sRes.ok) setStats(sJson.data?.stats || null);
-            if (cRes.ok) setCampaigns(cJson.data?.campaigns || []);
-        } catch {
-            toast.error("Erro ao carregar campanhas");
-        } finally {
-            setLoading(false);
-        }
-    }, [statusFilter]);
+    useEffect(() => {
+        const t = setTimeout(() => setSearchQuery(searchInput.trim()), 350);
+        return () => clearTimeout(t);
+    }, [searchInput]);
 
     useEffect(() => {
-        void load();
-        const t = setInterval(() => void load(), 8000);
+        setPage(1);
+    }, [statusFilter, searchQuery, periodFilter, pageSize, providerFilter]);
+
+    const load = useCallback(
+        async (opts?: { silent?: boolean }) => {
+            const silent = Boolean(opts?.silent) && hasLoadedOnceRef.current;
+            if (loadInFlightRef.current) return;
+            loadInFlightRef.current = true;
+            if (!silent) setLoading(true);
+            else setRefreshing(true);
+            try {
+                if (providerFilter === "baileys") {
+                    setCampaigns([]);
+                    setListMeta(buildPageMeta(0, 1, pageSize));
+                    setSyncOk(true);
+                    hasLoadedOnceRef.current = true;
+                    setHasLoadedOnce(true);
+                    return;
+                }
+                const range = periodToDateRange(periodFilter);
+                const params = new URLSearchParams({
+                    page: String(page),
+                    limit: String(pageSize),
+                });
+                if (statusFilter !== "all") params.set("status", statusFilter);
+                if (searchQuery) params.set("search", searchQuery);
+                if (range.from) params.set("from", range.from);
+                if (range.to) params.set("to", range.to);
+                const [sRes, cRes] = await Promise.all([
+                    fetch("/api/channels/datafy/campaigns/stats"),
+                    fetch(`/api/channels/datafy/campaigns?${params}`),
+                ]);
+                const sJson = await sRes.json().catch(() => ({}));
+                const cJson = await cRes.json().catch(() => ({}));
+                if (sRes.ok) setStats(sJson.data?.stats || null);
+                if (cRes.ok) {
+                    const next = (cJson.data?.campaigns || []) as Campaign[];
+                    const metaRaw = cJson.data?.meta || {};
+                    const meta = buildPageMeta(
+                        Number(metaRaw.total) || 0,
+                        Number(metaRaw.page) || page,
+                        Number(metaRaw.limit) || pageSize
+                    );
+                    setCampaigns(next);
+                    setListMeta(meta);
+                    if (meta.page !== page) setPage(meta.page);
+                    setSyncOk(true);
+                    hasLoadedOnceRef.current = true;
+                    setHasLoadedOnce(true);
+                } else {
+                    setSyncOk(false);
+                    if (!silent) toast.error("Erro ao carregar campanhas");
+                }
+            } catch {
+                setSyncOk(false);
+                if (!silent) toast.error("Erro ao carregar campanhas");
+            } finally {
+                setLoading(false);
+                setRefreshing(false);
+                loadInFlightRef.current = false;
+            }
+        },
+        [
+            statusFilter,
+            searchQuery,
+            periodFilter,
+            page,
+            pageSize,
+            providerFilter,
+        ]
+    );
+
+    useEffect(() => {
+        void load({ silent: false });
+    }, [load]);
+
+    useEffect(() => {
+        const t = setInterval(() => void load({ silent: true }), 8000);
         return () => clearInterval(t);
     }, [load]);
 
@@ -2600,280 +2713,542 @@ export function DatafyCampaignsPanel() {
         );
     });
 
+    const showInitialSkeleton = loading && !hasLoadedOnce;
+    const pageNums = visiblePageNumbers(listMeta.page, listMeta.totalPages, 3);
+
     return (
         <div className="space-y-5">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                    <h3 className="text-xl font-bold tracking-tight">
-                        Campanhas Oficiais Datafy
-                    </h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                        Crie o texto, anexe imagem se quiser e selecione
-                        contatos de qualquer região do Brasil. Envios usam
-                        templates aprovados pela Meta.
-                    </p>
-                </div>
-                <div className="flex gap-2">
-                    <Button
-                        variant="outline"
-                        className="rounded-xl"
-                        onClick={() => void load()}
-                    >
-                        <RefreshCw className="h-4 w-4 mr-1.5" />
-                        Atualizar
-                    </Button>
-                    <Button className="rounded-xl" onClick={openWizard}>
-                        <Plus className="h-4 w-4 mr-1.5" />
-                        Nova campanha
-                    </Button>
-                </div>
-            </div>
+            <MassDispatchStatsCards stats={stats} />
 
-            {stats && (
-                <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
-                    {[
-                        ["Criadas", stats.created],
-                        ["Agendadas", stats.scheduled],
-                        ["Em andamento", stats.running],
-                        ["Concluídas", stats.completed],
-                        ["Elegíveis", stats.totalEligible],
-                        ["Aceitas", stats.totalAccepted],
-                        ["Entregues", stats.totalDelivered],
-                        ["Falhas", stats.totalFailed],
-                    ].map(([label, value]) => (
+            <div className="rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_4px_rgba(15,23,42,0.06)] overflow-hidden">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between px-4 sm:px-5 pt-5 pb-4">
+                    <div>
+                        <h3 className="text-lg font-semibold tracking-tight text-[#0f2744]">
+                            Campanhas recentes
+                        </h3>
+                        <p className="text-sm text-slate-500 mt-1">
+                            Acompanhe o histórico de envios, status e resultados
+                            das suas campanhas.
+                        </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
                         <div
-                            key={String(label)}
-                            className="rounded-2xl border bg-card px-3 py-3 shadow-sm"
+                            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                                syncOk
+                                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                    : "border-amber-200 bg-amber-50 text-amber-800"
+                            }`}
+                            title={
+                                syncOk
+                                    ? "Sincronização saudável"
+                                    : "Falha temporária na sincronização"
+                            }
                         >
-                            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                                {label}
-                            </p>
-                            <p className="text-xl font-semibold mt-1">{value}</p>
+                            <span
+                                className={`h-1.5 w-1.5 rounded-full ${
+                                    syncOk ? "bg-emerald-500" : "bg-amber-500"
+                                }`}
+                            />
+                            {syncOk
+                                ? "Atualização em tempo real"
+                                : "Sincronização instável"}
                         </div>
-                    ))}
+                        <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-9 w-9 rounded-xl border-slate-200"
+                            disabled={refreshing}
+                            onClick={() => void load({ silent: true })}
+                            aria-label="Atualizar lista"
+                        >
+                            <RefreshCw
+                                className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+                            />
+                        </Button>
+                        <Button
+                            className="rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-sm"
+                            onClick={openWizard}
+                        >
+                            <Plus className="h-4 w-4 mr-1.5" />
+                            Nova campanha
+                        </Button>
+                    </div>
                 </div>
-            )}
 
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[200px] rounded-xl">
-                    <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="all">Todos os status</SelectItem>
-                    {Object.entries(STATUS_LABEL).map(([k, v]) => (
-                        <SelectItem key={k} value={k}>
-                            {v}
-                        </SelectItem>
-                    ))}
-                </SelectContent>
-            </Select>
+                <div className="px-4 sm:px-5 pb-4 flex flex-col xl:flex-row gap-2 xl:items-center">
+                    <div className="relative flex-1 min-w-0">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                        <Input
+                            value={searchInput}
+                            onChange={(e) => setSearchInput(e.target.value)}
+                            placeholder="Buscar campanha, template ou descrição..."
+                            className="pl-9 h-10 rounded-xl border-slate-200 bg-slate-50/60"
+                        />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <Select
+                            value={statusFilter}
+                            onValueChange={setStatusFilter}
+                        >
+                            <SelectTrigger className="w-[160px] h-10 rounded-xl border-slate-200">
+                                <SelectValue placeholder="Status" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">Todos os status</SelectItem>
+                                <SelectItem value="scheduled">Agendada</SelectItem>
+                                <SelectItem value="running">Em andamento</SelectItem>
+                                <SelectItem value="paused">Pausada</SelectItem>
+                                <SelectItem value="completed">Concluída</SelectItem>
+                                <SelectItem value="completed_with_errors">
+                                    Falha parcial
+                                </SelectItem>
+                                <SelectItem value="cancelled">Cancelada</SelectItem>
+                                <SelectItem value="failed">Falha</SelectItem>
+                                <SelectItem value="draft">Rascunho</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Select
+                            value={providerFilter}
+                            onValueChange={(v) =>
+                                setProviderFilter(
+                                    v as "all" | "datafy" | "baileys"
+                                )
+                            }
+                        >
+                            <SelectTrigger className="w-[170px] h-10 rounded-xl border-slate-200">
+                                <SelectValue placeholder="Provedor" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">Todos os provedores</SelectItem>
+                                <SelectItem value="datafy">Datafy</SelectItem>
+                                <SelectItem value="baileys">Baileys</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Select
+                            value={periodFilter}
+                            onValueChange={(v) =>
+                                setPeriodFilter(v as PeriodKey)
+                            }
+                        >
+                            <SelectTrigger className="w-[150px] h-10 rounded-xl border-slate-200">
+                                <SelectValue placeholder="Período" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">Todas as datas</SelectItem>
+                                <SelectItem value="today">Hoje</SelectItem>
+                                <SelectItem value="7d">Últimos 7 dias</SelectItem>
+                                <SelectItem value="30d">Últimos 30 dias</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                </div>
 
-            <div className="rounded-2xl border bg-card shadow-sm overflow-hidden">
-                <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>Campanha</TableHead>
-                            <TableHead className="hidden md:table-cell">
-                                Template
-                            </TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead className="hidden lg:table-cell">
-                                Progresso
-                            </TableHead>
-                            <TableHead className="w-[60px]">Ações</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {loading ? (
-                            <TableRow>
-                                <TableCell colSpan={5} className="h-24 text-center">
-                                    <Loader2 className="inline h-4 w-4 animate-spin mr-2" />
-                                    Carregando…
-                                </TableCell>
+                <div className="overflow-x-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow className="border-slate-100 hover:bg-transparent bg-[#eef4fb]">
+                                <TableHead className="text-[#3b5b7c] font-semibold w-12">
+                                    #
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold">
+                                    Campanha
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold hidden md:table-cell">
+                                    Template
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold hidden sm:table-cell">
+                                    Provedor
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold">
+                                    Status
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold hidden lg:table-cell">
+                                    Início do disparo
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold hidden lg:table-cell">
+                                    Finalização
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold hidden md:table-cell min-w-[160px]">
+                                    Progresso
+                                </TableHead>
+                                <TableHead className="text-[#3b5b7c] font-semibold w-[56px]">
+                                    Ações
+                                </TableHead>
                             </TableRow>
-                        ) : campaigns.length === 0 ? (
-                            <TableRow>
-                                <TableCell
-                                    colSpan={5}
-                                    className="h-24 text-center text-muted-foreground"
-                                >
-                                    Nenhuma campanha oficial ainda.
-                                </TableCell>
-                            </TableRow>
-                        ) : (
-                            campaigns.map((c) => {
-                                const done =
-                                    c.totals.accepted +
-                                    c.totals.failed +
-                                    c.totals.cancelled;
-                                const pct = c.totals.eligible
-                                    ? Math.min(
-                                          100,
-                                          Math.round(
-                                              (done / Math.max(1, c.totals.eligible)) *
-                                                  100
+                        </TableHeader>
+                        <TableBody>
+                            {showInitialSkeleton ? (
+                                <TableRow>
+                                    <TableCell
+                                        colSpan={9}
+                                        className="h-28 text-center text-slate-500"
+                                    >
+                                        <Loader2 className="inline h-4 w-4 animate-spin mr-2" />
+                                        Carregando campanhas…
+                                    </TableCell>
+                                </TableRow>
+                            ) : providerFilter === "baileys" ? (
+                                <TableRow>
+                                    <TableCell
+                                        colSpan={9}
+                                        className="h-28 text-center text-slate-500"
+                                    >
+                                        Campanhas Baileys ficam na aba{" "}
+                                        <span className="font-medium text-slate-700">
+                                            WhatsApp conectado — Baileys
+                                        </span>
+                                        .
+                                    </TableCell>
+                                </TableRow>
+                            ) : campaigns.length === 0 ? (
+                                <TableRow>
+                                    <TableCell
+                                        colSpan={9}
+                                        className="h-28 text-center text-slate-500"
+                                    >
+                                        {searchQuery ||
+                                        statusFilter !== "all" ||
+                                        periodFilter !== "all"
+                                            ? "Nenhuma campanha encontrada com os filtros atuais."
+                                            : "Nenhuma campanha oficial ainda."}
+                                    </TableCell>
+                                </TableRow>
+                            ) : (
+                                campaigns.map((c, idx) => {
+                                    const done =
+                                        c.totals.accepted +
+                                        c.totals.failed +
+                                        c.totals.cancelled;
+                                    const pct = c.totals.eligible
+                                        ? Math.min(
+                                              100,
+                                              Math.round(
+                                                  (done /
+                                                      Math.max(
+                                                          1,
+                                                          c.totals.eligible
+                                                      )) *
+                                                      100
+                                              )
                                           )
-                                      )
-                                    : 0;
-                                return (
-                                    <TableRow key={c.id}>
-                                        <TableCell>
-                                            <p className="font-medium">{c.name}</p>
-                                            <p className="text-xs text-muted-foreground">
-                                                {c.totals.eligible} elegíveis
-                                                {c.dryRun ? " · simulação" : ""}
-                                            </p>
-                                        </TableCell>
-                                        <TableCell className="hidden md:table-cell text-sm">
-                                            {c.templateName || "—"}
-                                        </TableCell>
-                                        <TableCell>
-                                            <Badge variant="secondary">
-                                                {STATUS_LABEL[c.status] ||
-                                                    c.status}
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell className="hidden lg:table-cell">
-                                            <div className="w-36">
-                                                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                                                    <div
-                                                        className="h-full bg-emerald-600 transition-all"
-                                                        style={{
-                                                            width: `${
-                                                                ["completed", "completed_with_errors"].includes(
-                                                                    c.status
-                                                                )
-                                                                    ? 100
-                                                                    : pct
-                                                            }%`,
-                                                        }}
-                                                    />
-                                                </div>
-                                                <p className="text-[10px] text-muted-foreground mt-1">
-                                                    {c.totals.accepted} aceitas ·{" "}
-                                                    {c.totals.delivered}{" "}
-                                                    entregues · {c.totals.failed}{" "}
-                                                    falhas
+                                        : 0;
+                                    const barPct = [
+                                        "completed",
+                                        "completed_with_errors",
+                                    ].includes(c.status)
+                                        ? 100
+                                        : pct;
+                                    const startParts = formatCampaignDateParts(
+                                        resolveCampaignStartedAt(c)
+                                    );
+                                    const endParts = formatCampaignDateParts(
+                                        resolveCampaignFinishedAt(c)
+                                    );
+                                    const rowNum =
+                                        (listMeta.page - 1) * listMeta.limit +
+                                        idx +
+                                        1;
+                                    return (
+                                        <TableRow
+                                            key={c.id}
+                                            className="border-slate-100 hover:bg-slate-50/80 transition-colors"
+                                        >
+                                            <TableCell className="text-sm text-slate-400 font-medium">
+                                                {rowNum}
+                                            </TableCell>
+                                            <TableCell>
+                                                <p className="font-semibold text-[#0f2744] leading-snug">
+                                                    {c.name}
                                                 </p>
-                                            </div>
-                                        </TableCell>
-                                        <TableCell>
-                                            <DropdownMenu>
-                                                <DropdownMenuTrigger asChild>
-                                                    <Button
-                                                        size="icon"
-                                                        variant="ghost"
-                                                        className="h-8 w-8"
-                                                    >
-                                                        <MoreHorizontal className="h-4 w-4" />
-                                                    </Button>
-                                                </DropdownMenuTrigger>
-                                                <DropdownMenuContent align="end">
-                                                    {["running", "preparing", "paused"].includes(
+                                                <p className="text-xs text-slate-500 mt-0.5">
+                                                    {c.totals.eligible} elegíveis
+                                                    {c.dryRun
+                                                        ? " · simulação"
+                                                        : ""}
+                                                </p>
+                                            </TableCell>
+                                            <TableCell className="hidden md:table-cell text-sm text-slate-600">
+                                                {c.templateName || "—"}
+                                            </TableCell>
+                                            <TableCell className="hidden sm:table-cell">
+                                                <span className="inline-flex items-center gap-1.5 text-sm font-medium text-[#0f2744]">
+                                                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                                                    Datafy
+                                                </span>
+                                            </TableCell>
+                                            <TableCell>
+                                                <CampaignStatusBadge
+                                                    status={c.status}
+                                                    label={
+                                                        STATUS_UI_LABEL[
+                                                            c.status
+                                                        ] ||
+                                                        STATUS_LABEL[
+                                                            c.status
+                                                        ] ||
                                                         c.status
-                                                    ) && (
-                                                        <DropdownMenuItem
-                                                            onClick={() =>
-                                                                openProgress(
-                                                                    c.id,
-                                                                    c.name
-                                                                )
-                                                            }
+                                                    }
+                                                />
+                                            </TableCell>
+                                            <TableCell className="hidden lg:table-cell">
+                                                {startParts ? (
+                                                    <div className="text-[12px] leading-tight">
+                                                        <p className="font-medium text-[#0f2744]">
+                                                            {startParts.date}
+                                                        </p>
+                                                        <p className="text-slate-500">
+                                                            {startParts.time}
+                                                        </p>
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-slate-400">
+                                                        —
+                                                    </span>
+                                                )}
+                                            </TableCell>
+                                            <TableCell className="hidden lg:table-cell">
+                                                {endParts ? (
+                                                    <div className="text-[12px] leading-tight">
+                                                        <p className="font-medium text-[#0f2744]">
+                                                            {endParts.date}
+                                                        </p>
+                                                        <p className="text-slate-500">
+                                                            {endParts.time}
+                                                        </p>
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-slate-400">
+                                                        —
+                                                    </span>
+                                                )}
+                                            </TableCell>
+                                            <TableCell className="hidden md:table-cell">
+                                                <div className="min-w-[140px]">
+                                                    <div className="flex items-center justify-between text-[11px] font-semibold text-[#0f2744] mb-1">
+                                                        <span>{barPct}%</span>
+                                                    </div>
+                                                    <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                                        <div
+                                                            className={`h-full rounded-full transition-[width] duration-500 ease-out motion-reduce:transition-none ${
+                                                                c.status ===
+                                                                "completed_with_errors"
+                                                                    ? "bg-red-500"
+                                                                    : c.status ===
+                                                                        "cancelled"
+                                                                      ? "bg-slate-400"
+                                                                      : "bg-[#2563eb]"
+                                                            }`}
+                                                            style={{
+                                                                width: `${barPct}%`,
+                                                            }}
+                                                        />
+                                                    </div>
+                                                    <p className="text-[10px] text-slate-500 mt-1">
+                                                        {c.totals.accepted}{" "}
+                                                        aceitas ·{" "}
+                                                        {c.totals.delivered}{" "}
+                                                        entregues ·{" "}
+                                                        {c.totals.failed} falhas
+                                                    </p>
+                                                </div>
+                                            </TableCell>
+                                            <TableCell>
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <Button
+                                                            size="icon"
+                                                            variant="ghost"
+                                                            className="h-8 w-8 text-slate-500"
                                                         >
-                                                            Ver animação / progresso
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                    {["draft", "scheduled", "paused"].includes(
-                                                        c.status
-                                                    ) && (
+                                                            <MoreHorizontal className="h-4 w-4" />
+                                                        </Button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent align="end">
+                                                        {[
+                                                            "running",
+                                                            "preparing",
+                                                            "paused",
+                                                        ].includes(c.status) && (
+                                                            <DropdownMenuItem
+                                                                onClick={() =>
+                                                                    openProgress(
+                                                                        c.id,
+                                                                        c.name
+                                                                    )
+                                                                }
+                                                            >
+                                                                Ver animação /
+                                                                progresso
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        {[
+                                                            "draft",
+                                                            "scheduled",
+                                                            "paused",
+                                                        ].includes(c.status) && (
+                                                            <DropdownMenuItem
+                                                                onClick={() =>
+                                                                    void action(
+                                                                        c.id,
+                                                                        "start",
+                                                                        "Iniciada"
+                                                                    )
+                                                                }
+                                                            >
+                                                                <Play className="h-3.5 w-3.5 mr-2" />
+                                                                Disparar agora
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        {[
+                                                            "running",
+                                                            "preparing",
+                                                        ].includes(c.status) && (
+                                                            <DropdownMenuItem
+                                                                onClick={() =>
+                                                                    void action(
+                                                                        c.id,
+                                                                        "pause",
+                                                                        "Pausada"
+                                                                    )
+                                                                }
+                                                            >
+                                                                <Pause className="h-3.5 w-3.5 mr-2" />
+                                                                Pausar
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        {c.status ===
+                                                            "paused" && (
+                                                            <DropdownMenuItem
+                                                                onClick={() =>
+                                                                    void action(
+                                                                        c.id,
+                                                                        "resume",
+                                                                        "Retomada"
+                                                                    )
+                                                                }
+                                                            >
+                                                                Retomar
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        {![
+                                                            "completed",
+                                                            "completed_with_errors",
+                                                            "cancelled",
+                                                        ].includes(c.status) && (
+                                                            <DropdownMenuItem
+                                                                onClick={() =>
+                                                                    void action(
+                                                                        c.id,
+                                                                        "cancel",
+                                                                        "Cancelada"
+                                                                    )
+                                                                }
+                                                            >
+                                                                <Ban className="h-3.5 w-3.5 mr-2" />
+                                                                Cancelar
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        <DropdownMenuSeparator />
                                                         <DropdownMenuItem
                                                             onClick={() =>
                                                                 void action(
                                                                     c.id,
-                                                                    "start",
-                                                                    "Iniciada"
+                                                                    "duplicate",
+                                                                    "Duplicada"
                                                                 )
                                                             }
                                                         >
-                                                            <Play className="h-3.5 w-3.5 mr-2" />
-                                                            Disparar agora
+                                                            <Copy className="h-3.5 w-3.5 mr-2" />
+                                                            Duplicar
                                                         </DropdownMenuItem>
-                                                    )}
-                                                    {["running", "preparing"].includes(
-                                                        c.status
-                                                    ) && (
-                                                        <DropdownMenuItem
-                                                            onClick={() =>
-                                                                void action(
-                                                                    c.id,
-                                                                    "pause",
-                                                                    "Pausada"
-                                                                )
-                                                            }
-                                                        >
-                                                            <Pause className="h-3.5 w-3.5 mr-2" />
-                                                            Pausar
+                                                        <DropdownMenuItem asChild>
+                                                            <a
+                                                                href={`/api/channels/datafy/campaigns/${c.id}/export`}
+                                                            >
+                                                                <Download className="h-3.5 w-3.5 mr-2" />
+                                                                Exportar CSV
+                                                            </a>
                                                         </DropdownMenuItem>
-                                                    )}
-                                                    {c.status === "paused" && (
-                                                        <DropdownMenuItem
-                                                            onClick={() =>
-                                                                void action(
-                                                                    c.id,
-                                                                    "resume",
-                                                                    "Retomada"
-                                                                )
-                                                            }
-                                                        >
-                                                            Retomar
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                    {!["completed", "completed_with_errors", "cancelled"].includes(
-                                                        c.status
-                                                    ) && (
-                                                        <DropdownMenuItem
-                                                            onClick={() =>
-                                                                void action(
-                                                                    c.id,
-                                                                    "cancel",
-                                                                    "Cancelada"
-                                                                )
-                                                            }
-                                                        >
-                                                            <Ban className="h-3.5 w-3.5 mr-2" />
-                                                            Cancelar
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                    <DropdownMenuSeparator />
-                                                    <DropdownMenuItem
-                                                        onClick={() =>
-                                                            void action(
-                                                                c.id,
-                                                                "duplicate",
-                                                                "Duplicada"
-                                                            )
-                                                        }
-                                                    >
-                                                        <Copy className="h-3.5 w-3.5 mr-2" />
-                                                        Duplicar
-                                                    </DropdownMenuItem>
-                                                    <DropdownMenuItem asChild>
-                                                        <a
-                                                            href={`/api/channels/datafy/campaigns/${c.id}/export`}
-                                                        >
-                                                            <Download className="h-3.5 w-3.5 mr-2" />
-                                                            Exportar CSV
-                                                        </a>
-                                                    </DropdownMenuItem>
-                                                </DropdownMenuContent>
-                                            </DropdownMenu>
-                                        </TableCell>
-                                    </TableRow>
-                                );
-                            })
-                        )}
-                    </TableBody>
-                </Table>
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })
+                            )}
+                        </TableBody>
+                    </Table>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between px-4 sm:px-5 py-3.5 border-t border-slate-100 bg-slate-50/40">
+                    <p className="text-xs text-slate-500 font-medium">
+                        {rangeLabel(listMeta)}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 justify-between sm:justify-end">
+                        <div className="flex items-center gap-1">
+                            <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-8 w-8 rounded-lg border-slate-200"
+                                disabled={listMeta.page <= 1}
+                                onClick={() =>
+                                    setPage((p) => Math.max(1, p - 1))
+                                }
+                                aria-label="Página anterior"
+                            >
+                                <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                            {pageNums.map((n) => (
+                                <Button
+                                    key={n}
+                                    variant={
+                                        n === listMeta.page
+                                            ? "default"
+                                            : "outline"
+                                    }
+                                    size="icon"
+                                    className={`h-8 w-8 rounded-lg text-xs ${
+                                        n === listMeta.page
+                                            ? "bg-[#2563eb] hover:bg-[#1d4ed8] text-white"
+                                            : "border-slate-200"
+                                    }`}
+                                    onClick={() => setPage(n)}
+                                >
+                                    {n}
+                                </Button>
+                            ))}
+                            <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-8 w-8 rounded-lg border-slate-200"
+                                disabled={
+                                    listMeta.page >= listMeta.totalPages
+                                }
+                                onClick={() =>
+                                    setPage((p) =>
+                                        Math.min(listMeta.totalPages, p + 1)
+                                    )
+                                }
+                                aria-label="Próxima página"
+                            >
+                                <ChevronRight className="h-4 w-4" />
+                            </Button>
+                        </div>
+                        <Select
+                            value={String(pageSize)}
+                            onValueChange={(v) => setPageSize(Number(v))}
+                        >
+                            <SelectTrigger className="w-[130px] h-8 rounded-lg border-slate-200 text-xs">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="10">10 por página</SelectItem>
+                                <SelectItem value="20">20 por página</SelectItem>
+                                <SelectItem value="50">50 por página</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                </div>
             </div>
 
             {/* Wizard */}

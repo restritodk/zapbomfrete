@@ -865,25 +865,33 @@ export default function BroadcastPage() {
     return (
         <SessionGuard>
             <div className="space-y-6">
-                <div>
-                    <h2 className="text-xl sm:text-3xl font-bold tracking-tight">Disparo em massa</h2>
-                    <p className="text-muted-foreground text-sm mt-1">
-                        Escolha o provedor: oficial Datafy (templates) ou WhatsApp conectado Baileys.
-                    </p>
-                </div>
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="flex items-start gap-3 min-w-0">
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#2563eb] text-white shadow-[0_8px_20px_-8px_rgba(37,99,235,0.7)]">
+                            <Send className="h-5 w-5" />
+                        </div>
+                        <div className="min-w-0">
+                            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0f2744]">
+                                Disparo em massa
+                            </h2>
+                            <p className="text-slate-500 text-sm mt-1 max-w-xl">
+                                Escolha o provedor, gerencie suas campanhas e
+                                acompanhe os envios em tempo real.
+                            </p>
+                        </div>
+                    </div>
 
-                <div className="flex flex-col sm:flex-row gap-2">
-                    <div className="flex gap-1 bg-muted/50 p-1 rounded-lg w-fit">
+                    <div className="flex flex-col sm:flex-row gap-2 w-full lg:w-auto">
                         <button
                             type="button"
                             onClick={() => {
                                 setProvider("datafy");
                                 setChannelId(DATAFY_OFFICIAL_CHANNEL_ID);
                             }}
-                            className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
+                            className={`px-4 py-2.5 text-sm font-semibold rounded-xl transition-all duration-200 border ${
                                 provider === "datafy"
-                                    ? "bg-background shadow-sm text-foreground"
-                                    : "text-muted-foreground hover:text-foreground"
+                                    ? "bg-[#2563eb] text-white border-[#2563eb] shadow-[0_6px_16px_-6px_rgba(37,99,235,0.65)]"
+                                    : "bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:text-[#0f2744]"
                             }`}
                         >
                             WhatsApp Oficial — Datafy
@@ -897,10 +905,10 @@ export default function BroadcastPage() {
                                 );
                                 if (baileys) setChannelId(baileys.id);
                             }}
-                            className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
+                            className={`px-4 py-2.5 text-sm font-semibold rounded-xl transition-all duration-200 border ${
                                 provider === "baileys"
-                                    ? "bg-background shadow-sm text-foreground"
-                                    : "text-muted-foreground hover:text-foreground"
+                                    ? "bg-[#2563eb] text-white border-[#2563eb] shadow-[0_6px_16px_-6px_rgba(37,99,235,0.65)]"
+                                    : "bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:text-[#0f2744]"
                             }`}
                         >
                             WhatsApp conectado — Baileys
