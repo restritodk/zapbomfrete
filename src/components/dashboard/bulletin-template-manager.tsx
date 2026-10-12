@@ -28,7 +28,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
     Dialog,
@@ -90,6 +89,8 @@ import {
     type LibraryTab,
 } from "@/modules/datafy/campaigns/bulletin/library-display";
 import type { GroupedVersionDto } from "@/components/dashboard/bulletin-grouped-cards";
+import { BulletinTemplateEditorDialog } from "@/components/dashboard/bulletin-template-editor-dialog";
+import type { TemplateEditorDraft } from "@/modules/datafy/campaigns/bulletin/template-editor-helpers";
 
 type ButtonsDraft = {
     enabled: boolean;
@@ -135,19 +136,7 @@ type ManagedItem = {
 
 type FieldOpt = { key: string; label: string };
 
-type DraftForm = {
-    technicalName: string;
-    displayName: string;
-    category: "MARKETING" | "UTILITY" | "AUTHENTICATION";
-    headerText: string;
-    bodyText: string;
-    footerText: string;
-    buttons: ButtonsDraft;
-    fieldMappings: string[];
-    exampleRow: string[];
-    loadsPerMessage: 1 | 2 | 3;
-    description: string;
-};
+type DraftForm = TemplateEditorDraft;
 
 const emptyDraft = (): DraftForm => ({
     technicalName: "",
@@ -392,19 +381,6 @@ export function BulletinTemplateManager({
         [items, previewId]
     );
 
-    const livePreview = useMemo(() => {
-        const synced = syncMappingsToBody(
-            draft.bodyText,
-            draft.fieldMappings,
-            draft.exampleRow
-        );
-        return draft.bodyText.replace(/\{\{(\d+)\}\}/g, (_m, n) => {
-            const idx = Number(n) - 1;
-            return synced.exampleRow[idx] || "N/D";
-        });
-    }, [draft]);
-
-    const bodyLen = draft.bodyText.length;
     const showInitialSkeleton = loading && !hasLoadedOnce;
     const syncOk = !remoteError && Boolean(lastSyncAt || hasLoadedOnce);
 
@@ -1846,327 +1822,22 @@ export function BulletinTemplateManager({
                 </DialogContent>
             </Dialog>
 
-            {/* Editor */}
-            <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
-                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                    <DialogHeader>
-                        <DialogTitle>
-                            {editorMode === "create"
-                                ? "Novo template"
-                                : "Editar template"}
-                        </DialogTitle>
-                    </DialogHeader>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="space-y-1.5">
-                            <Label>Nome técnico</Label>
-                            <Input
-                                className="font-mono text-sm"
-                                value={draft.technicalName}
-                                disabled={
-                                    editorMode === "edit" &&
-                                    items.find((i) => i.id === editingId)
-                                        ?.remoteStatus === "APPROVED"
-                                }
-                                onChange={(e) =>
-                                    setDraft((d) => ({
-                                        ...d,
-                                        technicalName: e.target.value
-                                            .toLowerCase()
-                                            .replace(/[^a-z0-9_]/g, ""),
-                                    }))
-                                }
-                                placeholder="boletim_frete_1"
-                            />
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label>Nome de exibição</Label>
-                            <Input
-                                value={draft.displayName}
-                                onChange={(e) =>
-                                    setDraft((d) => ({
-                                        ...d,
-                                        displayName: e.target.value,
-                                    }))
-                                }
-                            />
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label>Categoria</Label>
-                            <Select
-                                value={draft.category}
-                                onValueChange={(v) =>
-                                    setDraft((d) => ({
-                                        ...d,
-                                        category: v as DraftForm["category"],
-                                    }))
-                                }
-                            >
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="MARKETING">
-                                        MARKETING
-                                    </SelectItem>
-                                    <SelectItem value="UTILITY">
-                                        UTILITY
-                                    </SelectItem>
-                                    <SelectItem value="AUTHENTICATION">
-                                        AUTHENTICATION
-                                    </SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label>Cargas por mensagem</Label>
-                            <Select
-                                value={String(draft.loadsPerMessage)}
-                                onValueChange={(v) =>
-                                    setDraft((d) => ({
-                                        ...d,
-                                        loadsPerMessage: Number(v) as 1 | 2 | 3,
-                                    }))
-                                }
-                            >
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="1">1</SelectItem>
-                                    <SelectItem value="2">2</SelectItem>
-                                    <SelectItem value="3">3</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1.5 sm:col-span-2">
-                            <Label>Cabeçalho (opcional)</Label>
-                            <Input
-                                value={draft.headerText}
-                                maxLength={60}
-                                onChange={(e) =>
-                                    setDraft((d) => ({
-                                        ...d,
-                                        headerText: e.target.value,
-                                    }))
-                                }
-                            />
-                        </div>
-                        <div className="space-y-1.5 sm:col-span-2">
-                            <div className="flex justify-between">
-                                <Label>Corpo</Label>
-                                <span
-                                    className={cn(
-                                        "text-[11px]",
-                                        bodyLen > META_BODY_MAX
-                                            ? "text-red-600"
-                                            : "text-slate-500"
-                                    )}
-                                >
-                                    {bodyLen}/{META_BODY_MAX}
-                                </span>
-                            </div>
-                            <Textarea
-                                className="min-h-[160px] font-mono text-xs"
-                                value={draft.bodyText}
-                                onChange={(e) => onBodyChange(e.target.value)}
-                                placeholder={
-                                    "*ATUALIZAÇÃO*\nOrigem: {{1}}\nDestino: {{2}}"
-                                }
-                            />
-                        </div>
-                        <div className="space-y-1.5 sm:col-span-2">
-                            <Label>Rodapé (opcional)</Label>
-                            <Input
-                                value={draft.footerText}
-                                maxLength={60}
-                                onChange={(e) =>
-                                    setDraft((d) => ({
-                                        ...d,
-                                        footerText: e.target.value,
-                                    }))
-                                }
-                            />
-                        </div>
-                        <div className="space-y-2 sm:col-span-2 rounded-xl border border-border/60 bg-muted/20 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                                <div>
-                                    <Label>Botões interativos</Label>
-                                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                                        Solicitar confirmação de recebimento de
-                                        ofertas (QUICK_REPLY · máx. 25
-                                        caracteres). Templates APPROVED exigem
-                                        nova versão.
-                                    </p>
-                                </div>
-                                <Button
-                                    type="button"
-                                    variant={
-                                        draft.buttons.enabled
-                                            ? "default"
-                                            : "outline"
-                                    }
-                                    size="sm"
-                                    onClick={() =>
-                                        setDraft((d) => ({
-                                            ...d,
-                                            buttons: {
-                                                ...d.buttons,
-                                                enabled: !d.buttons.enabled,
-                                            },
-                                        }))
-                                    }
-                                >
-                                    {draft.buttons.enabled
-                                        ? "Ativado"
-                                        : "Desativado"}
-                                </Button>
-                            </div>
-                            {draft.buttons.enabled && (
-                                <div className="grid gap-2 sm:grid-cols-2">
-                                    <div className="space-y-1">
-                                        <Label className="text-xs">
-                                            Botão positivo
-                                        </Label>
-                                        <Input
-                                            maxLength={25}
-                                            value={draft.buttons.grantText}
-                                            onChange={(e) =>
-                                                setDraft((d) => ({
-                                                    ...d,
-                                                    buttons: {
-                                                        ...d.buttons,
-                                                        grantText:
-                                                            e.target.value,
-                                                    },
-                                                }))
-                                            }
-                                        />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <Label className="text-xs">
-                                            Botão negativo
-                                        </Label>
-                                        <Input
-                                            maxLength={25}
-                                            value={draft.buttons.denyText}
-                                            onChange={(e) =>
-                                                setDraft((d) => ({
-                                                    ...d,
-                                                    buttons: {
-                                                        ...d.buttons,
-                                                        denyText:
-                                                            e.target.value,
-                                                    },
-                                                }))
-                                            }
-                                        />
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                        <div className="space-y-1.5 sm:col-span-2">
-                            <Label>Descrição</Label>
-                            <Input
-                                value={draft.description}
-                                onChange={(e) =>
-                                    setDraft((d) => ({
-                                        ...d,
-                                        description: e.target.value,
-                                    }))
-                                }
-                            />
-                        </div>
-                    </div>
-
-                    {draft.fieldMappings.length > 0 && (
-                        <div className="mt-3 space-y-2">
-                            <Label>Variáveis → campos da carga</Label>
-                            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                                {draft.fieldMappings.map((m, i) => (
-                                    <div
-                                        key={i}
-                                        className="grid grid-cols-[auto_1fr_1fr] gap-2 items-center"
-                                    >
-                                        <span className="text-xs font-mono text-slate-500 w-10">
-                                            {`{{${i + 1}}}`}
-                                        </span>
-                                        <Select
-                                            value={m}
-                                            onValueChange={(v) => {
-                                                const fieldMappings = [
-                                                    ...draft.fieldMappings,
-                                                ];
-                                                fieldMappings[i] = v;
-                                                setDraft((d) => ({
-                                                    ...d,
-                                                    fieldMappings,
-                                                }));
-                                            }}
-                                        >
-                                            <SelectTrigger className="h-8 text-xs">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {fieldOpts.map((o) => (
-                                                    <SelectItem
-                                                        key={o.key}
-                                                        value={o.key}
-                                                    >
-                                                        {o.label}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                        <Input
-                                            className="h-8 text-xs"
-                                            value={draft.exampleRow[i] || ""}
-                                            placeholder="Exemplo Meta"
-                                            onChange={(e) => {
-                                                const exampleRow = [
-                                                    ...draft.exampleRow,
-                                                ];
-                                                exampleRow[i] = e.target.value;
-                                                setDraft((d) => ({
-                                                    ...d,
-                                                    exampleRow,
-                                                }));
-                                            }}
-                                        />
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    <div className="mt-3">
-                        <Label className="text-xs text-muted-foreground">
-                            Prévia em tempo real
-                        </Label>
-                        <pre className="mt-1.5 whitespace-pre-wrap rounded-xl border bg-slate-50 p-3 text-[12px] leading-relaxed font-sans max-h-40 overflow-auto">
-                            {livePreview || "—"}
-                        </pre>
-                    </div>
-
-                    <DialogFooter className="gap-2">
-                        <Button
-                            variant="outline"
-                            onClick={() => setEditorOpen(false)}
-                        >
-                            Cancelar
-                        </Button>
-                        <Button
-                            onClick={() => void saveDraft()}
-                            disabled={saving}
-                            className={premiumBtn}
-                        >
-                            {saving && (
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            )}
-                            Salvar
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            <BulletinTemplateEditorDialog
+                open={editorOpen}
+                mode={editorMode}
+                draft={draft}
+                setDraft={setDraft}
+                fieldOpts={fieldOpts}
+                saving={saving}
+                technicalNameLocked={
+                    editorMode === "edit" &&
+                    items.find((i) => i.id === editingId)?.remoteStatus ===
+                        "APPROVED"
+                }
+                onBodyChange={onBodyChange}
+                onSave={() => void saveDraft()}
+                onClose={() => setEditorOpen(false)}
+            />
 
             <AlertDialog
                 open={!!deleteTarget}
