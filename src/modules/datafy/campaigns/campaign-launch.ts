@@ -16,12 +16,19 @@ import {
     normalizeCampaignDelayMs,
     parseDelaySeconds,
 } from "./pacing";
+import {
+    canUseTemplateAsFreeformFallback,
+    validateTemplateBodyParamCount,
+} from "./template-params";
 
 export type LaunchTemplateLite = {
     name: string;
     language: string;
     status?: string | null;
     category?: string | null;
+    components?: unknown;
+    /** BODY text when known (managed library / sync). */
+    bodyText?: string | null;
 };
 
 export function isApprovedTemplateStatus(
@@ -101,14 +108,25 @@ export function canEnableStartDispatchButton(opts: {
 /**
  * Prefer UTILITY/TRANSACTIONAL APPROVED template as Envio Direto fallback
  * when no 24h window is open.
+ *
+ * Never pick a multi-parameter boletim template for freeform paste fallback —
+ * that caused Meta #132000 (0/1 CRM tokens vs 12–18 BODY params).
  */
 export function pickFallbackApprovedTemplate(
     templates: LaunchTemplateLite[],
-    purpose: string
+    purpose: string,
+    opts?: { variableMapping?: { body?: unknown[] | null } | null }
 ): LaunchTemplateLite | null {
-    const approved = templates.filter((t) =>
-        isApprovedTemplateStatus(t.status)
-    );
+    const mapping = opts?.variableMapping || { body: [] };
+    const approved = templates.filter((t) => {
+        if (!isApprovedTemplateStatus(t.status)) return false;
+        return canUseTemplateAsFreeformFallback({
+            templateName: t.name,
+            bodyText: t.bodyText,
+            templateComponents: t.components,
+            variableMapping: mapping,
+        });
+    });
     if (!approved.length) return null;
     const p = String(purpose || "").toLowerCase();
     const want =
@@ -124,6 +142,49 @@ export function pickFallbackApprovedTemplate(
         if (hit) return hit;
     }
     return approved[0] || null;
+}
+
+/** True when selected APPROVED template can be sent with the given mapping. */
+export function templateParamsReadyForSend(opts: {
+    template?: LaunchTemplateLite | null;
+    variableMapping?: { body?: unknown[] | null } | null;
+    /** Bulletin parts already carry their own mapping. */
+    bulletinParts?: Array<{
+        templateName?: string | null;
+        templateLanguage?: string | null;
+        bodyText?: string | null;
+        templateComponents?: unknown;
+        variableMapping?: { body?: string[] | null } | null;
+        readyForRealSend?: boolean;
+    }> | null;
+    contentKind?: string;
+}): { ok: boolean; message: string | null } {
+    if (opts.contentKind === "bulletin" && opts.bulletinParts?.length) {
+        for (const part of opts.bulletinParts) {
+            const check = validateTemplateBodyParamCount({
+                templateName: part.templateName,
+                language: part.templateLanguage,
+                bodyText: part.bodyText,
+                templateComponents: part.templateComponents,
+                variableMapping: part.variableMapping || { body: [] },
+            });
+            if (!check.ok) {
+                return { ok: false, message: check.message };
+            }
+        }
+        return { ok: true, message: null };
+    }
+    if (!opts.template || !isApprovedTemplateStatus(opts.template.status)) {
+        return { ok: true, message: null };
+    }
+    const check = validateTemplateBodyParamCount({
+        templateName: opts.template.name,
+        language: opts.template.language,
+        bodyText: opts.template.bodyText,
+        templateComponents: opts.template.components,
+        variableMapping: opts.variableMapping || { body: [] },
+    });
+    return { ok: check.ok, message: check.message };
 }
 
 export function shouldAutoPickFallbackTemplate(opts: {

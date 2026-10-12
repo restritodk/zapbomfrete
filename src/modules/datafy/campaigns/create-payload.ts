@@ -6,6 +6,7 @@ import { z } from "zod";
 import { CAMPAIGN_PURPOSES } from "./constants";
 import { isOrphanVersionId } from "./bulletin/selection";
 import type { CampaignMessagePart } from "./bulletin/types";
+import { validateTemplateBodyParamCount } from "./template-params";
 
 /** Modes persisted on DatafyCampaign.bulletinSendMode */
 export const BULLETIN_SEND_MODES = [
@@ -184,26 +185,26 @@ export function assessBulletinLaunchIssues(opts: {
                 message: `${name}: idioma aprovado ausente — a fila precisa do idioma exato da Meta.`,
             });
         }
-        const placeholders = countNumberedPlaceholders(part.bodyText || "");
-        const mapped =
-            part.variableMapping &&
-            Array.isArray(
-                (part.variableMapping as { body?: unknown }).body
-            ) &&
-            (
-                (part.variableMapping as { body: unknown[] }).body
-            ).length >= placeholders;
-        if (placeholders > 0 && !mapped && !opts.dryRun) {
+        const paramCheck = validateTemplateBodyParamCount({
+            templateName: part.templateName,
+            language: part.templateLanguage,
+            bodyText: part.bodyText,
+            templateComponents: part.templateComponents,
+            variableMapping: part.variableMapping || { body: [] },
+        });
+        if (!paramCheck.ok && !opts.dryRun) {
             issues.push({
                 level: "error",
-                code: "missing_variables",
-                message: `${name}: exige ${placeholders} variável(is) ({{1}}…) e o payload ainda não tem valores mapeados. Associe o template a um boletim com cargas ou use simulação.`,
+                code: "param_mismatch_132000",
+                message:
+                    paramCheck.message ||
+                    `${name}: parâmetros do BODY incompatíveis (Meta #132000).`,
             });
-        } else if (placeholders > 0 && !mapped && opts.dryRun) {
+        } else if (!paramCheck.ok && opts.dryRun) {
             issues.push({
                 level: "warning",
-                code: "missing_variables_sim",
-                message: `${name}: simulação aceita, mas o envio real exigirá ${placeholders} variável(is) preenchidas.`,
+                code: "param_mismatch_sim",
+                message: `${name}: simulação aceita, mas o envio real falharia (#132000) — esperados ${paramCheck.expected}, mapeados ${paramCheck.provided}.`,
             });
         }
     }

@@ -151,25 +151,40 @@ export function flattenBulletinSelections(
 
         for (const card of cards) {
             const approval = String(card.approvalStatus || "").toUpperCase();
-            const ready = approval === "APPROVED" && Boolean(card.technicalName);
+            const bodyText = card.bodyPreview || "";
+            const placeholderCount = (
+                bodyText.match(/\{\{(\d+)\}\}/g) || []
+            ).length;
+            // Orphan / card without filled variableMapping cannot send when BODY has {{n}}
+            const ready =
+                approval === "APPROVED" &&
+                Boolean(card.technicalName) &&
+                placeholderCount === 0;
             parts.push({
                 index: globalIndex,
                 label: isOrphanVersionId(pick.versionId)
                     ? `Template · ${card.technicalName}`
                     : `${pick.publicKey} v${pick.version} · Card ${card.position}/${pick.cardCount}`,
-                bodyText: card.bodyPreview || "",
+                bodyText,
                 loadIndexes: card.loadIndexes || [],
-                charCount: (card.bodyPreview || "").length,
+                charCount: bodyText.length,
                 templateName: card.technicalName,
                 templateLanguage: card.language || "pt_BR",
                 templateCategory: card.category || "MARKETING",
                 templateApprovalStatus: approval,
                 libraryTemplateId: card.libraryTemplateId,
+                variableMapping: { body: [] },
                 readyForRealSend: ready,
-                compatibility: ready ? "ready" : "missing_template",
+                compatibility: ready
+                    ? "ready"
+                    : placeholderCount > 0
+                      ? "incomplete_fields"
+                      : "missing_template",
                 blockReason: ready
                     ? null
-                    : "Card sem template APPROVED nesta versão.",
+                    : placeholderCount > 0
+                      ? `Template exige ${placeholderCount} parâmetro(s) no BODY — associe a um boletim com cargas ou preencha o mapeamento (evita Meta #132000).`
+                      : "Card sem template APPROVED nesta versão.",
                 bulletinPublicKey: pick.publicKey,
                 bulletinVersion: pick.version,
                 bulletinVersionId: pick.versionId,

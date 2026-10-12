@@ -141,7 +141,9 @@ describe("create campaign payload contract", () => {
             confirmMarketingWithUtilityPurpose: true,
         });
         assert.equal(real.ok, false);
-        assert.ok(real.issues.some((i) => i.code === "missing_variables"));
+        assert.ok(
+            real.issues.some((i) => i.code === "param_mismatch_132000")
+        );
         const sim = assessBulletinLaunchIssues({
             purpose: "utility",
             parts,

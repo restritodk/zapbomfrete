@@ -74,6 +74,7 @@ import {
     resolveWizardHasApprovedTemplate,
     shouldAutoPickFallbackTemplate,
     templateKeyOf,
+    templateParamsReadyForSend,
 } from "@/modules/datafy/campaigns/campaign-launch";
 import { BulletinCampaignValidation } from "@/components/dashboard/bulletin-campaign-step3";
 import { BulletinCampaignStep1 } from "@/components/dashboard/bulletin-campaign-step1";
@@ -797,6 +798,7 @@ export function DatafyCampaignsPanel() {
             status: string;
             skipReason: string | null;
             lastError: string | null;
+            errorCode?: number | null;
             acceptedAt: string | null;
             deliveredAt: string | null;
             failedAt: string | null;
@@ -806,6 +808,7 @@ export function DatafyCampaignsPanel() {
                     index?: number;
                     status?: string;
                     wamid?: string | null;
+                    lastError?: string | null;
                 }>;
             } | null;
         }>;
@@ -862,6 +865,8 @@ export function DatafyCampaignsPanel() {
                     r.skipReason,
                     r.lastError
                 );
+                const errCode =
+                    r.errorCode != null ? `Código ${r.errorCode}` : "";
                 return {
                     id: r.id,
                     jid: r.waId,
@@ -873,7 +878,9 @@ export function DatafyCampaignsPanel() {
                         r.acceptedAt ||
                         r.failedAt ||
                         null,
-                    detail: [base, cardProgress].filter(Boolean).join(" | "),
+                    detail: [base, errCode, cardProgress]
+                        .filter(Boolean)
+                        .join(" | "),
                 };
             })
         );
@@ -1367,11 +1374,19 @@ export function DatafyCampaignsPanel() {
                     templateKey,
                 })
             ) {
-                const pick = pickFallbackApprovedTemplate(templates, purpose);
+                const pick = pickFallbackApprovedTemplate(
+                    templates,
+                    purpose,
+                    { variableMapping: { body: bodyVars } }
+                );
                 if (pick) {
                     setTemplateKey(templateKeyOf(pick));
                     toast.message(
-                        `Fallback APPROVED: ${pick.name} (nenhuma janela 24h aberta).`
+                        `Fallback APPROVED estático: ${pick.name} (nenhuma janela 24h — template sem parâmetros incompatíveis).`
+                    );
+                } else {
+                    toast.message(
+                        "Nenhuma janela 24h aberta e nenhum template APPROVED compatível (0 parâmetros ou mapeamento completo). Texto livre não será entregue fora da janela — não usamos boletim multi-variável como fallback."
                     );
                 }
             }
@@ -1629,11 +1644,28 @@ export function DatafyCampaignsPanel() {
         setProgressOpen(true);
     };
 
+    const templateParamGate = useMemo(() => {
+        return templateParamsReadyForSend({
+            contentKind,
+            template: selectedTemplate
+                ? {
+                      name: selectedTemplate.name,
+                      language: selectedTemplate.language,
+                      status: selectedTemplate.status,
+                      category: selectedTemplate.category,
+                      components: selectedTemplate.components,
+                  }
+                : null,
+            variableMapping: { body: bodyVars },
+            bulletinParts,
+        });
+    }, [bodyVars, bulletinParts, contentKind, selectedTemplate]);
+
     const sendReadiness = useMemo(() => {
         const isCompleteBulletin =
             contentKind === "bulletin" &&
             bulletinDeliveryMode === "complete_single";
-        const hasTemplate = resolveWizardHasApprovedTemplate({
+        const hasTemplateRaw = resolveWizardHasApprovedTemplate({
             contentKind,
             contentMode,
             bulletinDeliveryMode,
@@ -1641,7 +1673,9 @@ export function DatafyCampaignsPanel() {
             submittedTemplate,
             bulletinParts,
         });
-        return assessWizardSendReadiness({
+        // APPROVED alone is not enough — Meta #132000 if BODY params mismatch
+        const hasTemplate = hasTemplateRaw && templateParamGate.ok;
+        const assessment = assessWizardSendReadiness({
             purpose,
             consentEligibleCount: audience?.eligibleCount ?? 0,
             openWindowCount: audience?.openWindowCount ?? 0,
@@ -1652,6 +1686,22 @@ export function DatafyCampaignsPanel() {
                     : messageBody.trim()
             ),
         });
+        if (hasTemplateRaw && !templateParamGate.ok) {
+            return {
+                ...assessment,
+                realSendReady: false,
+                technicallySendableCount: Math.min(
+                    assessment.technicallySendableCount,
+                    audience?.openWindowCount ?? 0
+                ),
+                blockReason:
+                    templateParamGate.message ||
+                    assessment.blockReason ||
+                    "Template APPROVED com parâmetros incompatíveis (#132000).",
+                statusLabel: "Bloqueado — parâmetros do template",
+            };
+        }
+        return assessment;
     }, [
         audience?.eligibleCount,
         audience?.openWindowCount,
@@ -1663,6 +1713,7 @@ export function DatafyCampaignsPanel() {
         purpose,
         selectedTemplate,
         submittedTemplate,
+        templateParamGate,
     ]);
 
     const canStartRealDispatch = canEnableStartDispatchButton({

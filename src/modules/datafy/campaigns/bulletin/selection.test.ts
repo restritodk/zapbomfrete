@@ -133,6 +133,7 @@ describe("bulletin campaign selection", () => {
         assert.equal(prepared.parts[0].bodyText, "BODY REAL DO TEMPLATE");
         assert.equal(prepared.parts[0].templateName, "boletim_v3_2_cargas");
         assert.equal(prepared.parts[0].templateLanguage, "pt_BR");
+        // Static BODY (no {{n}}) → ready; parameterized orphans stay blocked
         assert.equal(prepared.parts[0].readyForRealSend, true);
         const v = validateBulletinPicks([orphanPick]);
         assert.equal(v.ok, true);
@@ -143,6 +144,21 @@ describe("bulletin campaign selection", () => {
             partIndex: 0,
         });
         assert.equal(preview.text, "BODY REAL DO TEMPLATE");
+    });
+
+    it("orphan with {{n}} placeholders is not readyForRealSend (prevents 132000)", () => {
+        const orphanPick = orphanToBulletinPick({
+            id: "mt2",
+            technicalName: "boletim_v3_3_cargas",
+            displayName: "v3 3",
+            language: "pt_BR",
+            category: "MARKETING",
+            loadsPerMessage: 3,
+            bodyPreview: "Origem {{1}} Destino {{2}} Frete {{3}}",
+        });
+        const prepared = flattenBulletinSelections([orphanPick]);
+        assert.equal(prepared.parts[0].readyForRealSend, false);
+        assert.match(prepared.parts[0].blockReason || "", /132000|parâmetro/i);
     });
 
     it("zero registered bulletins + three orphan templates → three selectable", () => {

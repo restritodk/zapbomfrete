@@ -29,6 +29,12 @@ import {
 } from "./service";
 import { buildTemplateComponents, renderCampaignFreeform } from "./variables";
 import {
+    extractMetaErrorCode,
+    formatMeta132000Message,
+    isMeta132000Error,
+    validateTemplateBodyParamCount,
+} from "./template-params";
+import {
     resolveBaileysSessionForDatafyNumber,
     sendBaileysCampaignText,
 } from "./baileys-freeform";
@@ -603,10 +609,24 @@ async function sendOneRecipient(
     } catch (e) {
         const apiErr = e instanceof DatafyApiError ? e : null;
         const statusCode = apiErr?.statusCode || 0;
-        const msg = redactSecrets(
+        const metaCode = extractMetaErrorCode(apiErr?.body) || null;
+        let msg = redactSecrets(
             apiErr?.message ||
                 (e instanceof Error ? e.message : "Falha no envio")
-        ).slice(0, 240);
+        ).slice(0, 400);
+        if (
+            isMeta132000Error({
+                message: msg,
+                body: apiErr?.body,
+                errorCode: metaCode,
+            })
+        ) {
+            msg = formatMeta132000Message({
+                templateName: fullCampaign.templateName,
+                language: fullCampaign.templateLanguage,
+                apiMessage: msg,
+            }).slice(0, 400);
+        }
 
         if (statusCode === 429) {
             const retrySec = apiErr?.retryAfterSec || 30;
@@ -635,7 +655,7 @@ async function sendOneRecipient(
                         : "failed",
                 failedAt: new Date(),
                 lastError: msg,
-                errorCode: statusCode || null,
+                errorCode: metaCode || statusCode || null,
                 conversationId: conversation.id,
             },
         });
@@ -761,6 +781,35 @@ async function sendPartsSequentially(opts: {
                     ? part.variableMapping
                     : { body: [] as string[] };
 
+            const paramCheck = validateTemplateBodyParamCount({
+                templateName: resolvedTemplateName,
+                language: resolvedTemplateLanguage,
+                bodyText: part.bodyText,
+                templateComponents: part.templateComponents,
+                variableMapping: mapping,
+            });
+            if (!paramCheck.ok) {
+                throw new DatafyApiError(
+                    formatMeta132000Message({
+                        templateName: resolvedTemplateName,
+                        language: resolvedTemplateLanguage,
+                        expected: paramCheck.expected,
+                        provided: paramCheck.provided,
+                        apiMessage: paramCheck.message,
+                    }),
+                    400,
+                    {
+                        error: {
+                            message: paramCheck.message || undefined,
+                            code: 132000,
+                            error_data: {
+                                details: `expected=${paramCheck.expected};provided=${paramCheck.provided};part=${part.index}`,
+                            },
+                        },
+                    }
+                );
+            }
+
             const headerUrl =
                 i === 0
                     ? part.headerImageUrl || campaign.headerImageUrl
@@ -791,6 +840,8 @@ async function sendPartsSequentially(opts: {
                             templateName: resolvedTemplateName,
                             languageCode: resolvedTemplateLanguage,
                             partIndex: part.index,
+                            expectedBodyParams: paramCheck.expected,
+                            providedBodyParams: paramCheck.provided,
                             components: components as Prisma.InputJsonValue,
                         } as Prisma.InputJsonValue,
                     },
@@ -798,13 +849,38 @@ async function sendPartsSequentially(opts: {
                 messageId = pending.id;
             }
 
-            const res = await client.sendTemplate(phoneNumberId, {
-                to: toWaId,
-                name: resolvedTemplateName,
-                languageCode: resolvedTemplateLanguage,
-                components,
-            });
-            wamid = res.messages?.[0]?.id || null;
+            try {
+                const res = await client.sendTemplate(phoneNumberId, {
+                    to: toWaId,
+                    name: resolvedTemplateName,
+                    languageCode: resolvedTemplateLanguage,
+                    components,
+                });
+                wamid = res.messages?.[0]?.id || null;
+            } catch (sendErr) {
+                if (
+                    sendErr instanceof DatafyApiError &&
+                    isMeta132000Error({
+                        message: sendErr.message,
+                        body: sendErr.body,
+                        errorCode: extractMetaErrorCode(sendErr.body),
+                    })
+                ) {
+                    throw new DatafyApiError(
+                        formatMeta132000Message({
+                            templateName: resolvedTemplateName,
+                            language: resolvedTemplateLanguage,
+                            expected: paramCheck.expected,
+                            provided: paramCheck.provided,
+                            apiMessage: sendErr.message,
+                        }),
+                        sendErr.statusCode || 400,
+                        sendErr.body,
+                        sendErr.retryAfterSec
+                    );
+                }
+                throw sendErr;
+            }
         } else {
             if (!freeformText) {
                 throw new DatafyApiError(

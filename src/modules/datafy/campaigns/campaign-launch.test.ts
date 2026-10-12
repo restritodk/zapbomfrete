@@ -126,6 +126,9 @@ describe("Iniciar disparo — Utilidade / Transacional", () => {
     });
 
     it("pickFallbackApprovedTemplate prioriza categoria da finalidade", () => {
+        const staticBody = {
+            components: [{ type: "BODY", text: "Olá, mensagem estática." }],
+        };
         const pick = pickFallbackApprovedTemplate(
             [
                 {
@@ -133,18 +136,42 @@ describe("Iniciar disparo — Utilidade / Transacional", () => {
                     language: "pt_BR",
                     status: "APPROVED",
                     category: "MARKETING",
+                    ...staticBody,
                 },
                 {
                     name: "util",
                     language: "pt_BR",
                     status: "APPROVED",
                     category: "UTILITY",
+                    ...staticBody,
                 },
             ],
             "utility"
         );
         assert.equal(pick?.name, "util");
         assert.equal(templateKeyOf(pick!), "util::pt_BR");
+    });
+
+    it("pickFallback rejeita boletim multi-variável (evita Meta #132000)", () => {
+        const pick = pickFallbackApprovedTemplate(
+            [
+                {
+                    name: "boletim_v3_3_cargas",
+                    language: "pt_BR",
+                    status: "APPROVED",
+                    category: "MARKETING",
+                    components: [
+                        {
+                            type: "BODY",
+                            text: "Origem {{1}} Destino {{2}} Frete {{3}}",
+                        },
+                    ],
+                },
+            ],
+            "utility",
+            { variableMapping: { body: ["fullName"] } }
+        );
+        assert.equal(pick, null);
     });
 
     it("variantes BR com/sem 9º dígito batem na mesma janela", () => {
