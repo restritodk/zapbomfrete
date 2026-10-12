@@ -91,6 +91,10 @@ import {
 import type { GroupedVersionDto } from "@/components/dashboard/bulletin-grouped-cards";
 import { BulletinTemplateEditorDialog } from "@/components/dashboard/bulletin-template-editor-dialog";
 import type { TemplateEditorDraft } from "@/modules/datafy/campaigns/bulletin/template-editor-helpers";
+import {
+    buildCompatibleCardOptions,
+    emptyCompatMessage,
+} from "@/modules/datafy/campaigns/bulletin/association-compat";
 
 type ButtonsDraft = {
     enabled: boolean;
@@ -281,7 +285,11 @@ export function BulletinTemplateManager({
     >([]);
     const [associateCardId, setAssociateCardId] = useState("");
     const [associating, setAssociating] = useState(false);
+    const [creatingCompat, setCreatingCompat] = useState(false);
     const [loadingVersions, setLoadingVersions] = useState(false);
+    const [associateLoadError, setAssociateLoadError] = useState<string | null>(
+        null
+    );
 
     const load = useCallback(async (opts?: { silent?: boolean; toastOk?: boolean }) => {
         const silent = Boolean(opts?.silent) && hasLoadedOnceRef.current;
@@ -568,6 +576,7 @@ export function BulletinTemplateManager({
     const openAssociate = async (item: ManagedItem) => {
         setAssociateTarget(item);
         setAssociateCardId("");
+        setAssociateLoadError(null);
         setLoadingVersions(true);
         try {
             const vRes = await fetch(
@@ -580,18 +589,59 @@ export function BulletinTemplateManager({
                 ...(vJson.data.history || []),
             ]);
         } catch (e) {
-            toast.error(e instanceof Error ? e.message : "Erro ao carregar cards");
-            setAssociateTarget(null);
+            const msg =
+                e instanceof Error ? e.message : "Erro ao carregar cards";
+            setAssociateLoadError(msg);
+            toast.error(msg);
         } finally {
             setLoadingVersions(false);
         }
     };
+
+    const compatibleCardOptions = useMemo(() => {
+        if (!associateTarget) return [];
+        return buildCompatibleCardOptions(associateVersions, {
+            templateLoadsPerMessage: associateTarget.loadsPerMessage,
+            templateLanguage: associateTarget.language || "pt_BR",
+            excludeAlreadyLinked: true,
+        });
+    }, [associateTarget, associateVersions]);
+
+    useEffect(() => {
+        if (
+            associateCardId &&
+            !compatibleCardOptions.some((c) => c.value === associateCardId)
+        ) {
+            setAssociateCardId("");
+        }
+    }, [associateCardId, compatibleCardOptions]);
+
+    const associateEmptyReason = useMemo(() => {
+        if (!associateTarget || loadingVersions) return null;
+        if (compatibleCardOptions.length) return null;
+        const totalCards = associateVersions.reduce(
+            (n, v) => n + (v.cards?.length || 0),
+            0
+        );
+        return emptyCompatMessage({
+            templateLoadsPerMessage: associateTarget.loadsPerMessage,
+            templateLanguage: associateTarget.language || "pt_BR",
+            totalCards,
+            totalVersions: associateVersions.length,
+        });
+    }, [
+        associateTarget,
+        associateVersions,
+        compatibleCardOptions.length,
+        loadingVersions,
+    ]);
 
     const confirmAssociate = async () => {
         if (!associateTarget || !associateCardId) {
             toast.error("Escolha o card do boletim/versão");
             return;
         }
+        if (associating) return;
         setAssociating(true);
         try {
             const res = await fetch("/api/channels/datafy/bulletins/grouped", {
@@ -607,6 +657,7 @@ export function BulletinTemplateManager({
             if (!res.ok) throw new Error(json.message || "Falha na associação");
             toast.success("Template associado ao card (sem reenvio Meta)");
             setAssociateTarget(null);
+            setAssociateCardId("");
             void load({ silent: true });
         } catch (e) {
             toast.error(e instanceof Error ? e.message : "Erro");
@@ -615,13 +666,40 @@ export function BulletinTemplateManager({
         }
     };
 
-    const cardOptions = associateVersions.flatMap((v) =>
-        v.cards.map((c) => ({
-            value: c.id,
-            label: `${v.publicKey} v${v.version} · Card ${c.position}/${v.cardCount} · ${c.loadSummary}`,
-            loads: (c.loadSummary.match(/\d+/g) || []).length || 1,
-        }))
-    );
+    const createCompatibleCard = async () => {
+        if (!associateTarget || creatingCompat) return;
+        setCreatingCompat(true);
+        try {
+            const res = await fetch("/api/channels/datafy/bulletins/grouped", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "create_from_orphans",
+                    title:
+                        associateTarget.displayName ||
+                        associateTarget.technicalName,
+                    managedTemplateIds: [associateTarget.id],
+                }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(
+                    json.message ||
+                        "Não foi possível criar um card compatível"
+                );
+            }
+            toast.success(
+                "Card compatível criado e associado (sem reenvio Meta)"
+            );
+            setAssociateTarget(null);
+            setAssociateCardId("");
+            void load({ silent: true });
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Erro");
+        } finally {
+            setCreatingCompat(false);
+        }
+    };
 
     const premiumCard =
         "rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_4px_rgba(15,23,42,0.06)]";
@@ -765,10 +843,7 @@ export function BulletinTemplateManager({
                             Duplicar
                         </DropdownMenuItem>
                     )}
-                    {canManage &&
-                        approved &&
-                        !item.associated &&
-                        !item.id.startsWith("builtin:") && (
+                    {canManage && approved && !item.associated && (
                             <DropdownMenuItem
                                 onClick={() => void openAssociate(item)}
                             >
@@ -1412,9 +1487,6 @@ export function BulletinTemplateManager({
                                             <Button
                                                 size="sm"
                                                 className={premiumBtn}
-                                                disabled={o.id.startsWith(
-                                                    "builtin:"
-                                                )}
                                                 onClick={() =>
                                                     void openAssociate(o)
                                                 }
@@ -1751,45 +1823,112 @@ export function BulletinTemplateManager({
             {/* Associate modal */}
             <Dialog
                 open={!!associateTarget}
-                onOpenChange={(o) => !o && setAssociateTarget(null)}
+                onOpenChange={(o) => {
+                    if (!o && !associating && !creatingCompat) {
+                        setAssociateTarget(null);
+                        setAssociateCardId("");
+                    }
+                }}
             >
-                <DialogContent className="max-w-lg">
-                    <DialogHeader>
-                        <DialogTitle>Associar template</DialogTitle>
-                        <DialogDescription>
-                            Vincule{" "}
-                            <span className="font-mono">
-                                {associateTarget?.technicalName}
-                            </span>{" "}
-                            a um card de boletim/versão compatível. Não reenvia
-                            à Meta.
-                        </DialogDescription>
-                    </DialogHeader>
-                    {loadingVersions ? (
-                        <p className="text-sm text-slate-500 inline-flex items-center gap-2">
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            Carregando cards…
-                        </p>
-                    ) : (
-                        <div className="space-y-2">
-                            <Label>Card do boletim/versão</Label>
-                            <Select
-                                value={associateCardId}
-                                onValueChange={setAssociateCardId}
-                            >
-                                <SelectTrigger className="bg-white">
-                                    <SelectValue placeholder="Selecione o card compatível" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {cardOptions
-                                        .filter(
-                                            (c) =>
-                                                !associateTarget ||
-                                                c.loads ===
-                                                    associateTarget.loadsPerMessage ||
-                                                c.loads === 0
-                                        )
-                                        .map((c) => (
+                <DialogContent className="max-w-xl rounded-2xl border-slate-200/80 p-0 gap-0 overflow-hidden">
+                    <div className="px-5 pt-5 pb-3 border-b border-slate-100">
+                        <DialogHeader className="space-y-1.5">
+                            <DialogTitle className="text-[#0f2744] flex items-center gap-2">
+                                <Link2 className="h-5 w-5 text-[#2563eb]" />
+                                Associar template
+                            </DialogTitle>
+                            <DialogDescription>
+                                Vincule o template oficial a um card de
+                                boletim/versão com a mesma quantidade de cargas.
+                                Não reenvia à Meta.
+                            </DialogDescription>
+                        </DialogHeader>
+                        {associateTarget && (
+                            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-mono font-semibold text-[#0f2744]">
+                                        {associateTarget.technicalName}
+                                    </span>
+                                    <Badge className="rounded-full bg-emerald-50 text-emerald-700 hover:bg-emerald-50 border-0 ring-1 ring-emerald-100">
+                                        Aprovado
+                                    </Badge>
+                                </div>
+                                <p className="text-[11px] text-slate-500">
+                                    {associateTarget.category} ·{" "}
+                                    {associateTarget.language || "pt_BR"} ·{" "}
+                                    {associateTarget.loadsPerMessage} carga
+                                    {associateTarget.loadsPerMessage === 1
+                                        ? ""
+                                        : "s"}
+                                    /msg · {associateTarget.variableCount}{" "}
+                                    variável
+                                    {associateTarget.variableCount === 1
+                                        ? ""
+                                        : "eis"}
+                                </p>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="px-5 py-4 space-y-3">
+                        {loadingVersions ? (
+                            <p className="text-sm text-slate-500 inline-flex items-center gap-2">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Carregando cards compatíveis…
+                            </p>
+                        ) : null}
+
+                        {associateLoadError ? (
+                            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-800">
+                                {associateLoadError}
+                            </div>
+                        ) : null}
+
+                        {!loadingVersions &&
+                        !associateLoadError &&
+                        associateEmptyReason ? (
+                            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950 space-y-3">
+                                <p>{associateEmptyReason}</p>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    className={premiumBtn}
+                                    disabled={creatingCompat}
+                                    onClick={() => void createCompatibleCard()}
+                                >
+                                    {creatingCompat ? (
+                                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                        <Plus className="mr-1.5 h-3.5 w-3.5" />
+                                    )}
+                                    Criar card compatível
+                                </Button>
+                                <p className="text-[11px] text-amber-800/80">
+                                    Cria uma versão de boletim com um card já
+                                    vinculado a este template APPROVED. Sem
+                                    reenvio à Meta.
+                                </p>
+                            </div>
+                        ) : null}
+
+                        {!loadingVersions &&
+                        !associateLoadError &&
+                        compatibleCardOptions.length > 0 ? (
+                            <div className="space-y-2">
+                                <Label className="text-[#0f2744]">
+                                    Card do boletim/versão
+                                </Label>
+                                <Select
+                                    value={
+                                        associateCardId || undefined
+                                    }
+                                    onValueChange={setAssociateCardId}
+                                >
+                                    <SelectTrigger className="bg-white h-11 rounded-xl border-slate-200">
+                                        <SelectValue placeholder="Selecione o card compatível" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {compatibleCardOptions.map((c) => (
                                             <SelectItem
                                                 key={c.value}
                                                 value={c.value}
@@ -1797,20 +1936,43 @@ export function BulletinTemplateManager({
                                                 {c.label}
                                             </SelectItem>
                                         ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    )}
-                    <DialogFooter>
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-[11px] text-slate-400">
+                                    {compatibleCardOptions.length} card
+                                    {compatibleCardOptions.length === 1
+                                        ? ""
+                                        : "s"}{" "}
+                                    compatível
+                                    {compatibleCardOptions.length === 1
+                                        ? ""
+                                        : "is"}{" "}
+                                    · mesma quantidade de cargas e idioma
+                                </p>
+                            </div>
+                        ) : null}
+                    </div>
+
+                    <div className="px-5 py-3.5 border-t border-slate-100 flex flex-col-reverse sm:flex-row sm:justify-end gap-2 bg-white">
                         <Button
                             variant="outline"
-                            onClick={() => setAssociateTarget(null)}
+                            className={premiumBtnOutline}
+                            disabled={associating || creatingCompat}
+                            onClick={() => {
+                                setAssociateTarget(null);
+                                setAssociateCardId("");
+                            }}
                         >
                             Cancelar
                         </Button>
                         <Button
                             className={premiumBtn}
-                            disabled={associating || !associateCardId}
+                            disabled={
+                                associating ||
+                                creatingCompat ||
+                                !associateCardId ||
+                                loadingVersions
+                            }
                             onClick={() => void confirmAssociate()}
                         >
                             {associating && (
@@ -1818,7 +1980,7 @@ export function BulletinTemplateManager({
                             )}
                             Confirmar associação
                         </Button>
-                    </DialogFooter>
+                    </div>
                 </DialogContent>
             </Dialog>
 

@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Link2, Loader2 } from "lucide-react";
+import { Link2, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -20,6 +20,10 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import type { GroupedVersionDto } from "@/components/dashboard/bulletin-grouped-cards";
+import {
+    buildCompatibleCardOptions,
+    emptyCompatMessage,
+} from "@/modules/datafy/campaigns/bulletin/association-compat";
 
 type Orphan = {
     id: string;
@@ -69,6 +73,16 @@ export function BulletinOrphanAssociatePanel() {
         void reload();
     }, [reload]);
 
+    const optionsFor = useCallback(
+        (orphan: Orphan) =>
+            buildCompatibleCardOptions(versions, {
+                templateLoadsPerMessage: orphan.loadsPerMessage,
+                templateLanguage: orphan.language || "pt_BR",
+                excludeAlreadyLinked: true,
+            }),
+        [versions]
+    );
+
     const associate = async (orphanId: string) => {
         const cardId = pick[orphanId];
         if (!cardId) {
@@ -97,12 +111,32 @@ export function BulletinOrphanAssociatePanel() {
         }
     };
 
-    const cardOptions = versions.flatMap((v) =>
-        v.cards.map((c) => ({
-            value: c.id,
-            label: `${v.publicKey} v${v.version} · Card ${c.position}/${v.cardCount} · ${c.loadSummary}`,
-            loads: (c.loadSummary.match(/\d+/g) || []).length || 1,
-        }))
+    const createCompat = async (orphan: Orphan) => {
+        setBusyId(orphan.id);
+        try {
+            const res = await fetch("/api/channels/datafy/bulletins/grouped", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "create_from_orphans",
+                    title: orphan.displayName || orphan.technicalName,
+                    managedTemplateIds: [orphan.id],
+                }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json.message || "Falha ao criar card");
+            toast.success("Card compatível criado e associado");
+            await reload();
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Erro");
+        } finally {
+            setBusyId(null);
+        }
+    };
+
+    const totalCards = useMemo(
+        () => versions.reduce((n, v) => n + (v.cards?.length || 0), 0),
+        [versions]
     );
 
     return (
@@ -131,78 +165,110 @@ export function BulletinOrphanAssociatePanel() {
                         registros.
                     </p>
                 ) : null}
-                {orphans.map((o) => (
-                    <div
-                        key={o.id}
-                        className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5"
-                    >
-                        <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-semibold font-mono">
-                                {o.technicalName}
-                            </p>
-                            <Badge variant="outline" className="rounded-md text-[10px]">
-                                Não associado
-                            </Badge>
-                            <Badge variant="outline" className="rounded-md text-[10px]">
-                                {o.loadsPerMessage} carga(s)/msg
-                            </Badge>
-                        </div>
-                        <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 border border-slate-100 p-2 text-[11px] text-slate-600">
-                            {o.bodyPreview}
-                        </pre>
-                        <div className="flex flex-wrap items-end gap-2">
-                            <div className="min-w-[240px] flex-1 space-y-1">
-                                <p className="text-xs text-slate-500">
-                                    Card do boletim/versão
+                {orphans.map((o) => {
+                    const options = optionsFor(o);
+                    return (
+                        <div
+                            key={o.id}
+                            className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5"
+                        >
+                            <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-semibold font-mono">
+                                    {o.technicalName}
                                 </p>
-                                <Select
-                                    value={pick[o.id] || ""}
-                                    onValueChange={(v) =>
-                                        setPick((prev) => ({
-                                            ...prev,
-                                            [o.id]: v,
-                                        }))
-                                    }
+                                <Badge
+                                    variant="outline"
+                                    className="rounded-md text-[10px]"
                                 >
-                                    <SelectTrigger className="bg-white">
-                                        <SelectValue placeholder="Selecione o card compatível" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {cardOptions
-                                            .filter(
-                                                (c) =>
-                                                    c.loads ===
-                                                        o.loadsPerMessage ||
-                                                    c.loads === 0
-                                            )
-                                            .map((c) => (
-                                                <SelectItem
-                                                    key={c.value}
-                                                    value={c.value}
-                                                >
-                                                    {c.label}
-                                                </SelectItem>
-                                            ))}
-                                    </SelectContent>
-                                </Select>
+                                    Não associado
+                                </Badge>
+                                <Badge
+                                    variant="outline"
+                                    className="rounded-md text-[10px]"
+                                >
+                                    {o.loadsPerMessage} carga(s)/msg
+                                </Badge>
                             </div>
-                            <Button
-                                type="button"
-                                size="sm"
-                                className="rounded-xl"
-                                disabled={busyId === o.id}
-                                onClick={() => void associate(o.id)}
-                            >
-                                {busyId === o.id ? (
-                                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                    <Link2 className="mr-1.5 h-3.5 w-3.5" />
-                                )}
-                                Confirmar associação
-                            </Button>
+                            <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 border border-slate-100 p-2 text-[11px] text-slate-600">
+                                {o.bodyPreview}
+                            </pre>
+                            {options.length === 0 ? (
+                                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-950 space-y-2">
+                                    <p>
+                                        {emptyCompatMessage({
+                                            templateLoadsPerMessage:
+                                                o.loadsPerMessage,
+                                            templateLanguage: o.language,
+                                            totalCards,
+                                            totalVersions: versions.length,
+                                        })}
+                                    </p>
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        className="rounded-xl"
+                                        disabled={busyId === o.id}
+                                        onClick={() => void createCompat(o)}
+                                    >
+                                        {busyId === o.id ? (
+                                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                            <Plus className="mr-1.5 h-3.5 w-3.5" />
+                                        )}
+                                        Criar card compatível
+                                    </Button>
+                                </div>
+                            ) : (
+                                <div className="flex flex-wrap items-end gap-2">
+                                    <div className="min-w-[240px] flex-1 space-y-1">
+                                        <p className="text-xs text-slate-500">
+                                            Card do boletim/versão
+                                        </p>
+                                        <Select
+                                            value={pick[o.id] || undefined}
+                                            onValueChange={(v) =>
+                                                setPick((prev) => ({
+                                                    ...prev,
+                                                    [o.id]: v,
+                                                }))
+                                            }
+                                        >
+                                            <SelectTrigger className="bg-white">
+                                                <SelectValue placeholder="Selecione o card compatível" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {options.map((c) => (
+                                                    <SelectItem
+                                                        key={c.value}
+                                                        value={c.value}
+                                                    >
+                                                        {c.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        className="rounded-xl"
+                                        disabled={
+                                            busyId === o.id || !pick[o.id]
+                                        }
+                                        onClick={() => void associate(o.id)}
+                                    >
+                                        {busyId === o.id ? (
+                                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                            <Link2 className="mr-1.5 h-3.5 w-3.5" />
+                                        )}
+                                        Confirmar associação
+                                    </Button>
+                                </div>
+                            )}
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
             </CardContent>
         </Card>
     );

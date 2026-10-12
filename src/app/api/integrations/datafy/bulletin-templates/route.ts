@@ -207,6 +207,8 @@ export async function GET(request: NextRequest) {
     const { remoteByName, remoteError } = await fetchRemoteMap();
 
     const linkedIds = new Set<string>();
+    const linkedBuiltinIds = new Set<string>();
+    const linkedNameLang = new Set<string>();
     let lastSyncAt: string | null = null;
     try {
         const { prisma } = await import("@/lib/prisma");
@@ -216,6 +218,23 @@ export async function GET(request: NextRequest) {
         });
         for (const c of cards) {
             if (c.managedTemplateId) linkedIds.add(c.managedTemplateId);
+        }
+        if (linkedIds.size) {
+            const linkedManaged = await prisma.datafyManagedTemplate.findMany({
+                where: { id: { in: [...linkedIds] } },
+                select: {
+                    id: true,
+                    technicalName: true,
+                    language: true,
+                    builtinId: true,
+                },
+            });
+            for (const m of linkedManaged) {
+                if (m.builtinId) linkedBuiltinIds.add(m.builtinId);
+                linkedNameLang.add(
+                    `${m.technicalName.toLowerCase()}|${String(m.language || "pt_BR").toLowerCase()}`
+                );
+            }
         }
         const syncState = await prisma.datafyTemplateSyncState.findFirst({
             orderBy: { lastSyncAt: "desc" },
@@ -240,13 +259,19 @@ export async function GET(request: NextRequest) {
                 : null);
         const remoteStatus =
             remote?.status || item.remoteStatus || "NÃO ENVIADO";
+        const nameKey = `${item.technicalName.toLowerCase()}|${String(item.language || "pt_BR").toLowerCase()}`;
+        const associated =
+            linkedIds.has(item.id) ||
+            (Boolean(item.builtinId) &&
+                linkedBuiltinIds.has(String(item.builtinId))) ||
+            linkedNameLang.has(nameKey);
         return {
             ...item,
             remoteStatus,
             remoteTemplateId: remote?.id || item.remoteTemplateId,
             remoteRejectedReason:
                 remote?.rejected_reason ?? item.remoteRejectedReason,
-            associated: linkedIds.has(item.id),
+            associated,
             lastSyncAt,
         };
     });

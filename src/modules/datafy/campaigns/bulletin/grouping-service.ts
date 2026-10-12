@@ -81,22 +81,11 @@ type BundleDb = {
                 componentsJson: unknown;
                 bodyText: string;
                 suggestedBundleKey: string | null;
+                builtinId?: string | null;
             }>
         >;
-        findUnique: (args: unknown) => Promise<{
-            id: string;
-            technicalName: string;
-            language: string;
-            loadsPerMessage: number;
-            remoteStatus: string | null;
-            remoteTemplateId: string | null;
-            lastSyncedAt: Date | null;
-            lastSubmittedAt: Date | null;
-            componentsJson: unknown;
-            displayName: string;
-            category: string;
-            bodyText: string;
-        } | null>;
+        findUnique: (args: unknown) => Promise<ManagedRow | null>;
+        findFirst: (args: unknown) => Promise<ManagedRow | null>;
         update: (args: unknown) => Promise<unknown>;
     };
     datafyBulletinDraft: {
@@ -107,6 +96,24 @@ type BundleDb = {
 function db(): BundleDb {
     return prisma as unknown as BundleDb;
 }
+
+type ManagedRow = {
+    id: string;
+    technicalName: string;
+    language: string;
+    loadsPerMessage: number;
+    remoteStatus: string | null;
+    remoteTemplateId: string | null;
+    lastSyncedAt: Date | null;
+    lastSubmittedAt: Date | null;
+    componentsJson: unknown;
+    displayName: string;
+    category: string;
+    bodyText: string;
+    builtinId?: string | null;
+    inLibrary?: boolean;
+    suggestedBundleKey?: string | null;
+};
 
 type CardRow = {
     id: string;
@@ -454,6 +461,7 @@ function toListItem(v: VersionRow): GroupedBulletinListItem {
             lastSyncedAt: c.lastSyncedAt?.toISOString() || null,
             bodyPreview: c.bodyPreview,
             libraryTemplateId: c.libraryTemplateId,
+            managedTemplateId: c.managedTemplateId || null,
             language: c.language || "pt_BR",
             category: c.category || "MARKETING",
             templateComponents: c.templateComponents ?? null,
@@ -695,32 +703,26 @@ export async function createBulletinFromOrphanTemplates(opts: {
     version: VersionRow;
     cards: CardRow[];
 }> {
-    const ids = [...new Set(opts.managedTemplateIds.filter(Boolean))];
-    if (!ids.length) {
+    const refs = [...new Set(opts.managedTemplateIds.filter(Boolean))];
+    if (!refs.length) {
         throw new Error("Selecione ao menos um template APPROVED");
     }
-    const rows = await db().datafyManagedTemplate.findMany({
-        where: {
-            organizationKey: ORG,
-            id: { in: ids },
-            deletedAt: null,
-            hidden: false,
-        },
-    });
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    const ordered = ids.map((id) => {
-        const t = byId.get(id);
-        if (!t) throw new Error(`Template não encontrado: ${id}`);
+    const ordered: Array<NonNullable<Awaited<ReturnType<typeof resolveManagedForAssociation>>>> =
+        [];
+    for (const ref of refs) {
+        const t = await resolveManagedForAssociation(ref);
+        if (!t) throw new Error(`Template não encontrado: ${ref}`);
         if (String(t.remoteStatus || "").toUpperCase() !== "APPROVED") {
             throw new Error(
                 `${t.technicalName}: só templates APPROVED podem ser associados`
             );
         }
-        return t;
-    });
+        ordered.push(t);
+    }
+    const resolvedIds = ordered.map((t) => t.id);
 
     const linked = await db().datafyBulletinCard.findMany({
-        where: { managedTemplateId: { in: ids } },
+        where: { managedTemplateId: { in: resolvedIds } },
         select: { managedTemplateId: true },
     });
     if (linked.length) {
@@ -767,6 +769,52 @@ export async function createBulletinFromOrphanTemplates(opts: {
     });
 }
 
+/**
+ * Resolve managed template for association.
+ * Accepts DB cuid or synthetic `builtin:<libraryId>` (code library without row).
+ * Never invents APPROVED status — remoteStatus must already be APPROVED.
+ */
+export async function resolveManagedForAssociation(rawId: string) {
+    const id = String(rawId || "").trim();
+    if (!id) return null;
+
+    const byId = await db().datafyManagedTemplate.findFirst({
+        where: { id, deletedAt: null },
+    });
+    if (byId) return byId;
+
+    if (id.startsWith("builtin:")) {
+        const builtinId = id.slice("builtin:".length);
+        const byBuiltin = await db().datafyManagedTemplate.findFirst({
+            where: {
+                organizationKey: ORG,
+                builtinId,
+                deletedAt: null,
+            },
+        });
+        if (byBuiltin) return byBuiltin;
+
+        const { BULLETIN_TEMPLATE_LIBRARY } = await import("./library");
+        const spec = BULLETIN_TEMPLATE_LIBRARY.find((s) => s.id === builtinId);
+        if (!spec) return null;
+        return db().datafyManagedTemplate.findFirst({
+            where: {
+                organizationKey: ORG,
+                technicalName: spec.preferredName,
+                deletedAt: null,
+            },
+        });
+    }
+
+    return db().datafyManagedTemplate.findFirst({
+        where: {
+            organizationKey: ORG,
+            technicalName: id,
+            deletedAt: null,
+        },
+    });
+}
+
 export async function associateTemplateToCard(opts: {
     cardId: string;
     managedTemplateId: string;
@@ -777,10 +825,17 @@ export async function associateTemplateToCard(opts: {
     });
     if (!card) throw new Error("Card não encontrado");
 
-    const managed = await db().datafyManagedTemplate.findUnique({
-        where: { id: opts.managedTemplateId },
-    });
-    if (!managed) throw new Error("Template não encontrado");
+    const managed = await resolveManagedForAssociation(opts.managedTemplateId);
+    if (!managed) {
+        throw new Error(
+            "Template não encontrado na biblioteca local. Sincronize o status Meta ou salve o modelo na biblioteca antes de associar."
+        );
+    }
+    if (String(managed.remoteStatus || "").toUpperCase() !== "APPROVED") {
+        throw new Error(
+            `${managed.technicalName}: só templates APPROVED podem ser associados`
+        );
+    }
 
     const loadIndexes = Array.isArray(card.loadIndexes)
         ? (card.loadIndexes as number[])
