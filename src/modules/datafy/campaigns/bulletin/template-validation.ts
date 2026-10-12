@@ -8,6 +8,12 @@ import { parseFieldMappings, VALID_FIELD_KEYS } from "./field-map";
 export const META_BODY_MAX = 1024;
 export const META_NAME_RE = /^[a-z][a-z0-9_]{2,63}$/;
 
+/** Meta-oriented body length: Unicode code points (emoji = 1 when BMP/single). */
+export function countTemplateBodyChars(body: string): number {
+    const normalized = String(body || "").replace(/\r\n/g, "\n");
+    return Array.from(normalized).length;
+}
+
 export type TemplateDraftInput = {
     technicalName: string;
     displayName: string;
@@ -72,14 +78,17 @@ export function validateTemplateDraft(
 
     const bodyText = String(input.bodyText || "").replace(/\r\n/g, "\n");
     if (!bodyText.trim()) errors.push("Corpo da mensagem é obrigatório.");
-    const bodyCharCount = bodyText.length;
+    const bodyCharCount = countTemplateBodyChars(bodyText);
     if (bodyCharCount > META_BODY_MAX) {
         errors.push(`Corpo excede ${META_BODY_MAX} caracteres (${bodyCharCount}).`);
     }
 
     const variableCount = countPositionalVars(bodyText);
+    // Local library allows static bodies (0 vars). Meta submit still validates later.
     if (variableCount < 1) {
-        errors.push("Inclua ao menos uma variável {{1}} no corpo.");
+        warnings.push(
+            "Sem variáveis {{n}} — ok para biblioteca local; a Meta exige exemplos se houver parâmetros na submissão."
+        );
     }
     // Ensure sequential {{1}}..{{n}}
     for (let i = 1; i <= variableCount; i++) {
@@ -89,7 +98,10 @@ export function validateTemplateDraft(
         }
     }
 
-    const fieldMappings = parseFieldMappings(input.fieldMappings);
+    const fieldMappings = parseFieldMappings(input.fieldMappings).slice(
+        0,
+        variableCount
+    );
     if (fieldMappings.length !== variableCount) {
         errors.push(
             `Mapeamentos (${fieldMappings.length}) devem coincidir com variáveis (${variableCount}).`
@@ -106,14 +118,20 @@ export function validateTemplateDraft(
         : [];
     while (exampleRow.length < variableCount) exampleRow.push("Exemplo");
     exampleRow = exampleRow.slice(0, variableCount);
-    if (exampleRow.some((e) => !e || e === "N/D")) {
+    if (
+        variableCount > 0 &&
+        exampleRow.some((e) => !e || e === "N/D")
+    ) {
         warnings.push("Preencha exemplos realistas para cada variável (Meta exige).");
     }
 
     const loadsPerMessage = Number(input.loadsPerMessage || 1);
     if (![1, 2, 3].includes(loadsPerMessage)) {
         errors.push("Cargas por mensagem deve ser 1, 2 ou 3.");
-    } else if (variableCount % loadsPerMessage !== 0) {
+    } else if (
+        variableCount > 0 &&
+        variableCount % loadsPerMessage !== 0
+    ) {
         warnings.push(
             "Quantidade de variáveis não é múltiplo de cargas/mensagem — confira o mapeamento."
         );

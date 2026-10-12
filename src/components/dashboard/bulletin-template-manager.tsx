@@ -90,17 +90,24 @@ import {
 } from "@/modules/datafy/campaigns/bulletin/library-display";
 import type { GroupedVersionDto } from "@/components/dashboard/bulletin-grouped-cards";
 import { BulletinTemplateEditorDialog } from "@/components/dashboard/bulletin-template-editor-dialog";
-import type { TemplateEditorDraft } from "@/modules/datafy/campaigns/bulletin/template-editor-helpers";
+import type {
+    EditorStepId,
+    TemplateEditorDraft,
+} from "@/modules/datafy/campaigns/bulletin/template-editor-helpers";
 import {
     buildCompatibleCardOptions,
     emptyCompatMessage,
 } from "@/modules/datafy/campaigns/bulletin/association-compat";
+import {
+    buildLocalTemplateCreatePayload,
+    buildLocalTemplatePatchPayload,
+    clientValidateTemplateDraft,
+    fieldErrorsFromApiDetails,
+    firstStepFromFieldErrors,
+    type TemplateFieldErrors,
+} from "@/modules/datafy/campaigns/bulletin/template-local-save";
 
-type ButtonsDraft = {
-    enabled: boolean;
-    grantText: string;
-    denyText: string;
-};
+type ButtonsDraft = TemplateEditorDraft["buttons"];
 
 type ManagedItem = {
     id: string;
@@ -176,26 +183,6 @@ function buttonsFromItem(item: ManagedItem): ButtonsDraft {
     };
 }
 
-function buttonsPayload(d: ButtonsDraft) {
-    if (!d.enabled) return { enabled: false, purpose: "consent_offers", buttons: [] };
-    return {
-        enabled: true,
-        purpose: "consent_offers",
-        buttons: [
-            {
-                type: "QUICK_REPLY",
-                text: d.grantText.trim() || "Sim, quero ofertas",
-                payload: "consent_grant_offers",
-            },
-            {
-                type: "QUICK_REPLY",
-                text: d.denyText.trim() || "Não quero receber",
-                payload: "consent_deny_offers",
-            },
-        ],
-    };
-}
-
 function syncMappingsToBody(body: string, mappings: string[], examples: string[]) {
     const vars = new Set<number>();
     for (const m of body.matchAll(/\{\{(\d+)\}\}/g)) {
@@ -267,6 +254,10 @@ export function BulletinTemplateManager({
     const [editorMode, setEditorMode] = useState<"create" | "edit">("create");
     const [editingId, setEditingId] = useState<string | null>(null);
     const [draft, setDraft] = useState<DraftForm>(emptyDraft());
+    const [editorFieldErrors, setEditorFieldErrors] =
+        useState<TemplateFieldErrors>({});
+    const [editorForceStep, setEditorForceStep] =
+        useState<EditorStepId | null>(null);
     const [saving, setSaving] = useState(false);
     const [submitting, setSubmitting] = useState<string | null>(null);
     const [previewId, setPreviewId] = useState<string | null>(null);
@@ -396,6 +387,8 @@ export function BulletinTemplateManager({
         setEditorMode("create");
         setEditingId(null);
         setDraft(emptyDraft());
+        setEditorFieldErrors({});
+        setEditorForceStep(null);
         setEditorOpen(true);
     };
 
@@ -419,33 +412,48 @@ export function BulletinTemplateManager({
                   : 1) as 1 | 2 | 3,
             description: item.description || "",
         });
+        setEditorFieldErrors({});
+        setEditorForceStep(null);
         setEditorOpen(true);
     };
 
     const onBodyChange = (bodyText: string) => {
-        const synced = syncMappingsToBody(
-            bodyText,
-            draft.fieldMappings,
-            draft.exampleRow
-        );
-        setDraft((d) => ({
-            ...d,
-            bodyText,
-            fieldMappings: synced.fieldMappings,
-            exampleRow: synced.exampleRow,
-        }));
+        setDraft((d) => {
+            const synced = syncMappingsToBody(
+                bodyText,
+                d.fieldMappings,
+                d.exampleRow
+            );
+            return {
+                ...d,
+                bodyText,
+                fieldMappings: synced.fieldMappings,
+                exampleRow: synced.exampleRow,
+            };
+        });
+        setEditorFieldErrors((prev) => {
+            if (!prev.bodyText && !prev.fieldMappings) return prev;
+            const next = { ...prev };
+            delete next.bodyText;
+            delete next.fieldMappings;
+            return next;
+        });
     };
 
     const saveDraft = async () => {
+        const client = clientValidateTemplateDraft(draft);
+        if (!client.ok) {
+            setEditorFieldErrors(client.fieldErrors);
+            setEditorForceStep(client.firstStep);
+            toast.error(
+                client.messages[0] ||
+                    "Não foi possível salvar. Verifique os campos."
+            );
+            return;
+        }
+
         setSaving(true);
         try {
-            const payload = {
-                ...draft,
-                headerText: draft.headerText || null,
-                footerText: draft.footerText || null,
-                description: draft.description || null,
-                buttons: buttonsPayload(draft.buttons),
-            };
             const res =
                 editorMode === "create"
                     ? await fetch(
@@ -455,10 +463,9 @@ export function BulletinTemplateManager({
                               headers: {
                                   "Content-Type": "application/json",
                               },
-                              body: JSON.stringify({
-                                  action: "create",
-                                  ...payload,
-                              }),
+                              body: JSON.stringify(
+                                  buildLocalTemplateCreatePayload(draft)
+                              ),
                           }
                       )
                     : await fetch(
@@ -468,12 +475,24 @@ export function BulletinTemplateManager({
                               headers: {
                                   "Content-Type": "application/json",
                               },
-                              body: JSON.stringify(payload),
+                              body: JSON.stringify(
+                                  buildLocalTemplatePatchPayload(draft)
+                              ),
                           }
                       );
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                toast.error(data.message || "Não foi possível salvar");
+                const fromApi =
+                    (data.fieldErrors as TemplateFieldErrors | undefined) ||
+                    fieldErrorsFromApiDetails(data.details);
+                if (Object.keys(fromApi).length) {
+                    setEditorFieldErrors(fromApi);
+                    setEditorForceStep(firstStepFromFieldErrors(fromApi));
+                }
+                toast.error(
+                    data.message ||
+                        "Não foi possível salvar. Tente novamente."
+                );
                 return;
             }
             toast.success(
@@ -481,10 +500,12 @@ export function BulletinTemplateManager({
                     ? "Template criado"
                     : "Template atualizado"
             );
+            setEditorFieldErrors({});
+            setEditorForceStep(null);
             setEditorOpen(false);
             void load({ silent: true });
         } catch {
-            toast.error("Erro ao salvar template");
+            toast.error("Não foi possível salvar. Tente novamente.");
         } finally {
             setSaving(false);
         }
@@ -1991,6 +2012,9 @@ export function BulletinTemplateManager({
                 setDraft={setDraft}
                 fieldOpts={fieldOpts}
                 saving={saving}
+                fieldErrors={editorFieldErrors}
+                forceStep={editorForceStep}
+                onForceStepConsumed={() => setEditorForceStep(null)}
                 technicalNameLocked={
                     editorMode === "edit" &&
                     items.find((i) => i.id === editingId)?.remoteStatus ===
@@ -1998,7 +2022,11 @@ export function BulletinTemplateManager({
                 }
                 onBodyChange={onBodyChange}
                 onSave={() => void saveDraft()}
-                onClose={() => setEditorOpen(false)}
+                onClose={() => {
+                    setEditorOpen(false);
+                    setEditorFieldErrors({});
+                    setEditorForceStep(null);
+                }}
             />
 
             <AlertDialog

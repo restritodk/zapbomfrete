@@ -12,34 +12,32 @@ import {
     upsertBuiltinOverride,
 } from "@/modules/datafy/campaigns/bulletin/managed-registry";
 import { validateTemplateDraft } from "@/modules/datafy/campaigns/bulletin/template-validation";
+import {
+    formatLocalTemplateZodError,
+    localTemplateButtonsSchema,
+} from "@/modules/datafy/campaigns/bulletin/template-local-save";
 
 export const dynamic = "force-dynamic";
 
 const draftSchema = z.object({
-    technicalName: z.string().min(3).max(64).optional(),
-    displayName: z.string().min(1).max(120).optional(),
+    technicalName: z
+        .string()
+        .trim()
+        .min(3, "Informe o nome técnico do template.")
+        .max(64)
+        .optional(),
+    displayName: z
+        .string()
+        .trim()
+        .min(1, "Informe o nome de exibição.")
+        .max(120)
+        .optional(),
     category: z.enum(["MARKETING", "UTILITY", "AUTHENTICATION"]).optional(),
     headerText: z.string().max(120).optional().nullable(),
-    bodyText: z.string().min(1).max(2000).optional(),
+    bodyText: z.string().min(1, "Informe o corpo da mensagem.").max(2000).optional(),
     footerText: z.string().max(120).optional().nullable(),
-    buttons: z
-        .object({
-            enabled: z.boolean(),
-            purpose: z.string().optional(),
-            buttons: z
-                .array(
-                    z.object({
-                        type: z.string().optional(),
-                        text: z.string().max(25),
-                        payload: z.string().max(64).optional(),
-                    })
-                )
-                .max(3)
-                .optional(),
-        })
-        .optional()
-        .nullable(),
-    fieldMappings: z.array(z.string()).min(1).max(60).optional(),
+    buttons: localTemplateButtonsSchema,
+    fieldMappings: z.array(z.string()).max(60).optional(),
     exampleRow: z.array(z.string()).max(60).optional(),
     loadsPerMessage: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     description: z.string().max(500).optional().nullable(),
@@ -109,8 +107,14 @@ export async function PATCH(
     const body = await request.json().catch(() => null);
     const parsed = draftSchema.safeParse(body);
     if (!parsed.success) {
+        const formatted = formatLocalTemplateZodError(parsed.error);
         return NextResponse.json(
-            { status: false, message: "Payload inválido", details: parsed.error.flatten() },
+            {
+                status: false,
+                message: formatted.message,
+                details: parsed.error.flatten(),
+                fieldErrors: formatted.fieldErrors,
+            },
             { status: 400 }
         );
     }

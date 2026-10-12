@@ -45,7 +45,10 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { META_BODY_MAX } from "@/modules/datafy/campaigns/bulletin/template-validation";
+import {
+    META_BODY_MAX,
+    countTemplateBodyChars,
+} from "@/modules/datafy/campaigns/bulletin/template-validation";
 import {
     EDITOR_STEPS,
     fillPreviewFromExamples,
@@ -55,6 +58,11 @@ import {
     type EditorStepId,
     type TemplateEditorDraft,
 } from "@/modules/datafy/campaigns/bulletin/template-editor-helpers";
+import {
+    clientValidateTemplateDraft,
+    sanitizeTechnicalNameInput,
+    type TemplateFieldErrors,
+} from "@/modules/datafy/campaigns/bulletin/template-local-save";
 
 type FieldOpt = { key: string; label: string };
 
@@ -65,6 +73,9 @@ type Props = {
     setDraft: Dispatch<SetStateAction<TemplateEditorDraft>>;
     fieldOpts: FieldOpt[];
     saving: boolean;
+    fieldErrors?: TemplateFieldErrors;
+    forceStep?: EditorStepId | null;
+    onForceStepConsumed?: () => void;
     technicalNameLocked?: boolean;
     onBodyChange: (body: string) => void;
     onSave: () => void;
@@ -87,6 +98,9 @@ export function BulletinTemplateEditorDialog({
     setDraft,
     fieldOpts,
     saving,
+    fieldErrors = {},
+    forceStep = null,
+    onForceStepConsumed,
     technicalNameLocked,
     onBodyChange,
     onSave,
@@ -96,6 +110,7 @@ export function BulletinTemplateEditorDialog({
     const [baseline, setBaseline] = useState<TemplateEditorDraft | null>(null);
     const [discardOpen, setDiscardOpen] = useState(false);
     const [mobilePreview, setMobilePreview] = useState(false);
+    const [localErrors, setLocalErrors] = useState<TemplateFieldErrors>({});
 
     useEffect(() => {
         if (open) {
@@ -103,13 +118,56 @@ export function BulletinTemplateEditorDialog({
             setBaseline(structuredClone(draft));
             setDiscardOpen(false);
             setMobilePreview(false);
+            setLocalErrors({});
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional open-edge snapshot
     }, [open]);
 
+    useEffect(() => {
+        if (forceStep) {
+            setStep(forceStep);
+            onForceStepConsumed?.();
+        }
+    }, [forceStep, onForceStepConsumed]);
+
+    useEffect(() => {
+        setLocalErrors(fieldErrors);
+    }, [fieldErrors]);
+
     const dirty = isDraftDirty(draft, baseline);
-    const bodyLen = draft.bodyText.length;
+    const bodyLen = countTemplateBodyChars(draft.bodyText);
     const bodyOver = bodyLen > META_BODY_MAX;
+    const errors = { ...localErrors, ...fieldErrors };
+
+    const goNext = () => {
+        if (step === "info") {
+            const check = clientValidateTemplateDraft(draft);
+            const infoKeys: Array<keyof TemplateFieldErrors> = [
+                "technicalName",
+                "displayName",
+                "category",
+                "loadsPerMessage",
+            ];
+            const blocked = infoKeys.filter((k) => check.fieldErrors[k]);
+            if (blocked.length) {
+                const nextErr: TemplateFieldErrors = {};
+                for (const k of blocked) nextErr[k] = check.fieldErrors[k];
+                setLocalErrors((prev) => ({ ...prev, ...nextErr }));
+                return;
+            }
+        }
+        setStep(nextEditorStep(step));
+    };
+
+    const handleSaveClick = () => {
+        const check = clientValidateTemplateDraft(draft);
+        if (!check.ok) {
+            setLocalErrors(check.fieldErrors);
+            setStep(check.firstStep);
+            return;
+        }
+        onSave();
+    };
     const previewBody = useMemo(
         () => fillPreviewFromExamples(draft.bodyText, draft.exampleRow),
         [draft.bodyText, draft.exampleRow]
@@ -323,44 +381,80 @@ export function BulletinTemplateEditorDialog({
                                             <Input
                                                 className={cn(
                                                     fieldClass,
-                                                    "font-mono text-sm"
+                                                    "font-mono text-sm",
+                                                    errors.technicalName &&
+                                                        "border-red-300 focus-visible:ring-red-200"
                                                 )}
                                                 value={draft.technicalName}
                                                 disabled={technicalNameLocked}
-                                                onChange={(e) =>
+                                                onChange={(e) => {
+                                                    const technicalName =
+                                                        sanitizeTechnicalNameInput(
+                                                            e.target.value
+                                                        );
                                                     setDraft((d) => ({
                                                         ...d,
-                                                        technicalName: e.target
-                                                            .value
-                                                            .toLowerCase()
-                                                            .replace(
-                                                                /[^a-z0-9_]/g,
-                                                                ""
-                                                            ),
-                                                    }))
-                                                }
-                                                placeholder="boletim_frete_1"
+                                                        technicalName,
+                                                    }));
+                                                    setLocalErrors((prev) => {
+                                                        if (!prev.technicalName)
+                                                            return prev;
+                                                        const next = {
+                                                            ...prev,
+                                                        };
+                                                        delete next.technicalName;
+                                                        return next;
+                                                    });
+                                                }}
+                                                placeholder="ex.: boletim_frete_1"
+                                                autoComplete="off"
                                             />
-                                            <p className="text-[11px] text-slate-400">
-                                                Apenas a–z, 0–9 e underscore
-                                            </p>
+                                            {errors.technicalName ? (
+                                                <p className="text-[11px] text-red-600">
+                                                    {errors.technicalName}
+                                                </p>
+                                            ) : (
+                                                <p className="text-[11px] text-slate-400">
+                                                    Obrigatório · a–z, 0–9 e _
+                                                    · não é preenchido
+                                                    automaticamente
+                                                </p>
+                                            )}
                                         </div>
                                         <div className="space-y-2 min-w-0">
                                             <Label className={labelClass}>
                                                 Nome de exibição
                                             </Label>
                                             <Input
-                                                className={fieldClass}
+                                                className={cn(
+                                                    fieldClass,
+                                                    errors.displayName &&
+                                                        "border-red-300 focus-visible:ring-red-200"
+                                                )}
                                                 value={draft.displayName}
-                                                onChange={(e) =>
+                                                onChange={(e) => {
                                                     setDraft((d) => ({
                                                         ...d,
                                                         displayName:
                                                             e.target.value,
-                                                    }))
-                                                }
+                                                    }));
+                                                    setLocalErrors((prev) => {
+                                                        if (!prev.displayName)
+                                                            return prev;
+                                                        const next = {
+                                                            ...prev,
+                                                        };
+                                                        delete next.displayName;
+                                                        return next;
+                                                    });
+                                                }}
                                                 placeholder="Boletim frete 1 carga"
                                             />
+                                            {errors.displayName ? (
+                                                <p className="text-[11px] text-red-600">
+                                                    {errors.displayName}
+                                                </p>
+                                            ) : null}
                                         </div>
                                         <div className="space-y-2 min-w-0">
                                             <Label className={labelClass}>
@@ -509,7 +603,12 @@ export function BulletinTemplateEditorDialog({
                                                 "*ATUALIZAÇÃO*\nOrigem: {{1}}\nDestino: {{2}}"
                                             }
                                         />
-                                        {bodyOver ? (
+                                        {errors.bodyText ? (
+                                            <p className="text-xs text-red-600 inline-flex items-center gap-1.5">
+                                                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                                                {errors.bodyText}
+                                            </p>
+                                        ) : bodyOver ? (
                                             <p className="text-xs text-red-600 inline-flex items-center gap-1.5">
                                                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                                                 Corpo ultrapassa o limite Meta
@@ -713,6 +812,16 @@ export function BulletinTemplateEditorDialog({
                                                 />
                                             </div>
                                         </div>
+                                        {errors.buttons ? (
+                                            <p className="text-xs text-red-600">
+                                                {errors.buttons}
+                                            </p>
+                                        ) : null}
+                                        {errors.fieldMappings ? (
+                                            <p className="text-xs text-red-600">
+                                                {errors.fieldMappings}
+                                            </p>
+                                        ) : null}
                                         {draft.buttons.enabled && (
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                                 <div className="space-y-1.5 min-w-0">
@@ -798,8 +907,16 @@ export function BulletinTemplateEditorDialog({
                                             <dt className="text-[11px] text-slate-400">
                                                 Nome técnico
                                             </dt>
-                                            <dd className="font-mono font-medium text-[#0f2744] break-all mt-0.5">
-                                                {draft.technicalName || "—"}
+                                            <dd
+                                                className={cn(
+                                                    "font-mono font-medium break-all mt-0.5",
+                                                    draft.technicalName
+                                                        ? "text-[#0f2744]"
+                                                        : "text-red-600"
+                                                )}
+                                            >
+                                                {draft.technicalName ||
+                                                    "— (obrigatório)"}
                                             </dd>
                                         </div>
                                         <div className="min-w-0">
@@ -908,9 +1025,7 @@ export function BulletinTemplateEditorDialog({
                                     size="sm"
                                     className={premiumBtnOutline}
                                     disabled={saving}
-                                    onClick={() =>
-                                        setStep(nextEditorStep(step))
-                                    }
+                                    onClick={goNext}
                                 >
                                     Próxima
                                     <ChevronRight className="h-4 w-4 ml-1" />
@@ -918,6 +1033,11 @@ export function BulletinTemplateEditorDialog({
                             )}
                         </div>
                         <div className="flex items-center gap-2 justify-end">
+                            {errors._form && (
+                                <span className="text-[11px] text-red-600 hidden sm:inline max-w-[220px] truncate">
+                                    {errors._form}
+                                </span>
+                            )}
                             {dirty && (
                                 <span className="text-[11px] text-amber-700 hidden sm:inline whitespace-nowrap">
                                     Alterações não salvas
@@ -936,7 +1056,7 @@ export function BulletinTemplateEditorDialog({
                                 type="button"
                                 className={premiumBtn}
                                 disabled={saving}
-                                onClick={() => onSave()}
+                                onClick={handleSaveClick}
                             >
                                 {saving && (
                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
