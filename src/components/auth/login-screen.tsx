@@ -115,6 +115,9 @@ function LoginCard({
           src="/media/logo-transparent.png"
           alt="Bom Frete Logística e Transportes"
           className="mx-auto mb-6 h-auto w-[clamp(110px,22vw,150px)] max-w-[55%] object-contain"
+          width={150}
+          height={150}
+          decoding="async"
         />
         <h2 className="text-[clamp(1.5rem,2vw,1.85rem)] font-bold tracking-tight text-[#061C3C]">
           Acesse sua conta
@@ -366,9 +369,12 @@ export function LoginScreen() {
             <div className="shrink-0">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="/media/logo-principal.png"
-                alt="ZapPro"
+                src="/media/logo-white.png"
+                alt="ZapBomFrete — Bom Frete Logística e Transportes"
                 className="h-auto w-[clamp(130px,14vw,170px)] max-w-full object-contain drop-shadow-[0_10px_28px_rgba(0,0,0,0.4)]"
+                width={170}
+                height={170}
+                decoding="async"
               />
             </div>
 
@@ -443,9 +449,12 @@ export function LoginScreen() {
             <div className="relative z-10 space-y-4">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="/media/logo-principal.png"
-                alt="ZapPro"
+                src="/media/logo-white.png"
+                alt="ZapBomFrete — Bom Frete Logística e Transportes"
                 className="h-auto w-[clamp(120px,40vw,160px)] max-w-full object-contain"
+                width={160}
+                height={160}
+                decoding="async"
               />
               <div>
                 <div className="mb-3 h-[3px] w-12 rounded-full bg-gradient-to-r from-[#2E9B4A] to-[#1269D3]" />

@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { isPublicApiPath } from "@/lib/public-api-routes";
+import { isPublicStaticAssetPath } from "@/lib/public-static-assets";
 import { publicUrl, safeCallbackPath } from "@/lib/public-origin";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
@@ -21,18 +22,8 @@ export async function proxy(request: NextRequest) {
     // Check if it's a public route
     const isPublicRoute = publicRoutes.some(route => pathname.startsWith(route));
 
-    // Allow Next.js internals, favicon and uploaded branding assets
-    if (
-        pathname.startsWith("/_next") ||
-        pathname === "/favicon.ico" ||
-        pathname.startsWith("/branding/")
-    ) {
-        return NextResponse.next();
-    }
-
-    // Allow known static asset extensions in root path only (e.g. /vercel.svg)
-    const staticExtensions = [".svg", ".ico", ".png", ".jpg", ".jpeg", ".webp", ".woff", ".woff2", ".ttf"];
-    if (pathname.lastIndexOf("/") === 0 && staticExtensions.some(ext => pathname.endsWith(ext))) {
+    // Next.js public/ assets (incl. /media/* login logos) — must not require session
+    if (isPublicStaticAssetPath(pathname)) {
         return NextResponse.next();
     }
 
