@@ -39,6 +39,7 @@ import {
     CirclePlus,
     ShieldCheck,
     Smartphone,
+    Layers,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -80,11 +81,15 @@ import {
     shouldAutoPickFallbackTemplate,
     templateKeyOf,
 } from "@/modules/datafy/campaigns/campaign-launch";
-import {
-    BulletinCampaignStep3,
-    type BulletinSendPickMode,
-} from "@/components/dashboard/bulletin-campaign-step3";
+import { BulletinCampaignValidation } from "@/components/dashboard/bulletin-campaign-step3";
+import { BulletinCampaignStep1 } from "@/components/dashboard/bulletin-campaign-step1";
 import type { GroupedVersionDto } from "@/components/dashboard/bulletin-grouped-cards";
+import {
+    flattenBulletinSelections,
+    resolveCampaignPreviewText,
+    validateBulletinPicks,
+    type BulletinVersionPick,
+} from "@/modules/datafy/campaigns/bulletin/selection";
 import {
     buildEstimateCopy,
     CAMPAIGN_DELAY_SEC_MAX,
@@ -278,7 +283,7 @@ const EMOJIS = ["👋", "✅", "🚚", "📦", "⭐", "🔥", "💪", "📍", "�
 const WIZARD_STEPS = [
     { n: 1, title: "Informações e mensagem", short: "Mensagem" },
     { n: 2, title: "Seleção de destinatários", short: "Destinatários" },
-    { n: 3, title: "Template e aprovação", short: "Template" },
+    { n: 3, title: "Validação de envio", short: "Validação" },
     { n: 4, title: "Programação", short: "Programação" },
     { n: 5, title: "Revisão e confirmação", short: "Revisão" },
 ] as const;
@@ -594,19 +599,55 @@ export function DatafyCampaignsPanel() {
         useState<BulletinDeliveryMode | null>(null);
     const [completeAssessment, setCompleteAssessment] =
         useState<CompleteBulletinAssessment | null>(null);
-    /** Grouped bulletin picker (Etapa 3) — complete vs single card */
-    const [groupedPickMode, setGroupedPickMode] =
-        useState<BulletinSendPickMode | null>(null);
-    const [groupedVersionId, setGroupedVersionId] = useState<string | null>(
+    /** Etapa 1 — boletins selecionados (fonte da verdade para parts/preview/fila) */
+    const [bulletinSelections, setBulletinSelections] = useState<
+        BulletinVersionPick[]
+    >([]);
+    const [preselectVersionId, setPreselectVersionId] = useState<string | null>(
         null
     );
-    const [groupedVersion, setGroupedVersion] =
-        useState<GroupedVersionDto | null>(null);
-    const [groupedCardPosition, setGroupedCardPosition] = useState<
-        number | null
-    >(null);
-    const [groupedPreviewIndex, setGroupedPreviewIndex] = useState(0);
     const [confirmGroupedSend, setConfirmGroupedSend] = useState(false);
+    const preparedBulletin = useMemo(
+        () => flattenBulletinSelections(bulletinSelections),
+        [bulletinSelections]
+    );
+    const groupedVersion = bulletinSelections[0]
+        ? ({
+              bundleId: bulletinSelections[0].bundleId,
+              publicKey: bulletinSelections[0].publicKey,
+              name: bulletinSelections[0].title,
+              versionId: bulletinSelections[0].versionId,
+              version: bulletinSelections[0].version,
+              isCurrent: bulletinSelections[0].isCurrent,
+              title: bulletinSelections[0].title,
+              loadCount: bulletinSelections[0].loadCount,
+              cardCount: bulletinSelections[0].cardCount,
+              approvalStatus: bulletinSelections[0].approvalStatus,
+              approvedCardCount: bulletinSelections[0].approvedCardCount,
+              createdAt: "",
+              updatedAt: "",
+              cards: bulletinSelections[0].cards.map((c) => ({
+                  id: c.cardId,
+                  position: c.position,
+                  loadIndexes: c.loadIndexes,
+                  loadSummary: c.loadSummary,
+                  technicalName: c.technicalName,
+                  displayName: c.displayName,
+                  approvalStatus: c.approvalStatus,
+                  lastSyncedAt: null,
+                  bodyPreview: c.bodyPreview,
+                  libraryTemplateId: c.libraryTemplateId,
+              })),
+          } as GroupedVersionDto)
+        : null;
+    const groupedVersionId = preparedBulletin.meta.primaryVersionId;
+    const groupedPickMode = preparedBulletin.meta.bulletinSendMode;
+    const groupedCardPosition =
+        bulletinSelections.length === 1 &&
+        bulletinSelections[0].mode === "selected_cards" &&
+        bulletinSelections[0].cardPositions.length === 1
+            ? bulletinSelections[0].cardPositions[0]
+            : null;
     const [templateKey, setTemplateKey] = useState("");
     const [bodyVars, setBodyVars] = useState<string[]>(["fullName"]);
     const [headerImageUrl, setHeaderImageUrl] = useState<string | null>(null);
@@ -1103,114 +1144,42 @@ export function DatafyCampaignsPanel() {
         }
     }, []);
 
-    // Deep-link: /dashboard/broadcast?bulletin=1&versionId=…&mode=complete_bulletin
+    // Deep-link: /dashboard/broadcast?bulletin=1&versionId=…
     useEffect(() => {
         try {
             const sp = new URLSearchParams(window.location.search);
             const versionId = sp.get("versionId");
-            const mode = sp.get("mode") as BulletinSendPickMode | null;
-            if (!versionId || !mode) return;
+            if (!versionId) return;
             setContentKind("bulletin");
             setBulletinDeliveryMode("split_templates");
-            setGroupedPickMode(mode);
-            setGroupedVersionId(versionId);
+            setPreselectVersionId(versionId);
             setWizardOpen(true);
-            setStep(3);
-            void (async () => {
-                const prep = await fetch(
-                    "/api/channels/datafy/bulletins/grouped",
-                    {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            action: "prepare_campaign",
-                            versionId,
-                            mode,
-                            cardPosition: null,
-                        }),
-                    }
-                );
-                const json = await prep.json().catch(() => ({}));
-                if (!prep.ok) {
-                    toast.error(json.message || "Falha ao carregar boletim");
-                    return;
-                }
-                setBulletinParts(json.data.parts as CampaignMessagePart[]);
-                setName(
-                    `${json.data.meta.title} · ${json.data.meta.publicKey} v${json.data.meta.version}`
-                );
-                const detail = await fetch(
-                    `/api/channels/datafy/bulletins/grouped?versionId=${encodeURIComponent(versionId)}`
-                );
-                const dJson = await detail.json().catch(() => ({}));
-                if (detail.ok && dJson.data?.version) {
-                    setGroupedVersion(dJson.data.version as GroupedVersionDto);
-                }
-                toast.success("Boletim agrupado carregado na Etapa 3");
-            })();
+            setStep(1);
+            toast.success(
+                "Boletim carregado — confirme os cards na Etapa 1"
+            );
         } catch {
             /* ignore */
         }
     }, []);
 
-    const applyGroupedBulletinSelection = useCallback(
-        async (next: {
-            pickMode: BulletinSendPickMode;
-            versionId: string;
-            version: GroupedVersionDto | null;
-            cardPosition: number | null;
-            previewIndex: number;
-        }) => {
-            setGroupedPickMode(next.pickMode);
-            setGroupedVersionId(next.versionId || null);
-            setGroupedVersion(next.version);
-            setGroupedCardPosition(next.cardPosition);
-            setGroupedPreviewIndex(next.previewIndex);
-            setConfirmGroupedSend(false);
-            if (!next.versionId || !next.version) return;
-            if (
-                next.pickMode === "complete_bulletin" &&
-                next.version.approvedCardCount !== next.version.cardCount
-            ) {
-                toast.error(
-                    `Boletim incompleto: ${next.version.approvedCardCount}/${next.version.cardCount} cards aprovados`
-                );
-                return;
-            }
-            try {
-                const res = await fetch(
-                    "/api/channels/datafy/bulletins/grouped",
-                    {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            action: "prepare_campaign",
-                            versionId: next.versionId,
-                            mode: next.pickMode,
-                            cardPosition: next.cardPosition,
-                        }),
-                    }
-                );
-                const json = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                    throw new Error(json.message || "Falha ao preparar boletim");
-                }
-                setBulletinParts(json.data.parts as CampaignMessagePart[]);
-                setBulletinDeliveryMode("split_templates");
-                setContentKind("bulletin");
-                if (!name.trim()) {
-                    setName(
-                        `${json.data.meta.title} · ${json.data.meta.publicKey} v${json.data.meta.version}`
-                    );
-                }
-            } catch (e) {
-                toast.error(
-                    e instanceof Error ? e.message : "Erro ao preparar boletim"
-                );
-            }
-        },
-        [name]
-    );
+    // Sync parts/preview from Etapa 1 bulletin selection (single source of truth)
+    useEffect(() => {
+        if (contentKind !== "bulletin") return;
+        if (!bulletinSelections.length) {
+            setBulletinParts([]);
+            return;
+        }
+        const prepared = flattenBulletinSelections(bulletinSelections);
+        setBulletinParts(prepared.parts);
+        setBulletinDeliveryMode("split_templates");
+        setPreviewPartIndex(0);
+        setConfirmGroupedSend(false);
+        if (!name.trim() && prepared.meta.selections[0]) {
+            const s = prepared.meta.selections[0];
+            setName(`${s.title} · ${s.publicKey} v${s.version}`);
+        }
+    }, [bulletinSelections, contentKind]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleImportGroup = async () => {
         if (!groupSessionId || !selectedGroupJids.size) {
@@ -1477,6 +1446,9 @@ export function DatafyCampaignsPanel() {
         );
         setContentKind("message");
         setBulletinParts([]);
+        setBulletinSelections([]);
+        setPreselectVersionId(null);
+        setConfirmGroupedSend(false);
         setBulletinAnalysis(null);
         setBulletinDeliveryMode(null);
         setCompleteAssessment(null);
@@ -1793,25 +1765,17 @@ export function DatafyCampaignsPanel() {
                 toast.error("Analise o boletim com ao menos uma carga/parte");
                 return;
             }
-            if (
-                bulletinDeliveryMode === "split_templates" &&
-                groupedVersion &&
-                !confirmGroupedSend &&
-                !effectiveDryRun
-            ) {
+            const pickValidation = validateBulletinPicks(bulletinSelections);
+            if (!pickValidation.ok) {
                 toast.error(
-                    "Confirme o envio do boletim/versão selecionado na Etapa 5."
+                    pickValidation.errors[0] ||
+                        "Seleção de boletins inválida — volte à Etapa 1."
                 );
                 return;
             }
-            if (
-                bulletinDeliveryMode === "split_templates" &&
-                groupedPickMode === "complete_bulletin" &&
-                groupedVersion &&
-                groupedVersion.approvedCardCount !== groupedVersion.cardCount
-            ) {
+            if (!confirmGroupedSend && !effectiveDryRun) {
                 toast.error(
-                    "Não é possível enviar boletim completo com cards pendentes."
+                    "Confirme o envio dos boletins/versões selecionados na Etapa 5."
                 );
                 return;
             }
@@ -2088,38 +2052,19 @@ export function DatafyCampaignsPanel() {
                     contentKind === "bulletin" ? bulletinParts : null,
                 bulletinMeta:
                     contentKind === "bulletin"
-                        ? groupedVersion
-                            ? {
-                                  title: groupedVersion.title,
-                                  publicKey: groupedVersion.publicKey,
-                                  version: groupedVersion.version,
-                                  loadCount: groupedVersion.loadCount,
-                                  partCount: bulletinParts.length,
-                                  cardCount: groupedVersion.cardCount,
-                                  approvedCardCount:
-                                      groupedVersion.approvedCardCount,
-                                  deliveryMode: bulletinDeliveryMode,
-                                  bulletinSendMode: groupedPickMode,
-                                  bulletinVersionId: groupedVersion.versionId,
-                                  bulletinCardPosition: groupedCardPosition,
-                              }
-                            : bulletinAnalysis
-                              ? {
-                                    title: bulletinAnalysis.title,
-                                    loadCount: bulletinAnalysis.loadCount,
-                                    partCount: bulletinParts.length,
-                                    deliveryMode: bulletinDeliveryMode,
-                                    warnings: bulletinAnalysis.warnings,
-                                }
-                              : null
+                        ? {
+                              ...preparedBulletin.meta,
+                              title:
+                                  preparedBulletin.meta.selections[0]?.title ||
+                                  name,
+                              partCount: bulletinParts.length,
+                              deliveryMode: "split_templates",
+                          }
                         : null,
-                bulletinVersionId: groupedVersionId,
+                bulletinVersionId: preparedBulletin.meta.primaryVersionId,
                 bulletinSendMode:
                     contentKind === "bulletin"
-                        ? groupedPickMode ||
-                          (bulletinDeliveryMode === "complete_single"
-                              ? "direct_freeform"
-                              : "legacy_parts")
+                        ? preparedBulletin.meta.bulletinSendMode
                         : null,
                 bulletinCardPosition: groupedCardPosition,
                 headerImageUrl,
@@ -2266,8 +2211,8 @@ export function DatafyCampaignsPanel() {
             mode = "split_templates";
         }
 
-        // Grouped bulletin selection owns messageParts — do not overwrite.
-        if (groupedVersionId) return;
+        // Etapa 1 bulletin library selection owns messageParts — do not overwrite.
+        if (bulletinSelections.length) return;
 
         if (mode === "complete_single") {
             setBulletinParts(
@@ -2295,32 +2240,55 @@ export function DatafyCampaignsPanel() {
         purpose,
         bulletinLibrary,
         bulletinDeliveryMode,
-        groupedVersionId,
+        bulletinSelections.length,
     ]);
 
-    const activePreviewText = useMemo(() => {
+    const activePreview = useMemo(() => {
         if (contentKind === "bulletin" && bulletinParts.length) {
-            return (
-                bulletinParts[previewPartIndex]?.bodyText ||
-                bulletinParts[0]?.bodyText ||
-                ""
-            );
+            return resolveCampaignPreviewText({
+                contentKind: "bulletin",
+                messageBody,
+                parts: bulletinParts,
+                partIndex: previewPartIndex,
+            });
         }
-        return messageBody
+        const text = messageBody
             .replace(/\{\{fullName\}\}/gi, "Maria Silva")
             .replace(/\{\{company\}\}/gi, "Transportadora Exemplo")
             .replace(/\{\{city\}\}/gi, "Curitiba")
             .replace(/\{\{state\}\}/gi, "PR")
             .replace(/\{\{waId\}\}/gi, "5541999999999")
             .replace(/\{\{category\}\}/gi, "Motorista");
+        // Template-selected message: prefer filled template body when available
+        if (
+            contentKind === "message" &&
+            contentMode === "existing" &&
+            selectedTemplate
+        ) {
+            const bodyComp = (
+                selectedTemplate.components as
+                    | Array<{ type?: string; text?: string }>
+                    | undefined
+            )?.find((c) => String(c.type || "").toUpperCase() === "BODY");
+            if (bodyComp?.text) {
+                return {
+                    text: bodyComp.text,
+                    partLabel: `Template ${selectedTemplate.name}`,
+                    partCount: 1,
+                };
+            }
+        }
+        return { text, partLabel: null, partCount: 1 };
     }, [
         contentKind,
+        contentMode,
         bulletinParts,
         previewPartIndex,
         messageBody,
+        selectedTemplate,
     ]);
 
-    const previewText = activePreviewText;
+    const previewText = activePreview.text;
 
     const filteredCrm = crmRows.filter((c) => {
         if (!contactSearch.trim()) return true;
@@ -2757,18 +2725,13 @@ export function DatafyCampaignsPanel() {
                                 </div>
                             </div>
 
-                            <div className="flex flex-wrap gap-2">
-                                <Button
+                            <div className="grid gap-3 sm:grid-cols-2">
+                                <button
                                     type="button"
-                                    size="sm"
-                                    variant={
-                                        contentKind === "message"
-                                            ? "default"
-                                            : "outline"
-                                    }
-                                    className="rounded-xl"
                                     onClick={() => {
                                         setContentKind("message");
+                                        setBulletinSelections([]);
+                                        setBulletinParts([]);
                                         setContentMode(
                                             purposeAllowsServiceWindowFreeform(
                                                 purpose
@@ -2780,56 +2743,84 @@ export function DatafyCampaignsPanel() {
                                                 : "existing"
                                         );
                                     }}
+                                    className={cn(
+                                        "rounded-2xl border px-4 py-4 text-left transition-all",
+                                        contentKind === "message"
+                                            ? "border-emerald-400 bg-emerald-50/70 shadow-sm ring-1 ring-emerald-200"
+                                            : "border-slate-200 bg-white hover:border-slate-300"
+                                    )}
                                 >
-                                    Mensagem comum
-                                </Button>
-                                <Button
+                                    <div className="flex items-start gap-3">
+                                        <div className="rounded-xl bg-sky-100/80 p-2 text-sky-800">
+                                            <FileText className="h-5 w-5" />
+                                        </div>
+                                        <div>
+                                            <p className="font-semibold text-slate-900">
+                                                Mensagem comum
+                                            </p>
+                                            <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                                                Escreva uma mensagem
+                                                personalizada para seus
+                                                destinatários.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </button>
+                                <button
                                     type="button"
-                                    size="sm"
-                                    variant={
-                                        contentKind === "bulletin"
-                                            ? "default"
-                                            : "outline"
-                                    }
-                                    className="rounded-xl"
                                     onClick={() => {
                                         setContentKind("bulletin");
-                                        setContentMode(
-                                            purposeAllowsServiceWindowFreeform(
-                                                purpose
-                                            ) ||
-                                                purposeUsesBaileysFreeform(
-                                                    purpose
-                                                )
-                                                ? "direct"
-                                                : "custom"
+                                        setContentMode("existing");
+                                        setBulletinDeliveryMode(
+                                            "split_templates"
                                         );
-                                        setBulletinDeliveryMode(null);
-                                        // Do not force UTILITY — load ads are usually MARKETING
                                         if (
                                             messageBody.startsWith("Olá, {{")
                                         ) {
                                             setMessageBody("");
                                         }
                                     }}
+                                    className={cn(
+                                        "rounded-2xl border px-4 py-4 text-left transition-all",
+                                        contentKind === "bulletin"
+                                            ? "border-emerald-400 bg-emerald-50/70 shadow-sm ring-1 ring-emerald-200"
+                                            : "border-slate-200 bg-white hover:border-slate-300"
+                                    )}
                                 >
-                                    Boletim de cargas
-                                </Button>
+                                    <div className="flex items-start gap-3">
+                                        <div className="rounded-xl bg-emerald-100/80 p-2 text-emerald-800">
+                                            <Layers className="h-5 w-5" />
+                                        </div>
+                                        <div>
+                                            <p className="font-semibold text-slate-900">
+                                                Boletim de cargas
+                                            </p>
+                                            <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                                                Selecione boletins aprovados e
+                                                envie todos os cards ou apenas
+                                                os desejados.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </button>
                             </div>
 
+                            {contentKind === "bulletin" ? (
+                                <BulletinCampaignStep1
+                                    selections={bulletinSelections}
+                                    onChange={setBulletinSelections}
+                                    preselectVersionId={preselectVersionId}
+                                />
+                            ) : null}
+
+                            {contentKind === "message" ? (
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between gap-2">
                                     <Label className="text-slate-700">
-                                        {contentKind === "bulletin"
-                                            ? "Boletim completo *"
-                                            : "Mensagem *"}
+                                        Mensagem *
                                     </Label>
                                     <span className="text-[11px] tabular-nums text-slate-400">
                                         {messageBody.length} caracteres
-                                        {contentKind === "bulletin" &&
-                                        bulletinAnalysis
-                                            ? ` · ${bulletinAnalysis.loadCount} carga(s) · ${bulletinParts.length || bulletinAnalysis.partCount} msg(s)`
-                                            : ""}
                                     </span>
                                 </div>
                                 <Textarea
@@ -2837,17 +2828,8 @@ export function DatafyCampaignsPanel() {
                                     onChange={(e) =>
                                         setMessageBody(e.target.value)
                                     }
-                                    className={cn(
-                                        "resize-y text-[15px] leading-relaxed rounded-xl bg-white border-slate-200 focus-visible:ring-primary/30 shadow-sm whitespace-pre-wrap",
-                                        contentKind === "bulletin"
-                                            ? "min-h-[280px] font-sans"
-                                            : "min-h-[200px]"
-                                    )}
-                                    placeholder={
-                                        contentKind === "bulletin"
-                                            ? "Cole aqui o boletim completo (título, separadores, cargas, links e emojis)…"
-                                            : "Escreva a mensagem da campanha…"
-                                    }
+                                    className="resize-y text-[15px] leading-relaxed rounded-xl bg-white border-slate-200 focus-visible:ring-primary/30 shadow-sm whitespace-pre-wrap min-h-[200px]"
+                                    placeholder="Escreva a mensagem da campanha…"
                                 />
                                 <div
                                     data-testid="campaign-consent-buttons"
@@ -3099,261 +3081,6 @@ export function DatafyCampaignsPanel() {
                                     </div>
                                 </div>
 
-                                {contentKind === "bulletin" &&
-                                    bulletinAnalysis && (
-                                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600 space-y-1.5">
-                                            <p className="font-medium text-slate-700">
-                                                {bulletinAnalysis.title}
-                                            </p>
-                                            <p className="tabular-nums">
-                                                {bulletinAnalysis.loadCount}{" "}
-                                                carga(s) ·{" "}
-                                                {bulletinAnalysis.totalChars}{" "}
-                                                caracteres no texto ·{" "}
-                                                {bulletinParts.length ||
-                                                    bulletinAnalysis.partCount}{" "}
-                                                mensagem(ns) para envio
-                                                {bulletinParts.length > 0
-                                                    ? ` · prévia = conteúdo preparado (${bulletinParts.reduce((s, p) => s + (p.charCount || 0), 0)} chars nas partes)`
-                                                    : ""}
-                                            </p>
-                                            {bulletinParts.length > 0 && (
-                                                <ul className="space-y-0.5 text-[11px] text-slate-500">
-                                                    {bulletinParts.map((p) => (
-                                                        <li key={p.index}>
-                                                            {bulletinDeliveryMode ===
-                                                            "complete_single"
-                                                                ? "Mensagem única"
-                                                                : `Parte ${p.index + 1}`}
-                                                            :{" "}
-                                                            {p.loadIndexes
-                                                                ?.length || 0}{" "}
-                                                            carga(s) ·{" "}
-                                                            {p.charCount}/
-                                                            {bulletinDeliveryMode ===
-                                                            "complete_single"
-                                                                ? META_FREEFORM_TEXT_MAX
-                                                                : META_TEMPLATE_BODY_MAX}{" "}
-                                                            chars
-                                                            {p.templateName
-                                                                ? ` · ${p.templateName}`
-                                                                : ""}
-                                                            {!p.readyForRealSend
-                                                                ? " · envio real bloqueado"
-                                                                : ""}
-                                                        </li>
-                                                    ))}
-                                                </ul>
-                                            )}
-                                            <p>
-                                                O tamanho do campo de texto não
-                                                equivale a uma mensagem Meta.
-                                                Escolha abaixo se envia o
-                                                boletim integral ou dividido.
-                                            </p>
-                                            {purpose === "utility" && (
-                                                <p className="text-amber-800">
-                                                    Divulgação de cargas costuma
-                                                    ser MARKETING na Meta —
-                                                    Utilidade pode ser rejeitada
-                                                    ou restringida.
-                                                </p>
-                                            )}
-                                            {bulletinAnalysis.warnings
-                                                .slice(0, 3)
-                                                .map((w) => (
-                                                    <p
-                                                        key={w}
-                                                        className="text-amber-800"
-                                                    >
-                                                        ⚠ {w}
-                                                    </p>
-                                                ))}
-                                        </div>
-                                    )}
-                                {contentKind === "bulletin" &&
-                                    bulletinAnalysis &&
-                                    bulletinAnalysis.loadCount > 0 && (
-                                        <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
-                                            <div>
-                                                <p className="text-sm font-medium text-slate-800">
-                                                    Como enviar o boletim?
-                                                </p>
-                                                <p className="text-[11px] text-muted-foreground mt-0.5">
-                                                    Não dividimos automaticamente
-                                                    sem a sua escolha. Link de
-                                                    grupo fica só no texto.
-                                                </p>
-                                            </div>
-                                            <div className="grid gap-2 sm:grid-cols-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setBulletinDeliveryMode(
-                                                            "complete_single"
-                                                        );
-                                                        if (
-                                                            purposeAllowsServiceWindowFreeform(
-                                                                purpose
-                                                            )
-                                                        ) {
-                                                            setContentMode(
-                                                                "direct"
-                                                            );
-                                                        }
-                                                    }}
-                                                    className={cn(
-                                                        "rounded-xl border p-3 text-left transition-all",
-                                                        bulletinDeliveryMode ===
-                                                            "complete_single"
-                                                            ? "border-emerald-600 bg-emerald-50/80 ring-1 ring-emerald-600/20"
-                                                            : "hover:border-foreground/20 hover:bg-muted/30"
-                                                    )}
-                                                >
-                                                    <p className="text-sm font-semibold">
-                                                        Boletim completo —
-                                                        Envio Direto
-                                                    </p>
-                                                    <p className="text-[11px] text-muted-foreground mt-1 leading-snug">
-                                                        Texto original integral
-                                                        (até {META_FREEFORM_TEXT_MAX}{" "}
-                                                        chars). Utilidade/Transacional
-                                                        com janela 24h; template
-                                                        APPROVED opcional para quem
-                                                        está fora da janela.
-                                                    </p>
-                                                    {completeAssessment && (
-                                                        <p
-                                                            className={cn(
-                                                                "text-[11px] mt-1.5 font-medium",
-                                                                completeAssessment.sizeReady
-                                                                    ? "text-emerald-800"
-                                                                    : "text-amber-800"
-                                                            )}
-                                                        >
-                                                            {completeAssessment.sizeReady
-                                                                ? `${completeAssessment.charCount}/${META_FREEFORM_TEXT_MAX} chars · ${completeAssessment.loadCount} cargas · 1 mensagem`
-                                                                : completeAssessment.sizeBlockReasons[0] ||
-                                                                  completeAssessment.blockReasons[0] ||
-                                                                  "Texto excede o limite de mensagem única"}
-                                                        </p>
-                                                    )}
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() =>
-                                                        setBulletinDeliveryMode(
-                                                            "split_templates"
-                                                        )
-                                                    }
-                                                    className={cn(
-                                                        "rounded-xl border p-3 text-left transition-all",
-                                                        bulletinDeliveryMode ===
-                                                            "split_templates"
-                                                            ? "border-emerald-600 bg-emerald-50/80 ring-1 ring-emerald-600/20"
-                                                            : "hover:border-foreground/20 hover:bg-muted/30"
-                                                    )}
-                                                >
-                                                    <p className="text-sm font-semibold">
-                                                        Envio dividido por
-                                                        templates
-                                                    </p>
-                                                    <p className="text-[11px] text-muted-foreground mt-1 leading-snug">
-                                                        1–3 cargas por mensagem
-                                                        com templates APPROVED
-                                                        (corpo ≤{" "}
-                                                        {META_TEMPLATE_BODY_MAX}{" "}
-                                                        chars). Adequado a
-                                                        marketing.
-                                                    </p>
-                                                </button>
-                                            </div>
-                                            {!bulletinDeliveryMode &&
-                                                deliveryModeNeedsUserChoice(
-                                                    bulletinAnalysis,
-                                                    2
-                                                ) && (
-                                                    <p className="text-[11px] text-amber-800">
-                                                        Selecione uma modalidade
-                                                        para gerar a prévia e
-                                                        liberar o envio.
-                                                    </p>
-                                                )}
-                                            {bulletinDeliveryMode ===
-                                                "complete_single" &&
-                                                completeAssessment &&
-                                                !completeAssessment.sizeReady && (
-                                                    <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-[11px] text-amber-950 space-y-1">
-                                                        {completeAssessment.sizeBlockReasons.map(
-                                                            (r) => (
-                                                                <p key={r}>
-                                                                    {r}
-                                                                </p>
-                                                            )
-                                                        )}
-                                                        <p className="font-medium pt-1">
-                                                            Alternativa: use
-                                                            “Envio dividido por
-                                                            templates” (corpo ≤{" "}
-                                                            {META_TEMPLATE_BODY_MAX}{" "}
-                                                            chars por parte).
-                                                        </p>
-                                                    </div>
-                                                )}
-                                            {bulletinDeliveryMode ===
-                                                "complete_single" &&
-                                                completeAssessment?.sizeReady && (
-                                                    <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-700 space-y-1">
-                                                        <p>
-                                                            Prévia = texto colado
-                                                            integral (
-                                                            {completeAssessment.charCount}
-                                                            /{META_FREEFORM_TEXT_MAX}{" "}
-                                                            chars ·{" "}
-                                                            {completeAssessment.loadCount}{" "}
-                                                            cargas · 1 mensagem).
-                                                            Limite de template (
-                                                            {META_TEMPLATE_BODY_MAX}
-                                                            ) não se aplica.
-                                                        </p>
-                                                        {completeAssessment.realSendBlockReasons
-                                                            .length > 0 && (
-                                                            <div className="text-amber-900 space-y-0.5 pt-0.5">
-                                                                <p className="font-medium">
-                                                                    Pode
-                                                                    configurar e
-                                                                    revisar —
-                                                                    envio real
-                                                                    bloqueado:
-                                                                </p>
-                                                                {completeAssessment.realSendBlockReasons.map(
-                                                                    (r) => (
-                                                                        <p
-                                                                            key={
-                                                                                r
-                                                                            }
-                                                                        >
-                                                                            {r}
-                                                                        </p>
-                                                                    )
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                        {completeAssessment.realSendContentReady && (
-                                                            <p className="text-emerald-800">
-                                                                Finalidade
-                                                                permite texto
-                                                                livre; no envio
-                                                                real só
-                                                                destinatários com
-                                                                janela 24h
-                                                                aberta.
-                                                            </p>
-                                                        )}
-                                                    </div>
-                                                )}
-                                        </div>
-                                    )}
                                 {contentKind === "message" && (
                                     <div className="rounded-xl border border-slate-200/80 bg-white/80 p-3 space-y-2.5">
                                         <div>
@@ -3404,21 +3131,8 @@ export function DatafyCampaignsPanel() {
                                         </div>
                                     </div>
                                 )}
-                                {contentKind === "bulletin" && (
-                                    <div className="flex flex-wrap gap-0.5">
-                                        {EMOJIS.map((e) => (
-                                            <button
-                                                key={e}
-                                                type="button"
-                                                className="h-8 w-8 rounded-lg text-base transition-colors hover:bg-slate-100"
-                                                onClick={() => insertEmoji(e)}
-                                            >
-                                                {e}
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
                             </div>
+                            ) : null}
 
                             <div className="space-y-2">
                                 <Label className="text-slate-700">
@@ -4585,100 +4299,110 @@ export function DatafyCampaignsPanel() {
 
                     {step === 3 && (
                         <div className="space-y-4 max-w-3xl">
-                            {contentKind === "bulletin" ? (
-                                <div className="space-y-4">
-                                    {bulletinDeliveryMode ===
-                                    "complete_single" ? (
-                                        <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-3 text-sm text-emerald-950 space-y-3">
-                                            <div className="space-y-1.5">
-                                                <p className="font-medium">
-                                                    Envio Direto — boletim
-                                                    completo (mensagem única)
-                                                </p>
-                                                <p className="text-xs text-emerald-900/90">
-                                                    Texto integral (até{" "}
-                                                    {META_FREEFORM_TEXT_MAX}{" "}
-                                                    chars) — disparo imediato
-                                                    para os destinatários
-                                                    elegíveis. Não exige template.
-                                                </p>
-                                            </div>
-                                            <div className="space-y-1.5">
-                                                <Label>
-                                                    Template APPROVED (opcional)
-                                                </Label>
-                                                <Select
-                                                    value={
-                                                        templateKey ||
-                                                        "__none__"
-                                                    }
-                                                    onValueChange={(v) =>
-                                                        setTemplateKey(
-                                                            v === "__none__"
-                                                                ? ""
-                                                                : v
-                                                        )
-                                                    }
-                                                >
-                                                    <SelectTrigger className="bg-white">
-                                                        <SelectValue placeholder="Nenhum — envio do texto livre" />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        <SelectItem value="__none__">
-                                                            Nenhum — envio do
-                                                            texto livre
-                                                        </SelectItem>
-                                                        {templates.map((t) => (
-                                                            <SelectItem
-                                                                key={`${t.name}-${t.language}`}
-                                                                value={`${t.name}::${t.language}`}
-                                                            >
-                                                                {t.name} ·{" "}
-                                                                {t.language}
-                                                                {t.category
-                                                                    ? ` · ${t.category}`
-                                                                    : ""}
-                                                            </SelectItem>
-                                                        ))}
-                                                    </SelectContent>
-                                                </Select>
-                                            </div>
-                                            {completeAssessment?.realSendBlockReasons
-                                                .length ? (
-                                                <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-2.5 py-2 text-xs text-amber-950 space-y-1">
-                                                    {completeAssessment.realSendBlockReasons.map(
-                                                        (r) => (
-                                                            <p key={r}>{r}</p>
-                                                        )
-                                                    )}
+                                <>
+                                    <BulletinCampaignValidation
+                                        contentKind={contentKind}
+                                        messageBody={messageBody}
+                                        templateName={
+                                            selectedTemplate?.name ||
+                                            submittedTemplate?.templateName ||
+                                            null
+                                        }
+                                        templateStatus={
+                                            selectedTemplate?.status ||
+                                            submittedTemplate?.approvalStatus ||
+                                            null
+                                        }
+                                        sendModeLabel={
+                                            contentKind === "bulletin"
+                                                ? preparedBulletin.meta
+                                                      .bulletinSendMode ===
+                                                  "multi_bulletin"
+                                                    ? "Vários boletins · templates APPROVED"
+                                                    : preparedBulletin.meta
+                                                            .bulletinSendMode ===
+                                                        "complete_bulletin"
+                                                      ? "Boletim completo · templates APPROVED"
+                                                      : "Cards selecionados · templates APPROVED"
+                                                : purposeUsesBaileysFreeform(
+                                                        purpose
+                                                    )
+                                                  ? "Texto livre (Baileys)"
+                                                  : contentMode === "direct"
+                                                    ? "Envio Direto / janela 24h"
+                                                    : contentMode === "existing"
+                                                      ? "Template APPROVED"
+                                                      : "Template custom / pendente"
+                                        }
+                                        openWindowCount={
+                                            audience?.openWindowCount ?? 0
+                                        }
+                                        needsTemplateCount={
+                                            audience?.needsTemplateCount ??
+                                            audience?.eligibleCount ??
+                                            0
+                                        }
+                                        eligibleCount={
+                                            audience?.eligibleCount ?? 0
+                                        }
+                                        technicallySendableCount={
+                                            sendReadiness.technicallySendableCount
+                                        }
+                                        bulletinSelections={bulletinSelections}
+                                        parts={bulletinParts}
+                                        onGoToStep1={() => setStep(1)}
+                                        messageFooter={
+                                            contentKind === "message" &&
+                                            !purposeUsesBaileysFreeform(
+                                                purpose
+                                            ) &&
+                                            contentMode !== "direct" ? (
+                                                <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
+                                                    <Label>
+                                                        Template APPROVED (conteúdo
+                                                        efetivo do envio)
+                                                    </Label>
+                                                    <Select
+                                                        value={
+                                                            templateKey || ""
+                                                        }
+                                                        onValueChange={
+                                                            setTemplateKey
+                                                        }
+                                                    >
+                                                        <SelectTrigger className="bg-white">
+                                                            <SelectValue placeholder="Selecione o template" />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            {templates.map(
+                                                                (t) => (
+                                                                    <SelectItem
+                                                                        key={`${t.name}-${t.language}`}
+                                                                        value={`${t.name}::${t.language}`}
+                                                                    >
+                                                                        {t.name}{" "}
+                                                                        ·{" "}
+                                                                        {
+                                                                            t.language
+                                                                        }
+                                                                    </SelectItem>
+                                                                )
+                                                            )}
+                                                        </SelectContent>
+                                                    </Select>
+                                                    <p className="text-[11px] text-slate-500">
+                                                        Se o template for usado,
+                                                        a prévia mostra o BODY do
+                                                        template — não o texto
+                                                        livre da Etapa 1 fora da
+                                                        janela.
+                                                    </p>
                                                 </div>
-                                            ) : null}
-                                        </div>
-                                    ) : (
-                                        <BulletinCampaignStep3
-                                            selectedVersionId={groupedVersionId}
-                                            pickMode={groupedPickMode}
-                                            cardPosition={groupedCardPosition}
-                                            previewIndex={groupedPreviewIndex}
-                                            onChange={(next) =>
-                                                void applyGroupedBulletinSelection(
-                                                    next
-                                                )
-                                            }
-                                            footerSlot={
-                                                <p className="text-[11px] text-slate-500">
-                                                    Envio Direto (mensagem única)
-                                                    continua disponível na Etapa
-                                                    1 ao escolher “mensagem
-                                                    única”. Templates não
-                                                    associados: Biblioteca →
-                                                    associação manual.
-                                                </p>
-                                            }
-                                        />
-                                    )}
-                                </div>
-                            ) : purposeUsesBaileysFreeform(purpose) ? (
+                                            ) : null
+                                        }
+                                    />
+                                    {contentKind === "message" &&
+                                    purposeUsesBaileysFreeform(purpose) ? (
                                 <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 text-sm text-emerald-950">
                                     <p className="font-medium">
                                         Texto livre — WhatsApp conectado
@@ -4689,199 +4413,11 @@ export function DatafyCampaignsPanel() {
                                         {datafyDisplayPhone
                                             ? ` (${formatPhoneDisplay(datafyDisplayPhone) || datafyDisplayPhone})`
                                             : ""}{" "}
-                                        no modo Baileys. Não passa pela API da
-                                        Meta, não pede template e não depende
-                                        da janela de 24 horas. O número precisa
-                                        estar conectado em Sessões.
+                                        no modo Baileys.
                                     </p>
                                 </div>
-                            ) : (
-                                <>
-                            <div className="flex flex-wrap gap-2">
-                                {purposeAllowsServiceWindowFreeform(
-                                    purpose
-                                ) && (
-                                    <Button
-                                        type="button"
-                                        variant={
-                                            contentMode === "direct"
-                                                ? "default"
-                                                : "outline"
-                                        }
-                                        className="rounded-xl"
-                                        onClick={() => setContentMode("direct")}
-                                    >
-                                        Envio direto (janela 24h)
-                                    </Button>
-                                )}
-                                <Button
-                                    type="button"
-                                    variant={
-                                        contentMode === "existing"
-                                            ? "default"
-                                            : "outline"
-                                    }
-                                    className="rounded-xl"
-                                    onClick={() => setContentMode("existing")}
-                                >
-                                    Usar template aprovado
-                                </Button>
-                                <Button
-                                    type="button"
-                                    variant={
-                                        contentMode === "custom"
-                                            ? "default"
-                                            : "outline"
-                                    }
-                                    className="rounded-xl"
-                                    onClick={() => setContentMode("custom")}
-                                >
-                                    Submeter texto como template
-                                </Button>
-                            </div>
-
-                            {contentMode === "direct" ? (
-                                <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 text-sm text-emerald-950">
-                                    <p className="font-medium">
-                                        Envio Direto — disparo imediato
-                                    </p>
-                                    <p>
-                                        O texto da Etapa 1 será enviado como
-                                        mensagem livre aos destinatários
-                                        elegíveis. Não exige template.
-                                    </p>
-                                    <div className="space-y-1.5">
-                                        <Label className="text-emerald-950">
-                                            Template APPROVED (opcional)
-                                        </Label>
-                                        <Select
-                                            value={templateKey || "__none__"}
-                                            onValueChange={(v) =>
-                                                setTemplateKey(
-                                                    v === "__none__" ? "" : v
-                                                )
-                                            }
-                                        >
-                                            <SelectTrigger className="bg-white">
-                                                <SelectValue placeholder="Nenhum — envio do texto livre" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="__none__">
-                                                    Nenhum — envio do texto livre
-                                                </SelectItem>
-                                                {templates.map((t) => (
-                                                    <SelectItem
-                                                        key={`${t.name}-${t.language}`}
-                                                        value={`${t.name}::${t.language}`}
-                                                    >
-                                                        {t.name} · {t.language}
-                                                        {t.category
-                                                            ? ` · ${t.category}`
-                                                            : ""}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    {consentButtonsEnabled && (
-                                        <p className="text-[12px]">
-                                            Botões de consentimento no envio
-                                            (corpo ≤ {META_INTERACTIVE_BODY_MAX}{" "}
-                                            chars).
-                                        </p>
-                                    )}
-                                </div>
-                            ) : contentMode === "existing" ? (
-                                <div className="space-y-3">
-                                    <Label>Template APPROVED *</Label>
-                                    <Select
-                                        value={templateKey}
-                                        onValueChange={setTemplateKey}
-                                    >
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Selecione…" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {templates.map((t) => (
-                                                <SelectItem
-                                                    key={`${t.name}-${t.language}`}
-                                                    value={`${t.name}::${t.language}`}
-                                                >
-                                                    {t.name} · {t.language}
-                                                    {t.category
-                                                        ? ` · ${t.category}`
-                                                        : ""}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    <div className="space-y-1.5">
-                                        <Label>
-                                            Variáveis do body (tokens CRM)
-                                        </Label>
-                                        <Input
-                                            value={bodyVars.join(",")}
-                                            onChange={(e) =>
-                                                setBodyVars(
-                                                    e.target.value
-                                                        .split(",")
-                                                        .map((s) => s.trim())
-                                                        .filter(Boolean)
-                                                )
-                                            }
-                                            placeholder="fullName, company"
-                                        />
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/50 p-4 text-sm">
-                                    <p>
-                                        Seu texto da etapa 1 será enviado à Meta
-                                        como template{" "}
-                                        <strong>
-                                            {purpose === "utility"
-                                                ? "UTILITY"
-                                                : "MARKETING"}
-                                        </strong>
-                                        . Enquanto estiver{" "}
-                                        <strong>PENDING</strong>, só a simulação
-                                        pode rodar; o envio real exige{" "}
-                                        <strong>APPROVED</strong>.
-                                    </p>
-                                    {headerImageUrl && !headerImageHandle && (
-                                        <p className="text-amber-900">
-                                            Imagem sem handle Meta — a criação do
-                                            template com HEADER IMAGE pode falhar
-                                            até a URL ser pública na internet.
-                                        </p>
-                                    )}
-                                    <Button
-                                        type="button"
-                                        disabled={saving}
-                                        onClick={() =>
-                                            void submitCustomTemplate()
-                                        }
-                                    >
-                                        {saving ? (
-                                            <Loader2 className="h-4 w-4 animate-spin" />
-                                        ) : (
-                                            "Enviar para aprovação da Meta"
-                                        )}
-                                    </Button>
-                                    {submittedTemplate && (
-                                        <p className="text-emerald-800">
-                                            Template{" "}
-                                            <code>
-                                                {submittedTemplate.templateName}
-                                            </code>{" "}
-                                            · status{" "}
-                                            {submittedTemplate.approvalStatus}
-                                        </p>
-                                    )}
-                                </div>
-                            )}
+                                    ) : null}
                                 </>
-                            )}
                         </div>
                     )}
 
@@ -5072,36 +4608,39 @@ export function DatafyCampaignsPanel() {
                                 <p className="text-lg font-semibold text-slate-900 tracking-tight">
                                     {name || "—"}
                                 </p>
-                                {groupedVersion &&
-                                bulletinDeliveryMode === "split_templates" ? (
+                                {contentKind === "bulletin" &&
+                                bulletinSelections.length ? (
                                     <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-3 space-y-1.5 text-emerald-950">
                                         <p className="font-medium">
-                                            Boletim selecionado:{" "}
-                                            {groupedVersion.title}
+                                            Tipo: Boletim de cargas ·{" "}
+                                            {preparedBulletin.meta.bulletinCount}{" "}
+                                            boletim(ns) ·{" "}
+                                            {preparedBulletin.meta.cardCount}{" "}
+                                            card(s)
                                         </p>
-                                        <p className="text-xs">
-                                            Identificador:{" "}
-                                            <span className="font-mono">
-                                                {groupedVersion.publicKey}
-                                            </span>{" "}
-                                            · Versão {groupedVersion.version} ·{" "}
-                                            {groupedVersion.loadCount} cargas ·{" "}
-                                            {groupedVersion.approvedCardCount} de{" "}
-                                            {groupedVersion.cardCount} cards
-                                            aprovados
-                                        </p>
-                                        <p className="text-xs">
-                                            Tipo:{" "}
-                                            {groupedPickMode === "single_card"
-                                                ? `Template individual (card ${groupedCardPosition})`
-                                                : "Boletim completo"}
-                                        </p>
+                                        <ul className="text-xs list-disc pl-4 space-y-0.5">
+                                            {preparedBulletin.meta.selections.map(
+                                                (s) => (
+                                                    <li key={s.versionId}>
+                                                        {s.title}{" "}
+                                                        <span className="font-mono">
+                                                            {s.publicKey}
+                                                        </span>{" "}
+                                                        v{s.version}
+                                                        {s.isHistorical
+                                                            ? " (histórica)"
+                                                            : ""}{" "}
+                                                        — {s.cardCount} card(s)
+                                                    </li>
+                                                )
+                                            )}
+                                        </ul>
                                         <p className="text-xs">
                                             Ordem de envio:{" "}
                                             {bulletinParts
                                                 .map(
                                                     (p, i) =>
-                                                        `Card ${i + 1}/${bulletinParts.length} (${p.templateName || "—"})`
+                                                        `Msg ${i + 1}/${bulletinParts.length} (${p.templateName || "—"})`
                                                 )
                                                 .join(" → ")}
                                         </p>
@@ -5136,19 +4675,10 @@ export function DatafyCampaignsPanel() {
                                                 }
                                             />
                                             <span>
-                                                Confirmar envio de{" "}
-                                                {groupedPickMode ===
-                                                "single_card"
-                                                    ? "este card"
-                                                    : "todos os cards"}{" "}
-                                                do boletim{" "}
-                                                <strong>
-                                                    {groupedVersion.title}
-                                                </strong>{" "}
-                                                (versão {groupedVersion.version}
-                                                ). A campanha não mudará
-                                                silenciosamente para outro
-                                                boletim.
+                                                Confirmo que revisei os boletins,
+                                                versões, cards e destinatários
+                                                selecionados. A fila enviará
+                                                exatamente este conteúdo.
                                             </span>
                                         </label>
                                     </div>
@@ -5332,6 +4862,7 @@ export function DatafyCampaignsPanel() {
                                             imagePreview={imagePreview}
                                             compact
                                             partLabel={
+                                                activePreview.partLabel ||
                                                 bulletinParts[
                                                     previewPartIndex
                                                 ]?.label
@@ -5486,30 +5017,13 @@ export function DatafyCampaignsPanel() {
                                     className="rounded-xl min-w-[110px]"
                                     onClick={() => {
                                         if (step === 1 && contentKind === "bulletin") {
-                                            if (!messageBody.trim()) {
+                                            const v = validateBulletinPicks(
+                                                bulletinSelections
+                                            );
+                                            if (!v.ok) {
                                                 toast.error(
-                                                    "Cole o boletim completo"
-                                                );
-                                                return;
-                                            }
-                                            if (!bulletinDeliveryMode) {
-                                                toast.error(
-                                                    "Escolha: boletim completo (mensagem única) ou envio dividido por templates"
-                                                );
-                                                return;
-                                            }
-                                            if (
-                                                bulletinDeliveryMode ===
-                                                    "complete_single" &&
-                                                completeAssessment &&
-                                                !completeAssessment.sizeReady
-                                            ) {
-                                                toast.error(
-                                                    completeAssessment
-                                                        .sizeBlockReasons[0] ||
-                                                        completeAssessment
-                                                            .blockReasons[0] ||
-                                                        `Mensagem única exige texto ≤ ${META_FREEFORM_TEXT_MAX} caracteres`
+                                                    v.errors[0] ||
+                                                        "Selecione boletins/cards aprovados"
                                                 );
                                                 return;
                                             }

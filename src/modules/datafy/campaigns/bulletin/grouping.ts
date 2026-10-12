@@ -183,6 +183,7 @@ export type GroupedBulletinListItem = {
     cards: Array<{
         id: string;
         position: number;
+        loadIndexes: number[];
         loadSummary: string;
         technicalName: string | null;
         displayName: string | null;

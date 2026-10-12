@@ -426,6 +426,9 @@ function toListItem(v: VersionRow): GroupedBulletinListItem {
         cards: cards.map((c) => ({
             id: c.id,
             position: c.position,
+            loadIndexes: Array.isArray(c.loadIndexes)
+                ? (c.loadIndexes as number[])
+                : [],
             loadSummary: c.loadSummary || "",
             technicalName: c.technicalName,
             displayName: c.displayName,

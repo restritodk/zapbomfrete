@@ -41,6 +41,15 @@ export {
     syncVersionCardStatuses,
 } from "./grouping-service";
 export {
+    flattenBulletinSelections,
+    validateBulletinPicks,
+    estimateMessagesFromSelection,
+    resolveCampaignPreviewText,
+    type BulletinVersionPick,
+    type BulletinCardPick,
+    type PreparedBulletinSend,
+} from "./selection";
+export {
     hydrateClientLibrary,
     managedToClientLibrary,
     type ClientLibrarySpec,

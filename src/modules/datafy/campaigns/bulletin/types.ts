@@ -133,6 +133,12 @@ export type CampaignMessagePart = {
         | "param_overflow"
         | "incomplete_fields"
         | "blocked";
+    /** Multi-bulletin identity (optional; used by wizard preview + tracking) */
+    bulletinPublicKey?: string | null;
+    bulletinVersion?: number | null;
+    bulletinVersionId?: string | null;
+    bulletinTitle?: string | null;
+    cardPosition?: number | null;
 };
 
 /** Editable draft shape for the smart creator UI / API. */
