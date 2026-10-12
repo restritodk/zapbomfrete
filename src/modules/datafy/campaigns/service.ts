@@ -348,7 +348,18 @@ export async function createCampaign(
                 input.bulletinMeta === undefined
                     ? undefined
                     : (input.bulletinMeta as Prisma.InputJsonValue),
-            bulletinVersionId: input.bulletinVersionId || null,
+            bulletinVersionId: (() => {
+                const id = input.bulletinVersionId || null;
+                if (!id) return null;
+                // Synthetic orphan picks must never hit the FK column
+                if (
+                    id.startsWith("orphan:") ||
+                    id.startsWith("orphan-bundle:")
+                ) {
+                    return null;
+                }
+                return id;
+            })(),
             bulletinSendMode: input.bulletinSendMode || null,
             bulletinCardPosition:
                 input.bulletinCardPosition != null

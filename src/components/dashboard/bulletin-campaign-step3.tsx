@@ -8,8 +8,10 @@ import type { BulletinVersionPick } from "@/modules/datafy/campaigns/bulletin/se
 import {
     estimateMessagesFromSelection,
     flattenBulletinSelections,
+    isOrphanVersionId,
     validateBulletinPicks,
 } from "@/modules/datafy/campaigns/bulletin/selection";
+import { assessBulletinLaunchIssues } from "@/modules/datafy/campaigns/create-payload";
 import type { CampaignMessagePart } from "@/modules/datafy/campaigns/bulletin/types";
 
 /**
@@ -17,6 +19,7 @@ import type { CampaignMessagePart } from "@/modules/datafy/campaigns/bulletin/ty
  */
 export function BulletinCampaignValidation(props: {
     contentKind: "message" | "bulletin";
+    purpose: string;
     messageBody: string;
     templateName?: string | null;
     templateStatus?: string | null;
@@ -27,6 +30,8 @@ export function BulletinCampaignValidation(props: {
     technicallySendableCount: number;
     bulletinSelections: BulletinVersionPick[];
     parts: CampaignMessagePart[];
+    consentButtonsEnabled?: boolean;
+    consentButtonsAttachable?: boolean;
     onGoToStep1: () => void;
     messageFooter?: React.ReactNode;
 }) {
@@ -77,6 +82,10 @@ export function BulletinCampaignValidation(props: {
                             livre / janela / finalidade.
                         </div>
                     )}
+                    <ConsentStatus
+                        enabled={Boolean(props.consentButtonsEnabled)}
+                        attachable={Boolean(props.consentButtonsAttachable)}
+                    />
                     <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 border border-slate-100 p-3 text-[12px] text-slate-700">
                         {props.messageBody || "(sem texto)"}
                     </pre>
@@ -92,6 +101,25 @@ export function BulletinCampaignValidation(props: {
         props.technicallySendableCount || props.eligibleCount,
         props.bulletinSelections
     );
+    const launch = assessBulletinLaunchIssues({
+        purpose: props.purpose,
+        parts: props.parts.length ? props.parts : prepared.parts,
+        dryRun: false,
+        confirmMarketingWithUtilityPurpose: false,
+    });
+    const launchSim = assessBulletinLaunchIssues({
+        purpose: props.purpose,
+        parts: props.parts.length ? props.parts : prepared.parts,
+        dryRun: true,
+        confirmMarketingWithUtilityPurpose: false,
+    });
+
+    const statusLabel =
+        !validation.ok || launch.status === "blocked"
+            ? "Bloqueado"
+            : launch.status === "attention" || launchSim.status === "attention"
+              ? "Atenção necessária"
+              : "Pronto para envio";
 
     return (
         <div className="space-y-4 max-w-3xl">
@@ -100,11 +128,12 @@ export function BulletinCampaignValidation(props: {
                     <div>
                         <p className="font-semibold text-slate-900 inline-flex items-center gap-2">
                             <Layers className="h-4 w-4" />
-                            Validação dos boletins selecionados
+                            Validação de envio
                         </p>
                         <p className="text-xs text-slate-500 mt-1">
-                            A seleção foi feita na Etapa 1. Aqui só validamos
-                            templates e elegibilidade.
+                            A seleção foi feita na Etapa 1. Aqui validamos
+                            templates, idioma, categoria, variáveis e
+                            elegibilidade.
                         </p>
                     </div>
                     <Button
@@ -118,14 +147,27 @@ export function BulletinCampaignValidation(props: {
                     </Button>
                 </div>
 
+                <div
+                    className={cn(
+                        "rounded-xl border px-3 py-2 text-sm font-medium",
+                        statusLabel === "Pronto para envio"
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                            : statusLabel === "Atenção necessária"
+                              ? "border-amber-200 bg-amber-50 text-amber-950"
+                              : "border-red-200 bg-red-50 text-red-900"
+                    )}
+                >
+                    Resultado: {statusLabel}
+                </div>
+
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 text-sm">
                     <Stat
-                        label="Boletins"
-                        value={String(prepared.meta.bulletinCount)}
+                        label="Templates / cards"
+                        value={String(prepared.meta.cardCount)}
                     />
                     <Stat
-                        label="Cards aprovados"
-                        value={String(prepared.meta.cardCount)}
+                        label="Itens selecionados"
+                        value={String(prepared.meta.bulletinCount)}
                     />
                     <Stat
                         label="Destinatários aptos"
@@ -134,104 +176,144 @@ export function BulletinCampaignValidation(props: {
                     <Stat label="Mensagens previstas" value={String(planned)} />
                 </div>
 
+                <ConsentStatus
+                    enabled={Boolean(props.consentButtonsEnabled)}
+                    attachable={Boolean(props.consentButtonsAttachable)}
+                />
+
                 {!props.bulletinSelections.length ? (
                     <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 inline-flex gap-2">
                         <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                        Nenhum boletim selecionado. Volte à Etapa 1.
+                        Nenhum conteúdo selecionado. Volte à Etapa 1.
                     </div>
                 ) : null}
 
-                {props.bulletinSelections.map((b) => (
-                    <div
-                        key={b.versionId}
-                        className="rounded-xl border border-slate-200 px-3 py-2.5 space-y-2"
-                    >
-                        <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-semibold">{b.title}</p>
-                            <Badge
-                                variant="outline"
-                                className="font-mono text-[10px]"
-                            >
-                                {b.publicKey}
-                            </Badge>
-                            <Badge variant="outline" className="text-[10px]">
-                                v{b.version}
-                            </Badge>
-                            {!b.isCurrent ? (
+                {props.bulletinSelections.map((b) => {
+                    const orphan = isOrphanVersionId(b.versionId);
+                    return (
+                        <div
+                            key={b.versionId}
+                            className="rounded-xl border border-slate-200 px-3 py-2.5 space-y-2"
+                        >
+                            <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-semibold">
+                                    {b.title}
+                                </p>
                                 <Badge
                                     variant="outline"
-                                    className="text-[10px] border-amber-300 text-amber-900"
+                                    className="font-mono text-[10px]"
                                 >
-                                    Histórica
+                                    {b.publicKey}
                                 </Badge>
-                            ) : null}
-                            <Badge
-                                variant="outline"
-                                className={cn(
-                                    "text-[10px]",
-                                    validation.ok
-                                        ? "border-emerald-300 text-emerald-800"
-                                        : "border-amber-300 text-amber-900"
-                                )}
-                            >
-                                {b.mode === "complete_bulletin"
-                                    ? "Completo"
-                                    : "Cards específicos"}
-                            </Badge>
-                        </div>
-                        <ul className="space-y-1">
-                            {b.cardPositions.map((pos) => {
-                                const card = b.cards.find(
-                                    (c) => c.position === pos
-                                );
-                                const ok =
-                                    card &&
-                                    String(card.approvalStatus).toUpperCase() ===
-                                        "APPROVED" &&
-                                    card.technicalName;
-                                return (
-                                    <li
-                                        key={`${b.versionId}-${pos}`}
-                                        className="text-xs text-slate-700 flex flex-wrap gap-2 items-center"
+                                {orphan ? (
+                                    <Badge
+                                        variant="outline"
+                                        className="text-[10px] border-sky-300 text-sky-900"
                                     >
-                                        {ok ? (
-                                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                                        ) : (
-                                            <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
-                                        )}
-                                        Card {pos}/{b.cardCount} ·{" "}
-                                        <code className="font-mono">
-                                            {card?.technicalName || "—"}
-                                        </code>{" "}
-                                        · {card?.approvalStatus || "—"} ·{" "}
-                                        {card?.loadSummary}
-                                    </li>
-                                );
-                            })}
-                        </ul>
-                    </div>
-                ))}
+                                        Template individual
+                                    </Badge>
+                                ) : (
+                                    <>
+                                        <Badge
+                                            variant="outline"
+                                            className="text-[10px]"
+                                        >
+                                            v{b.version}
+                                        </Badge>
+                                        <Badge
+                                            variant="outline"
+                                            className="text-[10px]"
+                                        >
+                                            {b.mode === "complete_bulletin"
+                                                ? "Boletim completo"
+                                                : "Cards específicos"}
+                                        </Badge>
+                                    </>
+                                )}
+                            </div>
+                            <ul className="space-y-1">
+                                {b.cardPositions.map((pos) => {
+                                    const card = b.cards.find(
+                                        (c) => c.position === pos
+                                    );
+                                    const ok =
+                                        card &&
+                                        String(
+                                            card.approvalStatus
+                                        ).toUpperCase() === "APPROVED" &&
+                                        card.technicalName;
+                                    return (
+                                        <li
+                                            key={`${b.versionId}-${pos}`}
+                                            className="text-xs text-slate-700 flex flex-wrap gap-2 items-center"
+                                        >
+                                            {ok ? (
+                                                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                                            ) : (
+                                                <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                                            )}
+                                            {orphan ? "Template" : `Card ${pos}`}{" "}
+                                            ·{" "}
+                                            <code className="font-mono">
+                                                {card?.technicalName || "—"}
+                                            </code>{" "}
+                                            ·{" "}
+                                            {card?.language ||
+                                                card?.category ||
+                                                "—"}{" "}
+                                            · {card?.approvalStatus || "—"}
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        </div>
+                    );
+                })}
 
-                {!validation.ok ? (
-                    <ul className="text-xs text-amber-900 list-disc pl-5 space-y-1">
+                {[...validation.errors, ...launch.issues.map((i) => i.message)]
+                    .length ? (
+                    <ul className="text-xs text-amber-950 list-disc pl-5 space-y-1">
                         {validation.errors.map((e) => (
                             <li key={e}>{e}</li>
+                        ))}
+                        {launch.issues.map((i) => (
+                            <li
+                                key={i.code + i.message}
+                                className={
+                                    i.level === "error"
+                                        ? "text-red-800"
+                                        : undefined
+                                }
+                            >
+                                {i.message}
+                            </li>
                         ))}
                     </ul>
                 ) : (
                     <p className="text-sm text-emerald-800 inline-flex items-center gap-1.5">
                         <CheckCircle2 className="h-4 w-4" />
-                        Seleção válida — a fila enviará exatamente estes{" "}
-                        {props.parts.length} card(s) por destinatário, nesta
-                        ordem.
+                        Seleção válida — a fila enviará exatamente estas{" "}
+                        {props.parts.length} mensagem(ns) por destinatário, nesta
+                        ordem, com o idioma de cada template.
                     </p>
                 )}
-
-                <p className="text-[11px] text-slate-500">
-                    Templates APPROVED sem vínculo a boletim ficam em Biblioteca →
-                    associação manual. Não são misturados aqui por nome.
-                </p>
             </div>
+        </div>
+    );
+}
+
+function ConsentStatus(props: { enabled: boolean; attachable: boolean }) {
+    let label = "Desativados";
+    if (props.enabled && props.attachable) {
+        label = "Ativados e compatíveis com a modalidade atual";
+    } else if (props.enabled) {
+        label =
+            "Configurados, mas indisponíveis nesta modalidade de template APPROVED";
+    }
+    return (
+        <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+            Botões de resposta e consentimento:{" "}
+            <strong className="font-medium">{label}</strong>
         </div>
     );
 }
@@ -248,10 +330,8 @@ function Stat(props: { label: string; value: string }) {
 }
 
 /** @deprecated Use BulletinCampaignValidation — kept for import compatibility. */
-export { BulletinCampaignValidation as BulletinCampaignStep3 };
-
-export type BulletinSendPickMode =
-    | "complete_bulletin"
-    | "single_card"
-    | "selected_cards"
-    | "multi_bulletin";
+export function BulletinCampaignStep3(
+    props: Parameters<typeof BulletinCampaignValidation>[0]
+) {
+    return <BulletinCampaignValidation {...props} />;
+}

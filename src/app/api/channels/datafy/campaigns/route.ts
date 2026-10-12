@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 import {
     requireCampaignEdit,
     requireCampaignView,
@@ -9,7 +8,11 @@ import {
     createCampaign,
     listCampaigns,
 } from "@/modules/datafy/campaigns/service";
-import { CAMPAIGN_PURPOSES } from "@/modules/datafy/campaigns/constants";
+import {
+    createCampaignBodySchema,
+    formatCreateCampaignZodError,
+    persistableBulletinVersionId,
+} from "@/modules/datafy/campaigns/create-payload";
 
 export const dynamic = "force-dynamic";
 
@@ -40,93 +43,30 @@ export async function GET(request: NextRequest) {
     }
 }
 
-const createSchema = z.object({
-    name: z.string().min(1).max(200),
-    description: z.string().max(5000).nullable().optional(),
-    purpose: z.enum(CAMPAIGN_PURPOSES).optional(),
-    templateName: z.string().max(200).nullable().optional(),
-    templateLanguage: z.string().max(20).nullable().optional(),
-    templateCategory: z.string().max(40).nullable().optional(),
-    templateComponents: z.unknown().optional(),
-    templateApprovalStatus: z.string().max(40).nullable().optional(),
-    contentSource: z.string().max(40).optional(),
-    contentKind: z.enum(["message", "bulletin"]).optional(),
-    messageBody: z.string().max(100_000).nullable().optional(),
-    interactiveButtons: z
-        .object({
-            enabled: z.boolean(),
-            purpose: z.string().optional(),
-            buttons: z
-                .array(
-                    z.object({
-                        id: z.string().max(256),
-                        title: z.string().max(20),
-                    })
-                )
-                .max(3)
-                .optional(),
-        })
-        .nullable()
-        .optional(),
-    messageParts: z.unknown().optional(),
-    bulletinMeta: z.unknown().optional(),
-    bulletinVersionId: z.string().max(64).nullable().optional(),
-    bulletinSendMode: z
-        .enum([
-            "complete_bulletin",
-            "single_card",
-            "legacy_parts",
-            "direct_freeform",
-        ])
-        .nullable()
-        .optional(),
-    bulletinCardPosition: z.number().int().min(1).nullable().optional(),
-    headerImageUrl: z.string().max(2000).nullable().optional(),
-    headerImageHandle: z.string().max(2000).nullable().optional(),
-    variableMapping: z.unknown().optional(),
-    segmentFilter: z
-        .object({
-            selectAllEligible: z.boolean().optional(),
-            source: z.enum(["import", "crm", "groups"]).optional(),
-            phones: z.array(z.string()).max(20000).optional(),
-            contactIds: z.array(z.string()).optional(),
-            tagIds: z.array(z.string()).optional(),
-            category: z.string().nullable().optional(),
-            city: z.string().nullable().optional(),
-            state: z.string().nullable().optional(),
-            company: z.string().nullable().optional(),
-            origin: z.string().nullable().optional(),
-            search: z.string().nullable().optional(),
-        })
-        .nullable()
-        .optional(),
-    timezone: z.string().max(80).optional(),
-    scheduledAt: z.string().nullable().optional(),
-    delayMs: z
-        .number()
-        .int()
-        .min(3_000)
-        .max(60_000)
-        .optional(),
-    batchSize: z.number().int().optional(),
-    dryRun: z.boolean().optional(),
-    requireConsent: z.boolean().optional(),
-});
-
 export async function POST(request: NextRequest) {
     const gate = await requireCampaignEdit(request);
     if (gate.error) return gate.error;
 
     try {
         const body = await request.json().catch(() => null);
-        const parsed = createSchema.safeParse(body);
+        const parsed = createCampaignBodySchema.safeParse(body);
         if (!parsed.success) {
             return NextResponse.json(
-                { status: false, message: "Payload inválido" },
+                {
+                    status: false,
+                    message: formatCreateCampaignZodError(parsed.error),
+                    details: parsed.error.flatten(),
+                },
                 { status: 400 }
             );
         }
-        const campaign = await createCampaign(parsed.data, gate.user.id);
+        const data = {
+            ...parsed.data,
+            bulletinVersionId: persistableBulletinVersionId(
+                parsed.data.bulletinVersionId
+            ),
+        };
+        const campaign = await createCampaign(data, gate.user.id);
         return NextResponse.json({ status: true, data: { campaign } });
     } catch (e) {
         if (e instanceof CampaignError) {
@@ -135,8 +75,14 @@ export async function POST(request: NextRequest) {
                 { status: e.statusCode }
             );
         }
+        const msg =
+            e instanceof Error ? e.message : "Falha ao criar campanha";
+        // Surface FK / constraint hints without leaking internals
+        const friendly = /Foreign key|bulletinVersion/i.test(msg)
+            ? "Não foi possível vincular a versão do boletim. Templates individuais não usam bulletinVersionId — tente novamente."
+            : "Falha ao criar campanha";
         return NextResponse.json(
-            { status: false, message: "Falha ao criar campanha" },
+            { status: false, message: friendly },
             { status: 500 }
         );
     }

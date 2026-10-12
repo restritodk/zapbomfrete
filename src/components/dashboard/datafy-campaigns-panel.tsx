@@ -80,10 +80,16 @@ import { BulletinCampaignStep1 } from "@/components/dashboard/bulletin-campaign-
 import type { GroupedVersionDto } from "@/components/dashboard/bulletin-grouped-cards";
 import {
     flattenBulletinSelections,
+    isOrphanVersionId,
     resolveCampaignPreviewText,
     validateBulletinPicks,
     type BulletinVersionPick,
 } from "@/modules/datafy/campaigns/bulletin/selection";
+import {
+    assessBulletinLaunchIssues,
+    mapSelectionSendMode,
+    persistableBulletinVersionId,
+} from "@/modules/datafy/campaigns/create-payload";
 import {
     buildEstimateCopy,
     CAMPAIGN_DELAY_SEC_MAX,
@@ -600,6 +606,8 @@ export function DatafyCampaignsPanel() {
         null
     );
     const [confirmGroupedSend, setConfirmGroupedSend] = useState(false);
+    const [confirmMarketingUtility, setConfirmMarketingUtility] =
+        useState(false);
     const preparedBulletin = useMemo(
         () => flattenBulletinSelections(bulletinSelections),
         [bulletinSelections]
@@ -1168,6 +1176,7 @@ export function DatafyCampaignsPanel() {
         setBulletinDeliveryMode("split_templates");
         setPreviewPartIndex(0);
         setConfirmGroupedSend(false);
+        setConfirmMarketingUtility(false);
         if (!name.trim() && prepared.meta.selections[0]) {
             const s = prepared.meta.selections[0];
             setName(`${s.title} · ${s.publicKey} v${s.version}`);
@@ -1772,6 +1781,35 @@ export function DatafyCampaignsPanel() {
                 );
                 return;
             }
+            const launchCheck = assessBulletinLaunchIssues({
+                purpose,
+                parts: bulletinParts,
+                dryRun: effectiveDryRun,
+                confirmMarketingWithUtilityPurpose: confirmMarketingUtility,
+            });
+            if (!launchCheck.ok) {
+                toast.error(
+                    launchCheck.issues.find((i) => i.level === "error")
+                        ?.message ||
+                        "Validação do boletim bloqueou o disparo — veja a Etapa 3."
+                );
+                return;
+            }
+            if (
+                purpose === "utility" &&
+                bulletinParts.some(
+                    (p) =>
+                        String(p.templateCategory || "").toUpperCase() ===
+                        "MARKETING"
+                ) &&
+                !confirmMarketingUtility &&
+                !effectiveDryRun
+            ) {
+                toast.error(
+                    "Confirme na Etapa 5 o envio de templates MARKETING com finalidade Utilidade."
+                );
+                return;
+            }
             const first = bulletinParts[0];
             if (bulletinDeliveryMode === "complete_single") {
                 contentSource = purposeUsesBaileysFreeform(purpose)
@@ -2052,12 +2090,20 @@ export function DatafyCampaignsPanel() {
                                   name,
                               partCount: bulletinParts.length,
                               deliveryMode: "split_templates",
+                              individualTemplateCount:
+                                  preparedBulletin.meta.selections.filter((s) =>
+                                      isOrphanVersionId(s.versionId)
+                                  ).length,
                           }
                         : null,
-                bulletinVersionId: preparedBulletin.meta.primaryVersionId,
+                bulletinVersionId: persistableBulletinVersionId(
+                    preparedBulletin.meta.primaryVersionId
+                ),
                 bulletinSendMode:
                     contentKind === "bulletin"
-                        ? preparedBulletin.meta.bulletinSendMode
+                        ? mapSelectionSendMode(
+                              preparedBulletin.meta.bulletinSendMode
+                          )
                         : null,
                 bulletinCardPosition: groupedCardPosition,
                 headerImageUrl,
@@ -2746,8 +2792,11 @@ export function DatafyCampaignsPanel() {
                                 />
                             ) : null}
 
-                            {contentKind === "message" ? (
+                            {(contentKind === "message" ||
+                                contentKind === "bulletin") && (
                             <div className="space-y-2">
+                                {contentKind === "message" ? (
+                                    <>
                                 <div className="flex items-center justify-between gap-2">
                                     <Label className="text-slate-700">
                                         Mensagem *
@@ -2764,6 +2813,8 @@ export function DatafyCampaignsPanel() {
                                     className="resize-y text-[15px] leading-relaxed rounded-xl bg-white border-slate-200 focus-visible:ring-primary/30 shadow-sm whitespace-pre-wrap min-h-[200px]"
                                     placeholder="Escreva a mensagem da campanha…"
                                 />
+                                    </>
+                                ) : null}
                                 <div
                                     data-testid="campaign-consent-buttons"
                                     className="rounded-2xl border border-[#d6e6f8] bg-gradient-to-b from-white to-[#f3f8fd] p-4 shadow-sm space-y-3"
@@ -2778,9 +2829,9 @@ export function DatafyCampaignsPanel() {
                                                 consentimento
                                             </p>
                                             <p className="text-[12px] leading-relaxed text-slate-500">
-                                                Adicione botões para que seus
-                                                destinatários possam responder
-                                                diretamente à mensagem.
+                                                {contentKind === "bulletin"
+                                                    ? "Disponível também no modo Boletim. Com templates APPROVED, botões livres só são anexados em modalidades de texto livre (janela 24h); caso contrário permanecem configurados para prévia e revisão."
+                                                    : "Adicione botões para que seus destinatários possam responder diretamente à mensagem."}
                                             </p>
                                         </div>
                                         <div className="flex flex-col items-end gap-1 shrink-0 pt-0.5">
@@ -3009,6 +3060,21 @@ export function DatafyCampaignsPanel() {
                                                         com Envio Direto.
                                                     </p>
                                                 )}
+                                                {contentKind === "bulletin" &&
+                                                    bulletinDeliveryMode ===
+                                                        "split_templates" && (
+                                                    <p className="text-[11px] leading-relaxed text-amber-900 rounded-lg border border-amber-200/80 bg-amber-50/90 px-3 py-2">
+                                                        Boletim por templates
+                                                        APPROVED: botões
+                                                        configurados aqui não
+                                                        são injetados no template
+                                                        Meta. Use os botões do
+                                                        próprio template, se
+                                                        houver, ou Envio Direto
+                                                        (mensagem única) na
+                                                        janela 24h.
+                                                    </p>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
@@ -3065,7 +3131,7 @@ export function DatafyCampaignsPanel() {
                                     </div>
                                 )}
                             </div>
-                            ) : null}
+                            )}
 
                             <div className="space-y-2">
                                 <Label className="text-slate-700">
@@ -4235,6 +4301,7 @@ export function DatafyCampaignsPanel() {
                                 <>
                                     <BulletinCampaignValidation
                                         contentKind={contentKind}
+                                        purpose={purpose}
                                         messageBody={messageBody}
                                         templateName={
                                             selectedTemplate?.name ||
@@ -4251,12 +4318,19 @@ export function DatafyCampaignsPanel() {
                                                 ? preparedBulletin.meta
                                                       .bulletinSendMode ===
                                                   "multi_bulletin"
-                                                    ? "Vários boletins · templates APPROVED"
+                                                    ? bulletinSelections.every(
+                                                          (s) =>
+                                                              isOrphanVersionId(
+                                                                  s.versionId
+                                                              )
+                                                      )
+                                                        ? "Templates individuais APPROVED"
+                                                        : "Vários boletins · templates APPROVED"
                                                     : preparedBulletin.meta
                                                             .bulletinSendMode ===
                                                         "complete_bulletin"
                                                       ? "Boletim completo · templates APPROVED"
-                                                      : "Cards selecionados · templates APPROVED"
+                                                      : "Cards / templates selecionados · APPROVED"
                                                 : purposeUsesBaileysFreeform(
                                                         purpose
                                                     )
@@ -4283,6 +4357,18 @@ export function DatafyCampaignsPanel() {
                                         }
                                         bulletinSelections={bulletinSelections}
                                         parts={bulletinParts}
+                                        consentButtonsEnabled={
+                                            consentButtonsEnabled
+                                        }
+                                        consentButtonsAttachable={
+                                            consentButtonsEnabled &&
+                                            purposeAllowsServiceWindowFreeform(
+                                                purpose
+                                            ) &&
+                                            (contentMode === "direct" ||
+                                                bulletinDeliveryMode ===
+                                                    "complete_single")
+                                        }
                                         onGoToStep1={() => setStep(1)}
                                         messageFooter={
                                             contentKind === "message" &&
@@ -4546,24 +4632,42 @@ export function DatafyCampaignsPanel() {
                                     <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-3 space-y-1.5 text-emerald-950">
                                         <p className="font-medium">
                                             Tipo: Boletim de cargas ·{" "}
-                                            {preparedBulletin.meta.bulletinCount}{" "}
-                                            boletim(ns) ·{" "}
+                                            {
+                                                preparedBulletin.meta
+                                                    .bulletinCount
+                                            }{" "}
+                                            item(ns) ·{" "}
                                             {preparedBulletin.meta.cardCount}{" "}
-                                            card(s)
+                                            mensagem(ns)
                                         </p>
                                         <ul className="text-xs list-disc pl-4 space-y-0.5">
                                             {preparedBulletin.meta.selections.map(
                                                 (s) => (
                                                     <li key={s.versionId}>
-                                                        {s.title}{" "}
-                                                        <span className="font-mono">
-                                                            {s.publicKey}
-                                                        </span>{" "}
-                                                        v{s.version}
-                                                        {s.isHistorical
-                                                            ? " (histórica)"
-                                                            : ""}{" "}
-                                                        — {s.cardCount} card(s)
+                                                        {isOrphanVersionId(
+                                                            s.versionId
+                                                        ) ? (
+                                                            <>
+                                                                Template
+                                                                individual ·{" "}
+                                                                <span className="font-mono">
+                                                                    {s.publicKey}
+                                                                </span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                {s.title}{" "}
+                                                                <span className="font-mono">
+                                                                    {s.publicKey}
+                                                                </span>{" "}
+                                                                v{s.version}
+                                                                {s.isHistorical
+                                                                    ? " (histórica)"
+                                                                    : ""}{" "}
+                                                                — {s.cardCount}{" "}
+                                                                card(s)
+                                                            </>
+                                                        )}
                                                     </li>
                                                 )
                                             )}
@@ -4609,11 +4713,54 @@ export function DatafyCampaignsPanel() {
                                             />
                                             <span>
                                                 Confirmo que revisei os boletins,
-                                                versões, cards e destinatários
+                                                templates individuais, versões,
+                                                cards e destinatários
                                                 selecionados. A fila enviará
                                                 exatamente este conteúdo.
                                             </span>
                                         </label>
+                                        {purpose === "utility" &&
+                                        bulletinParts.some(
+                                            (p) =>
+                                                String(
+                                                    p.templateCategory || ""
+                                                ).toUpperCase() === "MARKETING"
+                                        ) ? (
+                                            <label className="flex items-start gap-2 pt-1 text-sm cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    className="mt-1"
+                                                    checked={
+                                                        confirmMarketingUtility
+                                                    }
+                                                    onChange={(e) =>
+                                                        setConfirmMarketingUtility(
+                                                            e.target.checked
+                                                        )
+                                                    }
+                                                />
+                                                <span>
+                                                    Entendo que a finalidade é
+                                                    Utilidade, mas os templates
+                                                    estão aprovados como{" "}
+                                                    <strong>MARKETING</strong> —
+                                                    a Meta enviará nessa categoria
+                                                    (sem reclassificar).
+                                                </span>
+                                            </label>
+                                        ) : null}
+                                        <p className="text-xs text-slate-600 pt-1">
+                                            Botões de consentimento:{" "}
+                                            {!consentButtonsEnabled
+                                                ? "desativados"
+                                                : purposeAllowsServiceWindowFreeform(
+                                                        purpose
+                                                    ) &&
+                                                    bulletinDeliveryMode ===
+                                                        "complete_single"
+                                                  ? "ativados e compatíveis (texto livre)"
+                                                  : "configurados, mas indisponíveis nesta modalidade de template APPROVED"}
+                                        </p>
                                     </div>
                                 ) : null}
                                 <div className="grid gap-2 sm:grid-cols-2 text-slate-600">
