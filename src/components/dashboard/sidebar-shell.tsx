@@ -1,5 +1,6 @@
 "use client";
 
+import { PanelLeft, PanelLeftClose } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
 import { useSidebar } from "./sidebar-context";
 import { LogoutButton } from "./logout-confirm";
@@ -19,23 +20,24 @@ export function SidebarShell({
     userEmail,
     version,
 }: SidebarShellProps) {
-    const { isCollapsed } = useSidebar();
+    const { isCollapsed, toggleCollapse } = useSidebar();
     const hasLogo = !!(logoUrl && logoUrl.trim());
 
     return (
         <aside
             className={`
-                hidden md:flex flex-col h-full sticky left-0 top-0 z-20
+                hidden md:flex flex-col h-full max-h-screen min-h-0 sticky left-0 top-0 z-20
                 transition-all duration-300 ease-in-out
-                text-slate-200
+                text-slate-200 overflow-x-hidden
                 bg-[linear-gradient(180deg,#071a33_0%,#0c2748_48%,#103057_100%)]
                 border-r border-white/10
                 shadow-[4px_0_24px_-12px_rgba(7,26,51,0.55)]
                 ${isCollapsed ? "w-[72px]" : "w-[268px]"}
             `}
         >
+            {/* Cabeçalho fixo */}
             <div
-                className={`border-b border-white/10 transition-all duration-300 ${
+                className={`shrink-0 border-b border-white/10 transition-all duration-300 ${
                     isCollapsed ? "px-2.5 py-4" : "px-4 py-5"
                 }`}
             >
@@ -81,14 +83,34 @@ export function SidebarShell({
                 )}
             </div>
 
+            {/* Área central rolável (scrollbar invisível) */}
             <SidebarNav variant="navy" />
 
+            {/* Rodapé fixo */}
             <div
                 suppressHydrationWarning={true}
-                className={`border-t border-white/10 transition-all duration-300 ${
-                    isCollapsed ? "p-2" : "p-4"
+                className={`shrink-0 border-t border-white/10 transition-all duration-300 ${
+                    isCollapsed ? "p-2" : "p-3"
                 }`}
             >
+                <button
+                    type="button"
+                    onClick={toggleCollapse}
+                    className={`flex items-center justify-center w-full gap-2 px-3 py-2 mb-2 rounded-xl text-xs font-medium transition-all duration-200 text-slate-400 hover:text-white hover:bg-white/10 ${
+                        isCollapsed ? "" : ""
+                    }`}
+                    aria-label={isCollapsed ? "Expandir menu" : "Recolher menu"}
+                >
+                    {isCollapsed ? (
+                        <PanelLeft size={18} />
+                    ) : (
+                        <>
+                            <PanelLeftClose size={16} />
+                            <span>Recolher</span>
+                        </>
+                    )}
+                </button>
+
                 {isCollapsed ? (
                     <div
                         suppressHydrationWarning={true}

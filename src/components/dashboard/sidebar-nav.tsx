@@ -4,8 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { ChevronDown, PanelLeftClose, PanelLeft } from "lucide-react";
 import {
+    ChevronDown,
     LayoutDashboard,
     MessageSquare,
     Users,
@@ -18,15 +18,12 @@ import {
     Bell,
     FileText,
     Code,
-    Send,
     UserCheck,
     Megaphone,
     HardDrive,
     Activity,
     UserCircle,
-    Tag,
     MessageCircleReply,
-    Contact,
     UserPlus,
     Plug,
 } from "lucide-react";
@@ -156,7 +153,7 @@ export function SidebarNav({
 }) {
     const pathname = usePathname();
     const { data: session } = useSession();
-    const { isCollapsed, toggleCollapse } = useSidebar();
+    const { isCollapsed } = useSidebar();
     // @ts-ignore
     const userRole = session?.user?.role;
     const navy = variant === "navy";
@@ -191,7 +188,10 @@ export function SidebarNav({
 
     return (
         <TooltipProvider delayDuration={0}>
-            <nav className="flex-1 px-2 py-2 overflow-y-auto overflow-x-hidden space-y-0.5 styled-scrollbar">
+            <nav
+                className="sidebar-scroll flex-1 min-h-0 px-2 py-2 space-y-0.5"
+                aria-label="Menu principal"
+            >
                 {navGroups.map((group) => {
                     const visibleItems = group.items.filter((item) => {
                         if (item.superadminOnly && userRole !== "SUPERADMIN") return false;
@@ -303,7 +303,7 @@ export function SidebarNav({
                                                     </button>
                                                     {open && (
                                                         <div
-                                                            className={`ml-4 pl-3 space-y-0.5 ${
+                                                            className={`ml-4 pl-3 space-y-0.5 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-top-1 motion-safe:duration-200 ${
                                                                 navy
                                                                     ? "border-l border-white/15"
                                                                     : "border-l border-border/40"
@@ -354,30 +354,6 @@ export function SidebarNav({
                     );
                 })}
             </nav>
-
-            <div
-                className={`px-2 py-2 border-t ${
-                    navy ? "border-white/10" : "border-border/30"
-                }`}
-            >
-                <button
-                    onClick={toggleCollapse}
-                    className={`flex items-center justify-center w-full gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200 ${
-                        navy
-                            ? "text-slate-400 hover:text-white hover:bg-white/10"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                    }`}
-                >
-                    {isCollapsed ? (
-                        <PanelLeft size={18} />
-                    ) : (
-                        <>
-                            <PanelLeftClose size={16} />
-                            <span>Recolher</span>
-                        </>
-                    )}
-                </button>
-            </div>
         </TooltipProvider>
     );
 }

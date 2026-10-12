@@ -150,7 +150,7 @@ export function MobileNav({ appName = "WA-AKG", logoUrl }: { appName?: string; l
                     )}
                 </SheetHeader>
 
-                <nav className="flex-1 px-3 py-3 overflow-y-auto space-y-1">
+                <nav className="sidebar-scroll flex-1 min-h-0 px-3 py-3 space-y-1">
                     {navGroups.map((group) => {
                         const visibleItems = group.items.filter(
                             (item) => !item.superadminOnly || userRole === "SUPERADMIN"

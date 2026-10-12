@@ -158,6 +158,21 @@
 
 /* Custom Utilities for Glassmorphism & Micro-animations */
 @layer utilities {
+  /* Invisible scrollbar — keep overflow scroll for mouse/touch/keyboard */
+  .sidebar-scroll {
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* Legacy Edge/IE */
+    overscroll-behavior: contain;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar {
+    display: none; /* Chrome, Safari, Edge */
+    width: 0;
+    height: 0;
+  }
+
   .glass {
     @apply bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl border border-white/20 dark:border-white/10 shadow-xl;
   }
