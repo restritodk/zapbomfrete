@@ -58,6 +58,7 @@ import {
 import { cn } from "@/lib/utils";
 import { FIELD_MAP_OPTIONS } from "@/modules/datafy/campaigns/bulletin/field-map";
 import { META_BODY_MAX } from "@/modules/datafy/campaigns/bulletin/template-validation";
+import { getRejectionDisplay } from "@/modules/datafy/campaigns/bulletin/rejection-reason";
 
 type ButtonsDraft = {
     enabled: boolean;
@@ -597,12 +598,23 @@ export function BulletinTemplateManager({
                                                 )}
                                             </div>
                                         </div>
-                                        {item.remoteRejectedReason && (
-                                            <p className="text-xs text-red-700">
-                                                Motivo:{" "}
-                                                {item.remoteRejectedReason}
-                                            </p>
-                                        )}
+                                        {(() => {
+                                            const rejection = getRejectionDisplay(
+                                                item.remoteStatus,
+                                                item.remoteRejectedReason
+                                            );
+                                            if (
+                                                !rejection.show ||
+                                                !rejection.message
+                                            ) {
+                                                return null;
+                                            }
+                                            return (
+                                                <p className="text-xs text-red-700">
+                                                    Motivo: {rejection.message}
+                                                </p>
+                                            );
+                                        })()}
                                         <div className="flex flex-wrap gap-2">
                                             <Button
                                                 type="button"

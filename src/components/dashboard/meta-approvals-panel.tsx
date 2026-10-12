@@ -29,6 +29,7 @@ import {
     visiblePageNumbers,
     buildPageMeta,
 } from "@/lib/mass-dispatch/pagination";
+import { getRejectionDisplay } from "@/modules/datafy/campaigns/bulletin/rejection-reason";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -922,18 +923,35 @@ export function MetaApprovalsPanel() {
                                     >
                                         {statusLabel(detail.status)}
                                     </Badge>
+                                    {String(detail.status || "").toUpperCase() ===
+                                        "APPROVED" && (
+                                        <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-100">
+                                            <CheckCircle2 className="h-3 w-3" />
+                                            Aprovado pela Meta
+                                        </p>
+                                    )}
                                 </div>
                             </div>
-                            {detail.rejectedReason && (
-                                <div className="rounded-xl border border-red-200 bg-red-50 p-3">
-                                    <div className="text-xs font-medium text-red-700 mb-1">
-                                        Motivo da rejeição
+                            {(() => {
+                                const rejection = getRejectionDisplay(
+                                    detail.status,
+                                    detail.rejectedReason
+                                );
+                                if (!rejection.show || !rejection.message) {
+                                    return null;
+                                }
+                                return (
+                                    <div className="rounded-xl border border-red-200 bg-red-50 p-3">
+                                        <div className="text-xs font-medium text-red-700 mb-1 inline-flex items-center gap-1.5">
+                                            <Ban className="h-3.5 w-3.5" />
+                                            Motivo da rejeição
+                                        </div>
+                                        <p className="text-sm whitespace-pre-wrap text-red-900">
+                                            {rejection.message}
+                                        </p>
                                     </div>
-                                    <p className="text-sm whitespace-pre-wrap text-red-900">
-                                        {detail.rejectedReason}
-                                    </p>
-                                </div>
-                            )}
+                                );
+                            })()}
                             {detail.headerText && (
                                 <div>
                                     <div className="text-xs text-slate-400 mb-1">

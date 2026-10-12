@@ -53,6 +53,7 @@ import {
     serializeBulletinDraft,
 } from "@/modules/datafy/campaigns/bulletin/analyze";
 import { DATAFY_BULLETIN_IMPORT_KEY } from "@/modules/datafy/campaigns/bulletin/constants";
+import { getRejectionDisplay } from "@/modules/datafy/campaigns/bulletin/rejection-reason";
 import {
     BulletinGroupedCardsSection,
     useBulletinGrouping,
@@ -923,12 +924,28 @@ export function BulletinCreatorPanel() {
                                                         )}
                                                     </p>
                                                 )}
-                                                {p.remoteRejectedReason && (
-                                                    <p className="text-[11px] text-red-800">
-                                                        Motivo:{" "}
-                                                        {p.remoteRejectedReason}
-                                                    </p>
-                                                )}
+                                                {(() => {
+                                                    const rejection =
+                                                        getRejectionDisplay(
+                                                            p.uiStatus ===
+                                                                "rejected"
+                                                                ? "REJECTED"
+                                                                : p.uiStatus,
+                                                            p.remoteRejectedReason
+                                                        );
+                                                    if (
+                                                        !rejection.show ||
+                                                        !rejection.message
+                                                    ) {
+                                                        return null;
+                                                    }
+                                                    return (
+                                                        <p className="text-[11px] text-red-800">
+                                                            Motivo:{" "}
+                                                            {rejection.message}
+                                                        </p>
+                                                    );
+                                                })()}
                                                 {p.submitBlockReason &&
                                                     !p.canSubmit && (
                                                         <p className="text-[11px] text-slate-500">
