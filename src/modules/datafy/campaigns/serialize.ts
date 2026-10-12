@@ -31,6 +31,14 @@ export function serializeCampaign(c: CampaignWithMeta) {
             (c as { interactiveButtons?: unknown }).interactiveButtons ?? null,
         messageParts: c.messageParts ?? null,
         bulletinMeta: c.bulletinMeta ?? null,
+        bulletinVersionId:
+            (c as { bulletinVersionId?: string | null }).bulletinVersionId ??
+            null,
+        bulletinSendMode:
+            (c as { bulletinSendMode?: string | null }).bulletinSendMode ?? null,
+        bulletinCardPosition:
+            (c as { bulletinCardPosition?: number | null })
+                .bulletinCardPosition ?? null,
         headerImageUrl: c.headerImageUrl,
         headerImageHandle: c.headerImageHandle,
         variableMapping: c.variableMapping,
@@ -58,6 +66,9 @@ export function serializeCampaign(c: CampaignWithMeta) {
             failed: c.totalFailed,
             skipped: c.totalSkipped,
             cancelled: c.totalCancelled,
+            messagesPlanned:
+                (c as { totalMessagesPlanned?: number }).totalMessagesPlanned ??
+                c.totalQueued,
         },
         lastError: c.lastError,
         createdBy: c.createdBy

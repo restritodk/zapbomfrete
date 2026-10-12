@@ -52,6 +52,10 @@ import {
     serializeBulletinDraft,
 } from "@/modules/datafy/campaigns/bulletin/analyze";
 import { DATAFY_BULLETIN_IMPORT_KEY } from "@/modules/datafy/campaigns/bulletin/constants";
+import {
+    BulletinGroupedCardsSection,
+    useBulletinGrouping,
+} from "@/components/dashboard/bulletin-grouped-cards";
 
 function statusBadge(ui: string) {
     switch (ui) {
@@ -133,6 +137,12 @@ export function BulletinCreatorPanel() {
         useState<LibraryProposalCard | null>(null);
     const [submittingMeta, setSubmittingMeta] = useState(false);
     const [, startTransition] = useTransition();
+    const {
+        version: groupedVersion,
+        busy: groupingBusy,
+        registerVersion,
+        refreshVersion,
+    } = useBulletinGrouping();
 
     const editLoad = editIndex != null ? draft?.loads[editIndex] : null;
 
@@ -718,6 +728,31 @@ export function BulletinCreatorPanel() {
                             })}
                         </div>
                     </div>
+
+                    <BulletinGroupedCardsSection
+                        version={groupedVersion}
+                        busy={groupingBusy}
+                        onRegister={() => {
+                            if (!draft) return;
+                            void registerVersion({
+                                title: draft.general.title || "Boletim",
+                                rawText: serializeBulletinDraft(draft),
+                                loads: draft.loads,
+                                loadCount: draft.loads.length,
+                                parts: partsPreview as unknown[],
+                                draftId,
+                                bundleId: groupedVersion?.bundleId || null,
+                            });
+                        }}
+                        onRefresh={
+                            groupedVersion
+                                ? () =>
+                                      void refreshVersion(
+                                          groupedVersion.versionId
+                                      )
+                                : undefined
+                        }
+                    />
 
                     <Card className="border-slate-200/80 shadow-sm overflow-hidden">
                         <CardHeader className="pb-3">

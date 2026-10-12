@@ -57,6 +57,8 @@ model User {
   datafyCampaignsCreated DatafyCampaign[] @relation("DatafyCampaignCreatedBy")
   datafyBulletinDraftsCreated DatafyBulletinDraft[] @relation("DatafyBulletinDraftCreatedBy")
   datafyManagedTemplatesCreated DatafyManagedTemplate[] @relation("DatafyManagedTemplateCreatedBy")
+  datafyBulletinBundlesCreated DatafyBulletinBundle[] @relation("DatafyBulletinBundleCreatedBy")
+  datafyBulletinVersionsCreated DatafyBulletinVersion[] @relation("DatafyBulletinVersionCreatedBy")
   crmConsentDecisionsAsActor CrmConsentDecision[] @relation("CrmConsentDecisionActor")
 }
 
@@ -716,7 +718,7 @@ model DatafyCampaign {
   channelId          String    @default("datafy-official")
   name               String
   description        String?   @db.Text
-  /// marketing | utility | authentication | transactional | other
+  /// marketing | utility | authentication | transactional | other | texto_livre
   purpose            String    @default("marketing")
   /// draft | scheduled | preparing | running | paused | completed | completed_with_errors | cancelled | failed
   status             String    @default("draft")
@@ -736,8 +738,14 @@ model DatafyCampaign {
   contentKind        String    @default("message")
   /// Ordered bulletin/message parts (CampaignMessagePart[]). Null = legacy single body.
   messageParts       Json?
-  /// Bulletin analysis meta: { title, loadCount, partCount, warnings }
+  /// Bulletin analysis meta: { title, loadCount, partCount, warnings, publicKey, version, … }
   bulletinMeta       Json?
+  /// Optional link to grouped bulletin version (complete / single-card send).
+  bulletinVersionId  String?
+  /// complete_bulletin | single_card | legacy_parts | direct_freeform
+  bulletinSendMode   String?
+  /// When bulletinSendMode=single_card — which card position (1-based).
+  bulletinCardPosition Int?
   /// Optional HEADER IMAGE — public URL used at send time (link).
   headerImageUrl     String?   @db.Text
   /// Meta header_handle from Datafy /uploads (template creation).
@@ -768,6 +776,8 @@ model DatafyCampaign {
   totalFailed        Int       @default(0)
   totalSkipped       Int       @default(0)
   totalCancelled     Int       @default(0)
+  /// Expected message count (recipients × cards) for multi-card bulletins.
+  totalMessagesPlanned Int     @default(0)
   lastError          String?   @db.Text
   /// Earliest instant the next send attempt may start (persistent pacing).
   nextSendEligibleAt DateTime?
@@ -782,12 +792,14 @@ model DatafyCampaign {
   recipients DatafyCampaignRecipient[]
   events     DatafyCampaignEvent[]
   bulletinDrafts DatafyBulletinDraft[]
+  bulletinVersion DatafyBulletinVersion? @relation(fields: [bulletinVersionId], references: [id], onDelete: SetNull)
 
   @@index([organizationKey, status])
   @@index([channelId, status])
   @@index([scheduledAt])
   @@index([createdAt])
   @@index([status, lockedAt])
+  @@index([bulletinVersionId])
 }
 
 model DatafyCampaignRecipient {
@@ -865,6 +877,8 @@ model DatafyBulletinDraft {
   warnings        Json?
   loadCount       Int       @default(0)
   campaignId      String?
+  /// Optional link to grouped bulletin version created from this draft.
+  bulletinVersionId String?
   confirmedAt     DateTime?
   createdById     String?
   createdAt       DateTime  @default(now())
@@ -872,10 +886,101 @@ model DatafyBulletinDraft {
 
   createdBy User?          @relation("DatafyBulletinDraftCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   campaign  DatafyCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  bulletinVersion DatafyBulletinVersion? @relation(fields: [bulletinVersionId], references: [id], onDelete: SetNull)
 
   @@index([organizationKey, status])
   @@index([createdAt])
   @@index([campaignId])
+  @@index([bulletinVersionId])
+}
+
+/// Immutable bulletin family key (e.g. COTTON-20261012-001). Versions nest under it.
+model DatafyBulletinBundle {
+  id              String   @id @default(cuid())
+  organizationKey String   @default("default")
+  /// Immutable public identifier — never reuse across unrelated bulletins.
+  publicKey       String
+  name            String
+  slug            String
+  latestVersion   Int      @default(1)
+  createdById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  createdBy User?                    @relation("DatafyBulletinBundleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  versions  DatafyBulletinVersion[]
+
+  @@unique([organizationKey, publicKey])
+  @@index([organizationKey, updatedAt])
+  @@index([slug])
+}
+
+/// One immutable snapshot of a bulletin (loads + card order). New update = new version.
+model DatafyBulletinVersion {
+  id              String   @id @default(cuid())
+  organizationKey String   @default("default")
+  bundleId        String
+  version         Int
+  title           String
+  rawText         String   @db.Text
+  loads           Json?
+  loadCount       Int      @default(0)
+  cardCount       Int      @default(0)
+  language        String   @default("pt_BR")
+  category        String   @default("MARKETING")
+  /// draft | pending_approval | partially_approved | fully_approved | archived
+  approvalStatus  String   @default("draft")
+  isCurrent       Boolean  @default(true)
+  createdById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  bundle    DatafyBulletinBundle @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  createdBy User?                @relation("DatafyBulletinVersionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  cards     DatafyBulletinCard[]
+  campaigns DatafyCampaign[]
+  drafts    DatafyBulletinDraft[]
+
+  @@unique([bundleId, version])
+  @@index([organizationKey, approvalStatus])
+  @@index([organizationKey, isCurrent, updatedAt])
+  @@index([createdAt])
+}
+
+/// Ordered card (template part) belonging to exactly one bulletin version.
+model DatafyBulletinCard {
+  id                   String    @id @default(cuid())
+  versionId            String
+  /// 1-based send order within the version — immutable once created.
+  position             Int
+  loadIndexes          Json
+  loadSummary          String?   @db.Text
+  bodyPreview          String?   @db.Text
+  libraryTemplateId    String?
+  technicalName        String?
+  displayName          String?
+  language             String    @default("pt_BR")
+  category             String    @default("MARKETING")
+  /// APPROVED | PENDING | REJECTED | PAUSED | DISABLED | DRAFT | UNAVAILABLE
+  approvalStatus       String    @default("DRAFT")
+  managedTemplateId    String?
+  remoteTemplateId     String?
+  lastSubmittedAt      DateTime?
+  lastSyncedAt         DateTime?
+  variableMapping      Json?
+  templateComponents   Json?
+  /// Association provenance: compose | auto_link | manual | orphan_unlinked
+  associationSource    String    @default("compose")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  version         DatafyBulletinVersion  @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  managedTemplate DatafyManagedTemplate? @relation(fields: [managedTemplateId], references: [id], onDelete: SetNull)
+
+  @@unique([versionId, position])
+  @@index([managedTemplateId])
+  @@index([technicalName, language])
+  @@index([approvalStatus])
 }
 
 /// Managed bulletin template library (builtins overrides + custom templates).
@@ -925,8 +1030,11 @@ model DatafyManagedTemplate {
   createdById          String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
+  /// Optional soft link hint for admin association UI (not authoritative — cards own the FK).
+  suggestedBundleKey   String?
 
   createdBy User? @relation("DatafyManagedTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  bulletinCards DatafyBulletinCard[]
 
   @@unique([organizationKey, wabaId, technicalName, language])
   @@index([organizationKey, kind, hidden])
@@ -934,6 +1042,7 @@ model DatafyManagedTemplate {
   @@index([organizationKey, wabaId, remoteStatus])
   @@index([remoteTemplateId])
   @@index([deletedAt])
+  @@index([suggestedBundleKey])
 }
 
 /// Sync lock / reconciliation bookkeeping per WABA (concurrency + last run).

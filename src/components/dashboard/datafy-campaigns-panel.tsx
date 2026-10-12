@@ -69,6 +69,7 @@ import {
 import {
     META_INTERACTIVE_BODY_MAX,
     purposeAllowsServiceWindowFreeform,
+    purposeUsesBaileysFreeform,
 } from "@/modules/datafy/campaigns/send-readiness";
 import {
     assessWizardSendReadiness,
@@ -79,6 +80,11 @@ import {
     shouldAutoPickFallbackTemplate,
     templateKeyOf,
 } from "@/modules/datafy/campaigns/campaign-launch";
+import {
+    BulletinCampaignStep3,
+    type BulletinSendPickMode,
+} from "@/components/dashboard/bulletin-campaign-step3";
+import type { GroupedVersionDto } from "@/components/dashboard/bulletin-grouped-cards";
 import {
     buildEstimateCopy,
     CAMPAIGN_DELAY_SEC_MAX,
@@ -205,6 +211,13 @@ type Campaign = {
     templateLanguage: string | null;
     templateApprovalStatus?: string | null;
     messageBody?: string | null;
+    messageParts?: unknown[] | null;
+    bulletinMeta?: {
+        publicKey?: string;
+        version?: number;
+        cardCount?: number;
+        title?: string;
+    } | null;
     headerImageUrl?: string | null;
     dryRun: boolean;
     scheduledAt: string | null;
@@ -222,6 +235,7 @@ type Campaign = {
         skipped: number;
         cancelled: number;
         queued: number;
+        messagesPlanned?: number;
     };
     createdAt: string;
 };
@@ -490,7 +504,8 @@ function mapRecipientStatus(s: string): BroadcastRecipientRow["status"] {
 }
 
 function recipientDetail(s: string, skip?: string | null, err?: string | null) {
-    if (s === "accepted" || s === "sent") return "Aceita pela API (ainda não confirma entrega)";
+    if (s === "sent") return "Enviada pelo WhatsApp conectado";
+    if (s === "accepted") return "Aceita pela API (ainda não confirma entrega)";
     if (s === "delivered") return "Entregue no WhatsApp";
     if (s === "read") return "Lida";
     if (s === "skipped") return skip || "Excluído";
@@ -579,6 +594,19 @@ export function DatafyCampaignsPanel() {
         useState<BulletinDeliveryMode | null>(null);
     const [completeAssessment, setCompleteAssessment] =
         useState<CompleteBulletinAssessment | null>(null);
+    /** Grouped bulletin picker (Etapa 3) — complete vs single card */
+    const [groupedPickMode, setGroupedPickMode] =
+        useState<BulletinSendPickMode | null>(null);
+    const [groupedVersionId, setGroupedVersionId] = useState<string | null>(
+        null
+    );
+    const [groupedVersion, setGroupedVersion] =
+        useState<GroupedVersionDto | null>(null);
+    const [groupedCardPosition, setGroupedCardPosition] = useState<
+        number | null
+    >(null);
+    const [groupedPreviewIndex, setGroupedPreviewIndex] = useState(0);
+    const [confirmGroupedSend, setConfirmGroupedSend] = useState(false);
     const [templateKey, setTemplateKey] = useState("");
     const [bodyVars, setBodyVars] = useState<string[]>(["fullName"]);
     const [headerImageUrl, setHeaderImageUrl] = useState<string | null>(null);
@@ -730,9 +758,31 @@ export function DatafyCampaignsPanel() {
             acceptedAt: string | null;
             deliveredAt: string | null;
             failedAt: string | null;
+            partStatuses?: {
+                nextPartIndex?: number;
+                parts?: Array<{
+                    index?: number;
+                    status?: string;
+                    wamid?: string | null;
+                }>;
+            } | null;
         }>;
+        const partCount = Array.isArray(camp.messageParts)
+            ? Math.max(1, camp.messageParts.length)
+            : 1;
+        const meta = camp.bulletinMeta as {
+            publicKey?: string;
+            version?: number;
+            cardCount?: number;
+        } | null;
 
-        setProgressName(camp.name);
+        setProgressName(
+            meta?.publicKey
+                ? `${camp.name} · ${meta.publicKey}${
+                      meta.version != null ? ` v${meta.version}` : ""
+                  } · ${partCount} card(s)/dest.`
+                : camp.name
+        );
         setProgressStartedAt(camp.startedAt);
         setProgressCompletedAt(camp.completedAt);
         setProgressCounters({
@@ -743,23 +793,47 @@ export function DatafyCampaignsPanel() {
             dryRun: camp.dryRun,
         });
         setProgressRows(
-            recipients.map((r) => ({
-                id: r.id,
-                jid: r.waId,
-                display:
-                    r.fullName || formatPhoneDisplay(r.waId) || r.waId,
-                status: mapRecipientStatus(r.status),
-                at:
-                    r.deliveredAt ||
-                    r.acceptedAt ||
-                    r.failedAt ||
-                    null,
-                detail: recipientDetail(
+            recipients.map((r) => {
+                const parts = r.partStatuses?.parts || [];
+                const cardProgress = parts.length
+                    ? parts
+                          .map((p, i) => {
+                              const st = String(p.status || "pending");
+                              const label =
+                                  st === "delivered"
+                                      ? "Entregue"
+                                      : st === "accepted" || st === "sent"
+                                        ? "Aceito"
+                                        : st === "failed"
+                                          ? "Falha"
+                                          : st === "read"
+                                            ? "Lido"
+                                            : "Pendente";
+                              return `Card ${(p.index ?? i) + 1}/${parts.length || partCount} — ${label}`;
+                          })
+                          .join(" · ")
+                    : partCount > 1
+                      ? `${partCount} cards/destinatário`
+                      : "";
+                const base = recipientDetail(
                     r.status,
                     r.skipReason,
                     r.lastError
-                ),
-            }))
+                );
+                return {
+                    id: r.id,
+                    jid: r.waId,
+                    display:
+                        r.fullName || formatPhoneDisplay(r.waId) || r.waId,
+                    status: mapRecipientStatus(r.status),
+                    at:
+                        r.deliveredAt ||
+                        r.acceptedAt ||
+                        r.failedAt ||
+                        null,
+                    detail: [base, cardProgress].filter(Boolean).join(" | "),
+                };
+            })
         );
 
         if (["completed", "completed_with_errors"].includes(camp.status)) {
@@ -1029,6 +1103,115 @@ export function DatafyCampaignsPanel() {
         }
     }, []);
 
+    // Deep-link: /dashboard/broadcast?bulletin=1&versionId=…&mode=complete_bulletin
+    useEffect(() => {
+        try {
+            const sp = new URLSearchParams(window.location.search);
+            const versionId = sp.get("versionId");
+            const mode = sp.get("mode") as BulletinSendPickMode | null;
+            if (!versionId || !mode) return;
+            setContentKind("bulletin");
+            setBulletinDeliveryMode("split_templates");
+            setGroupedPickMode(mode);
+            setGroupedVersionId(versionId);
+            setWizardOpen(true);
+            setStep(3);
+            void (async () => {
+                const prep = await fetch(
+                    "/api/channels/datafy/bulletins/grouped",
+                    {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            action: "prepare_campaign",
+                            versionId,
+                            mode,
+                            cardPosition: null,
+                        }),
+                    }
+                );
+                const json = await prep.json().catch(() => ({}));
+                if (!prep.ok) {
+                    toast.error(json.message || "Falha ao carregar boletim");
+                    return;
+                }
+                setBulletinParts(json.data.parts as CampaignMessagePart[]);
+                setName(
+                    `${json.data.meta.title} · ${json.data.meta.publicKey} v${json.data.meta.version}`
+                );
+                const detail = await fetch(
+                    `/api/channels/datafy/bulletins/grouped?versionId=${encodeURIComponent(versionId)}`
+                );
+                const dJson = await detail.json().catch(() => ({}));
+                if (detail.ok && dJson.data?.version) {
+                    setGroupedVersion(dJson.data.version as GroupedVersionDto);
+                }
+                toast.success("Boletim agrupado carregado na Etapa 3");
+            })();
+        } catch {
+            /* ignore */
+        }
+    }, []);
+
+    const applyGroupedBulletinSelection = useCallback(
+        async (next: {
+            pickMode: BulletinSendPickMode;
+            versionId: string;
+            version: GroupedVersionDto | null;
+            cardPosition: number | null;
+            previewIndex: number;
+        }) => {
+            setGroupedPickMode(next.pickMode);
+            setGroupedVersionId(next.versionId || null);
+            setGroupedVersion(next.version);
+            setGroupedCardPosition(next.cardPosition);
+            setGroupedPreviewIndex(next.previewIndex);
+            setConfirmGroupedSend(false);
+            if (!next.versionId || !next.version) return;
+            if (
+                next.pickMode === "complete_bulletin" &&
+                next.version.approvedCardCount !== next.version.cardCount
+            ) {
+                toast.error(
+                    `Boletim incompleto: ${next.version.approvedCardCount}/${next.version.cardCount} cards aprovados`
+                );
+                return;
+            }
+            try {
+                const res = await fetch(
+                    "/api/channels/datafy/bulletins/grouped",
+                    {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            action: "prepare_campaign",
+                            versionId: next.versionId,
+                            mode: next.pickMode,
+                            cardPosition: next.cardPosition,
+                        }),
+                    }
+                );
+                const json = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    throw new Error(json.message || "Falha ao preparar boletim");
+                }
+                setBulletinParts(json.data.parts as CampaignMessagePart[]);
+                setBulletinDeliveryMode("split_templates");
+                setContentKind("bulletin");
+                if (!name.trim()) {
+                    setName(
+                        `${json.data.meta.title} · ${json.data.meta.publicKey} v${json.data.meta.version}`
+                    );
+                }
+            } catch (e) {
+                toast.error(
+                    e instanceof Error ? e.message : "Erro ao preparar boletim"
+                );
+            }
+        },
+        [name]
+    );
+
     const handleImportGroup = async () => {
         if (!groupSessionId || !selectedGroupJids.size) {
             toast.error("Selecione sessão Baileys e ao menos um grupo");
@@ -1165,7 +1348,14 @@ export function DatafyCampaignsPanel() {
             toast.error("Selecione ao menos um contato do CRM");
             return;
         }
-        const consent = purpose === "marketing" ? true : requireConsent;
+        // Utilidade/Transacional/Texto livre: audiência = todos os números válidos.
+        const consent =
+            purpose === "marketing"
+                ? true
+                : purposeAllowsServiceWindowFreeform(purpose) ||
+                    purposeUsesBaileysFreeform(purpose)
+                  ? false
+                  : requireConsent;
         if (purpose === "marketing" && !requireConsent) {
             setRequireConsent(true);
         }
@@ -1603,12 +1793,40 @@ export function DatafyCampaignsPanel() {
                 toast.error("Analise o boletim com ao menos uma carga/parte");
                 return;
             }
+            if (
+                bulletinDeliveryMode === "split_templates" &&
+                groupedVersion &&
+                !confirmGroupedSend &&
+                !effectiveDryRun
+            ) {
+                toast.error(
+                    "Confirme o envio do boletim/versão selecionado na Etapa 5."
+                );
+                return;
+            }
+            if (
+                bulletinDeliveryMode === "split_templates" &&
+                groupedPickMode === "complete_bulletin" &&
+                groupedVersion &&
+                groupedVersion.approvedCardCount !== groupedVersion.cardCount
+            ) {
+                toast.error(
+                    "Não é possível enviar boletim completo com cards pendentes."
+                );
+                return;
+            }
             const first = bulletinParts[0];
             if (bulletinDeliveryMode === "complete_single") {
-                contentSource = "bulletin_complete_freeform";
+                contentSource = purposeUsesBaileysFreeform(purpose)
+                    ? "baileys_freeform"
+                    : "bulletin_complete_freeform";
                 vars = [];
-                // Template APPROVED opcional: quem está fora da janela 24h
-                if (isApprovedTemplateStatus(selectedTemplate?.status)) {
+                // Template APPROVED opcional: quem está fora da janela 24h.
+                // Texto livre não usa template — o texto sai pelo Baileys.
+                if (
+                    !purposeUsesBaileysFreeform(purpose) &&
+                    isApprovedTemplateStatus(selectedTemplate?.status)
+                ) {
                     templateName = selectedTemplate!.name;
                     templateLanguage = selectedTemplate!.language || "pt_BR";
                     templateCategory = selectedTemplate!.category || null;
@@ -1620,9 +1838,12 @@ export function DatafyCampaignsPanel() {
                     templateApprovalStatus = null;
                 }
                 if (!effectiveDryRun) {
-                    if (!purposeAllowsServiceWindowFreeform(purpose)) {
+                    if (
+                        !purposeAllowsServiceWindowFreeform(purpose) &&
+                        !purposeUsesBaileysFreeform(purpose)
+                    ) {
                         toast.error(
-                            "Boletim completo (mensagem única) só é permitido em Utilidade ou Transacional. Marketing exige templates APPROVED divididos."
+                            "Boletim completo (mensagem única) só é permitido em Utilidade, Transacional ou Texto livre. Marketing exige templates APPROVED divididos."
                         );
                         return;
                     }
@@ -1650,6 +1871,11 @@ export function DatafyCampaignsPanel() {
                         return;
                     }
                 }
+            } else if (purposeUsesBaileysFreeform(purpose)) {
+                toast.error(
+                    "Texto livre envia o boletim inteiro pelo WhatsApp conectado. Escolha mensagem única."
+                );
+                return;
             } else {
                 templateName = first.templateName || null;
                 templateLanguage = first.templateLanguage || "pt_BR";
@@ -1675,13 +1901,18 @@ export function DatafyCampaignsPanel() {
                 toast.error("Informe o texto da mensagem na Etapa 1");
                 return;
             }
-            if (!purposeAllowsServiceWindowFreeform(purpose)) {
+            if (
+                !purposeAllowsServiceWindowFreeform(purpose) &&
+                !purposeUsesBaileysFreeform(purpose)
+            ) {
                 toast.error(
-                    "Envio Direto só está disponível para Utilidade ou Transacional."
+                    "Envio Direto só está disponível para Utilidade, Transacional ou Texto livre."
                 );
                 return;
             }
-            contentSource = "freeform_window";
+            contentSource = purposeUsesBaileysFreeform(purpose)
+                ? "baileys_freeform"
+                : "freeform_window";
             vars = bodyVars;
             if (isApprovedTemplateStatus(selectedTemplate?.status)) {
                 templateName = selectedTemplate!.name;
@@ -1777,7 +2008,12 @@ export function DatafyCampaignsPanel() {
             finalFilter = { source: "groups", phones: groupPhones };
         }
         const consentForced =
-            purpose === "marketing" ? true : requireConsent;
+            purpose === "marketing"
+                ? true
+                : purposeAllowsServiceWindowFreeform(purpose) ||
+                    purposeUsesBaileysFreeform(purpose)
+                  ? false
+                  : requireConsent;
         const partN =
             contentKind === "bulletin"
                 ? Math.max(1, bulletinParts.length)
@@ -1851,15 +2087,41 @@ export function DatafyCampaignsPanel() {
                 messageParts:
                     contentKind === "bulletin" ? bulletinParts : null,
                 bulletinMeta:
-                    contentKind === "bulletin" && bulletinAnalysis
-                        ? {
-                              title: bulletinAnalysis.title,
-                              loadCount: bulletinAnalysis.loadCount,
-                              partCount: bulletinParts.length,
-                              deliveryMode: bulletinDeliveryMode,
-                              warnings: bulletinAnalysis.warnings,
-                          }
+                    contentKind === "bulletin"
+                        ? groupedVersion
+                            ? {
+                                  title: groupedVersion.title,
+                                  publicKey: groupedVersion.publicKey,
+                                  version: groupedVersion.version,
+                                  loadCount: groupedVersion.loadCount,
+                                  partCount: bulletinParts.length,
+                                  cardCount: groupedVersion.cardCount,
+                                  approvedCardCount:
+                                      groupedVersion.approvedCardCount,
+                                  deliveryMode: bulletinDeliveryMode,
+                                  bulletinSendMode: groupedPickMode,
+                                  bulletinVersionId: groupedVersion.versionId,
+                                  bulletinCardPosition: groupedCardPosition,
+                              }
+                            : bulletinAnalysis
+                              ? {
+                                    title: bulletinAnalysis.title,
+                                    loadCount: bulletinAnalysis.loadCount,
+                                    partCount: bulletinParts.length,
+                                    deliveryMode: bulletinDeliveryMode,
+                                    warnings: bulletinAnalysis.warnings,
+                                }
+                              : null
                         : null,
+                bulletinVersionId: groupedVersionId,
+                bulletinSendMode:
+                    contentKind === "bulletin"
+                        ? groupedPickMode ||
+                          (bulletinDeliveryMode === "complete_single"
+                              ? "direct_freeform"
+                              : "legacy_parts")
+                        : null,
+                bulletinCardPosition: groupedCardPosition,
                 headerImageUrl,
                 headerImageHandle,
                 variableMapping: { body: vars },
@@ -2004,6 +2266,9 @@ export function DatafyCampaignsPanel() {
             mode = "split_templates";
         }
 
+        // Grouped bulletin selection owns messageParts — do not overwrite.
+        if (groupedVersionId) return;
+
         if (mode === "complete_single") {
             setBulletinParts(
                 composeCompleteBulletinPart(
@@ -2030,6 +2295,7 @@ export function DatafyCampaignsPanel() {
         purpose,
         bulletinLibrary,
         bulletinDeliveryMode,
+        groupedVersionId,
     ]);
 
     const activePreviewText = useMemo(() => {
@@ -2432,7 +2698,16 @@ export function DatafyCampaignsPanel() {
                                         value={purpose}
                                         onValueChange={(v) => {
                                             setPurpose(v);
-                                            if (
+                                            if (purposeUsesBaileysFreeform(v)) {
+                                                setContentMode("direct");
+                                                setRequireConsent(false);
+                                                setConsentButtonsEnabled(false);
+                                                if (contentKind === "bulletin") {
+                                                    setBulletinDeliveryMode(
+                                                        "complete_single"
+                                                    );
+                                                }
+                                            } else if (
                                                 purposeAllowsServiceWindowFreeform(
                                                     v
                                                 ) &&
@@ -2461,8 +2736,24 @@ export function DatafyCampaignsPanel() {
                                             <SelectItem value="transactional">
                                                 Transacional
                                             </SelectItem>
+                                            <SelectItem value="texto_livre">
+                                                Texto livre
+                                            </SelectItem>
                                         </SelectContent>
                                     </Select>
+                                    {purposeUsesBaileysFreeform(purpose) && (
+                                        <p className="text-[11px] leading-relaxed text-emerald-900 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-2">
+                                            Texto livre usa o WhatsApp conectado
+                                            (Baileys) com o número da Datafy
+                                            {datafyDisplayPhone
+                                                ? ` (${formatPhoneDisplay(datafyDisplayPhone) || datafyDisplayPhone})`
+                                                : ""}
+                                            . A mensagem sai na hora, sem
+                                            template e sem a janela da Meta.
+                                            Esse número precisa estar conectado
+                                            em Sessões.
+                                        </p>
+                                    )}
                                 </div>
                             </div>
 
@@ -2481,7 +2772,10 @@ export function DatafyCampaignsPanel() {
                                         setContentMode(
                                             purposeAllowsServiceWindowFreeform(
                                                 purpose
-                                            )
+                                            ) ||
+                                                purposeUsesBaileysFreeform(
+                                                    purpose
+                                                )
                                                 ? "direct"
                                                 : "existing"
                                         );
@@ -2503,7 +2797,10 @@ export function DatafyCampaignsPanel() {
                                         setContentMode(
                                             purposeAllowsServiceWindowFreeform(
                                                 purpose
-                                            )
+                                            ) ||
+                                                purposeUsesBaileysFreeform(
+                                                    purpose
+                                                )
                                                 ? "direct"
                                                 : "custom"
                                         );
@@ -4132,11 +4429,13 @@ export function DatafyCampaignsPanel() {
                                             </strong>
                                         </span>
                                         <p className="basis-full text-[11px] text-slate-500">
-                                            {purposeAllowsServiceWindowFreeform(
-                                                purpose
-                                            )
-                                                ? "Utilidade/Transacional: com texto na Etapa 1, todos os elegíveis podem avançar para o disparo imediato."
-                                                : "Marketing exige template APPROVED para envio real."}
+                                            {purposeUsesBaileysFreeform(purpose)
+                                                ? "Texto livre: todos os números válidos recebem pelo WhatsApp conectado (Baileys), com o número da Datafy. Sem template e sem janela da Meta."
+                                                : purposeAllowsServiceWindowFreeform(
+                                                      purpose
+                                                  )
+                                                  ? "Utilidade/Transacional: texto livre só chega em quem escreveu para o WhatsApp oficial nas últimas 24h. Fora disso a API aceita e o celular não recebe — é preciso template APPROVED."
+                                                  : "Marketing exige template APPROVED para envio real."}
                                         </p>
                                         {(audience.simulationEligibleCount ||
                                             0) > audience.eligibleCount && (
@@ -4356,173 +4655,45 @@ export function DatafyCampaignsPanel() {
                                             ) : null}
                                         </div>
                                     ) : (
-                                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-600 space-y-1.5">
-                                            <p>
-                                                Templates reutilizáveis APPROVED
-                                                são selecionados automaticamente.
-                                                Só as variáveis (origem, destino,
-                                                terminal, lote, localização,
-                                                pedágio, detalhes) mudam a cada
-                                                boletim — sem nova aprovação
-                                                diária.
-                                            </p>
-                                            <p className="text-xs text-slate-500">
-                                                Biblioteca:{" "}
-                                                {libraryApprovalChecklist()
-                                                    .map(
-                                                        (t) =>
-                                                            `${t.preferredName} (${t.loadsPerMessage} carga${t.loadsPerMessage > 1 ? "s" : ""})`
-                                                    )
-                                                    .join(" · ")}
-                                            </p>
-                                            <a
-                                                href="/dashboard/settings/integrations/datafy"
-                                                className="inline-flex text-xs font-medium text-primary hover:underline"
-                                            >
-                                                Gerenciar templates Datafy /
-                                                Meta →
-                                            </a>
-                                        </div>
+                                        <BulletinCampaignStep3
+                                            selectedVersionId={groupedVersionId}
+                                            pickMode={groupedPickMode}
+                                            cardPosition={groupedCardPosition}
+                                            previewIndex={groupedPreviewIndex}
+                                            onChange={(next) =>
+                                                void applyGroupedBulletinSelection(
+                                                    next
+                                                )
+                                            }
+                                            footerSlot={
+                                                <p className="text-[11px] text-slate-500">
+                                                    Envio Direto (mensagem única)
+                                                    continua disponível na Etapa
+                                                    1 ao escolher “mensagem
+                                                    única”. Templates não
+                                                    associados: Biblioteca →
+                                                    associação manual.
+                                                </p>
+                                            }
+                                        />
                                     )}
-                                    {bulletinParts.some(
-                                        (p) => !p.readyForRealSend
-                                    ) &&
-                                        bulletinDeliveryMode !==
-                                            "complete_single" && (
-                                        <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-sm text-amber-950 space-y-1">
-                                            <p className="font-medium inline-flex items-center gap-1.5">
-                                                <AlertTriangle className="h-4 w-4 shrink-0" />
-                                                Falta modelo compatível ou há
-                                                bloqueio
-                                            </p>
-                                            <p className="text-xs">
-                                                Envio real fica bloqueado para as
-                                                partes abaixo. Simulação ainda
-                                                pode continuar.
-                                            </p>
-                                        </div>
-                                    )}
-                                    {bulletinParts.map((p) => (
-                                        <div
-                                            key={p.index}
-                                            className={cn(
-                                                "rounded-xl border bg-white p-3 space-y-2",
-                                                p.readyForRealSend
-                                                    ? "border-emerald-200"
-                                                    : "border-amber-200"
-                                            )}
-                                        >
-                                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                                <p className="text-sm font-medium">
-                                                    {p.label}{" "}
-                                                    <span className="text-slate-400 font-normal">
-                                                        ·{" "}
-                                                        {p.loadIndexes.length}{" "}
-                                                        carga(s)
-                                                        {" · "}
-                                                        {p.charCount}/
-                                                        {bulletinDeliveryMode ===
-                                                        "complete_single"
-                                                            ? META_FREEFORM_TEXT_MAX
-                                                            : META_TEMPLATE_BODY_MAX}{" "}
-                                                        chars
-                                                    </span>
-                                                </p>
-                                                <Badge
-                                                    variant="outline"
-                                                    className={
-                                                        p.compatibility ===
-                                                        "ready"
-                                                            ? "border-emerald-300 text-emerald-800"
-                                                            : "border-amber-300 text-amber-900"
-                                                    }
-                                                >
-                                                    {bulletinDeliveryMode ===
-                                                        "complete_single" &&
-                                                    p.compatibility === "ready"
-                                                        ? "Pronto (texto livre)"
-                                                        : bulletinDeliveryMode ===
-                                                                "complete_single" &&
-                                                            p.compatibility ===
-                                                                "blocked"
-                                                          ? "Envio real bloqueado"
-                                                          : p.compatibility ===
-                                                              "ready"
-                                                            ? "Compatível"
-                                                            : p.compatibility ===
-                                                                "missing_template"
-                                                              ? "Sem template"
-                                                              : p.compatibility ===
-                                                                  "param_overflow"
-                                                                ? "Variável longa"
-                                                                : "Bloqueado"}
-                                                </Badge>
-                                            </div>
-                                            {p.templateName ? (
-                                                <p className="text-xs text-slate-600">
-                                                    Template:{" "}
-                                                    <code className="font-mono text-slate-800">
-                                                        {p.templateName}
-                                                    </code>
-                                                    {p.libraryTemplateId
-                                                        ? ` · ${p.libraryTemplateId}`
-                                                        : ""}
-                                                    {p.templateCategory
-                                                        ? ` · ${p.templateCategory}`
-                                                        : ""}
-                                                    {p.templateApprovalStatus
-                                                        ? ` · ${p.templateApprovalStatus}`
-                                                        : ""}
-                                                </p>
-                                            ) : bulletinDeliveryMode ===
-                                              "complete_single" ? (
-                                                <p className="text-xs text-slate-600">
-                                                    Texto livre — pronto para
-                                                    disparo imediato.
-                                                </p>
-                                            ) : (
-                                                <p className="text-xs text-amber-900">
-                                                    Nenhum template da biblioteca
-                                                    associado a esta parte.
-                                                </p>
-                                            )}
-                                            {p.blockReason && (
-                                                <p className="text-xs text-amber-900">
-                                                    {p.blockReason}
-                                                </p>
-                                            )}
-                                            {p.policyWarning && (
-                                                <p className="text-xs text-amber-800">
-                                                    {p.policyWarning}
-                                                </p>
-                                            )}
-                                            <details className="text-xs text-slate-600">
-                                                <summary className="cursor-pointer select-none text-slate-500 hover:text-slate-800">
-                                                    Prévia com variáveis
-                                                    preenchidas
-                                                </summary>
-                                                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 border border-slate-100 p-2.5 font-sans text-[12px] leading-relaxed">
-                                                    {p.bodyText}
-                                                </pre>
-                                                {p.variableMapping?.body
-                                                    ?.length ? (
-                                                    <p className="mt-1.5 text-[11px] text-slate-400">
-                                                        {
-                                                            p.variableMapping
-                                                                .body.length
-                                                        }{" "}
-                                                        variáveis posicionais
-                                                    </p>
-                                                ) : null}
-                                            </details>
-                                        </div>
-                                    ))}
-                                    {!bulletinParts.length && (
-                                        <p className="text-sm text-slate-500">
-                                            Cole um boletim na Etapa 1 para
-                                            mapear templates.
-                                        </p>
-                                    )}
+                                </div>
+                            ) : purposeUsesBaileysFreeform(purpose) ? (
+                                <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 text-sm text-emerald-950">
+                                    <p className="font-medium">
+                                        Texto livre — WhatsApp conectado
+                                    </p>
+                                    <p>
+                                        O texto da Etapa 1 sai pelo número da
+                                        Datafy
+                                        {datafyDisplayPhone
+                                            ? ` (${formatPhoneDisplay(datafyDisplayPhone) || datafyDisplayPhone})`
+                                            : ""}{" "}
+                                        no modo Baileys. Não passa pela API da
+                                        Meta, não pede template e não depende
+                                        da janela de 24 horas. O número precisa
+                                        estar conectado em Sessões.
+                                    </p>
                                 </div>
                             ) : (
                                 <>
@@ -4901,6 +5072,87 @@ export function DatafyCampaignsPanel() {
                                 <p className="text-lg font-semibold text-slate-900 tracking-tight">
                                     {name || "—"}
                                 </p>
+                                {groupedVersion &&
+                                bulletinDeliveryMode === "split_templates" ? (
+                                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-3 space-y-1.5 text-emerald-950">
+                                        <p className="font-medium">
+                                            Boletim selecionado:{" "}
+                                            {groupedVersion.title}
+                                        </p>
+                                        <p className="text-xs">
+                                            Identificador:{" "}
+                                            <span className="font-mono">
+                                                {groupedVersion.publicKey}
+                                            </span>{" "}
+                                            · Versão {groupedVersion.version} ·{" "}
+                                            {groupedVersion.loadCount} cargas ·{" "}
+                                            {groupedVersion.approvedCardCount} de{" "}
+                                            {groupedVersion.cardCount} cards
+                                            aprovados
+                                        </p>
+                                        <p className="text-xs">
+                                            Tipo:{" "}
+                                            {groupedPickMode === "single_card"
+                                                ? `Template individual (card ${groupedCardPosition})`
+                                                : "Boletim completo"}
+                                        </p>
+                                        <p className="text-xs">
+                                            Ordem de envio:{" "}
+                                            {bulletinParts
+                                                .map(
+                                                    (p, i) =>
+                                                        `Card ${i + 1}/${bulletinParts.length} (${p.templateName || "—"})`
+                                                )
+                                                .join(" → ")}
+                                        </p>
+                                        <p className="text-xs">
+                                            Destinatários aptos:{" "}
+                                            {
+                                                sendReadiness.technicallySendableCount
+                                            }{" "}
+                                            · Intervalo: {delayMs / 1000}s ·
+                                            Total previsto:{" "}
+                                            {estimateMessageTotal(
+                                                sendReadiness.realSendReady
+                                                    ? sendReadiness.technicallySendableCount
+                                                    : audience?.eligibleCount ??
+                                                          0,
+                                                Math.max(
+                                                    1,
+                                                    bulletinParts.length
+                                                )
+                                            )}{" "}
+                                            mensagens
+                                        </p>
+                                        <label className="flex items-start gap-2 pt-2 text-sm cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                className="mt-1"
+                                                checked={confirmGroupedSend}
+                                                onChange={(e) =>
+                                                    setConfirmGroupedSend(
+                                                        e.target.checked
+                                                    )
+                                                }
+                                            />
+                                            <span>
+                                                Confirmar envio de{" "}
+                                                {groupedPickMode ===
+                                                "single_card"
+                                                    ? "este card"
+                                                    : "todos os cards"}{" "}
+                                                do boletim{" "}
+                                                <strong>
+                                                    {groupedVersion.title}
+                                                </strong>{" "}
+                                                (versão {groupedVersion.version}
+                                                ). A campanha não mudará
+                                                silenciosamente para outro
+                                                boletim.
+                                            </span>
+                                        </label>
+                                    </div>
+                                ) : null}
                                 <div className="grid gap-2 sm:grid-cols-2 text-slate-600">
                                     <p>
                                         <span className="text-slate-400 text-xs uppercase tracking-wide block mb-0.5">
@@ -5045,9 +5297,13 @@ export function DatafyCampaignsPanel() {
                                         </p>
                                     )}
                                 <p className="text-xs text-slate-500">
-                                    {purposeAllowsServiceWindowFreeform(purpose)
-                                        ? "Utilidade/Transacional aprovado para disparo imediato dos elegíveis com o texto da campanha."
-                                        : "Marketing exige template APPROVED para envio real."}
+                                    {purposeUsesBaileysFreeform(purpose)
+                                        ? "Texto livre dispara na hora pelo WhatsApp conectado, com o número da Datafy. Sem aprovação da Meta e sem janela de 24h."
+                                        : purposeAllowsServiceWindowFreeform(
+                                              purpose
+                                          )
+                                          ? "Texto livre só é entrega real com a janela de 24h aberta. Sem template APPROVED, número que nunca escreveu não recebe a mensagem."
+                                          : "Marketing exige template APPROVED para envio real."}
                                 </p>
                             </div>
                         </div>
@@ -5270,9 +5526,12 @@ export function DatafyCampaignsPanel() {
                                         }
                                         if (
                                             step === 3 &&
-                                            purposeAllowsServiceWindowFreeform(
+                                            (purposeAllowsServiceWindowFreeform(
                                                 purpose
-                                            ) &&
+                                            ) ||
+                                                purposeUsesBaileysFreeform(
+                                                    purpose
+                                                )) &&
                                             !messageBody.trim() &&
                                             contentKind !== "bulletin"
                                         ) {
@@ -5383,7 +5642,9 @@ export function DatafyCampaignsPanel() {
                             <AlertDialogDescription className="text-sm text-emerald-50/90">
                                 {pendingLaunch?.effectiveDryRun
                                     ? "Nenhuma mensagem real será enviada."
-                                    : "As mensagens sairão pelo número oficial Datafy conectado."}
+                                    : purposeUsesBaileysFreeform(purpose)
+                                      ? "As mensagens sairão pelo WhatsApp conectado (Baileys), usando o número da Datafy. Não passam pela API da Meta."
+                                      : "As mensagens sairão pelo número oficial Datafy conectado."}
                             </AlertDialogDescription>
                         </AlertDialogHeader>
                     </div>

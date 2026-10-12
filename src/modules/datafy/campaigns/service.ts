@@ -25,8 +25,10 @@ import {
     assessRealSendReadiness,
     countOpenServiceWindows,
     hasApprovedTemplateContent,
-    purposeAllowsServiceWindowFreeform,
+    purposeSkipsConsentGate,
+    purposeUsesBaileysFreeform,
 } from "./send-readiness";
+import { resolveBaileysSessionForDatafyNumber } from "./baileys-freeform";
 
 export class CampaignError extends Error {
     statusCode: number;
@@ -267,6 +269,9 @@ export type CreateCampaignInput = {
     messageBody?: string | null;
     messageParts?: unknown;
     bulletinMeta?: unknown;
+    bulletinVersionId?: string | null;
+    bulletinSendMode?: string | null;
+    bulletinCardPosition?: number | null;
     headerImageUrl?: string | null;
     headerImageHandle?: string | null;
     variableMapping?: unknown;
@@ -343,6 +348,12 @@ export async function createCampaign(
                 input.bulletinMeta === undefined
                     ? undefined
                     : (input.bulletinMeta as Prisma.InputJsonValue),
+            bulletinVersionId: input.bulletinVersionId || null,
+            bulletinSendMode: input.bulletinSendMode || null,
+            bulletinCardPosition:
+                input.bulletinCardPosition != null
+                    ? Math.max(1, Math.floor(input.bulletinCardPosition))
+                    : null,
             headerImageUrl: input.headerImageUrl || null,
             headerImageHandle: input.headerImageHandle || null,
             variableMapping:
@@ -364,10 +375,9 @@ export async function createCampaign(
                 Math.min(50, input.batchSize ?? DEFAULT_CAMPAIGN_BATCH_SIZE)
             ),
             dryRun: Boolean(input.dryRun),
-            // Utilidade/Transacional: só exige consentimento se o usuário marcar o checkbox.
-            // Marketing continua exigindo por padrão.
-            requireConsent: purposeAllowsServiceWindowFreeform(purpose)
-                ? Boolean(input.requireConsent)
+            // Utilidade/Transacional/Texto livre: consentimento não bloqueia o envio.
+            requireConsent: purposeSkipsConsentGate(purpose)
+                ? false
                 : input.requireConsent !== false,
             createdById: userId,
         },
@@ -386,8 +396,8 @@ export async function createCampaign(
 
     if (input.segmentFilter) {
         const dryRun = Boolean(input.dryRun);
-        const requireConsent = purposeAllowsServiceWindowFreeform(purpose)
-            ? Boolean(input.requireConsent)
+        const requireConsent = purposeSkipsConsentGate(purpose)
+            ? false
             : input.requireConsent !== false;
         await materializeRecipients(created.id, input.segmentFilter, {
             purpose,
@@ -496,7 +506,15 @@ export async function updateCampaign(
     }
     if (input.dryRun !== undefined) data.dryRun = Boolean(input.dryRun);
     if (input.requireConsent !== undefined) {
-        data.requireConsent = Boolean(input.requireConsent);
+        const nextPurpose = String(input.purpose || current.purpose || "");
+        data.requireConsent = purposeSkipsConsentGate(nextPurpose)
+            ? false
+            : Boolean(input.requireConsent);
+    } else if (
+        input.purpose !== undefined &&
+        purposeSkipsConsentGate(input.purpose)
+    ) {
+        data.requireConsent = false;
     }
     if (input.scheduledAt !== undefined) {
         if (input.scheduledAt === null || input.scheduledAt === "") {
@@ -521,12 +539,14 @@ export async function updateCampaign(
     if (input.segmentFilter) {
         const nextDryRun =
             input.dryRun !== undefined ? Boolean(input.dryRun) : current.dryRun;
+        const nextPurpose = String(input.purpose || current.purpose || "");
         await materializeRecipients(id, input.segmentFilter, {
-            purpose: (input.purpose || current.purpose) as string,
-            requireConsent:
-                input.requireConsent !== undefined
-                    ? Boolean(input.requireConsent)
-                    : current.requireConsent,
+            purpose: nextPurpose,
+            requireConsent: purposeSkipsConsentGate(nextPurpose)
+                ? false
+                : input.requireConsent !== undefined
+                  ? Boolean(input.requireConsent)
+                  : current.requireConsent,
             simulationRelaxConsent: nextDryRun,
         });
     }
@@ -673,6 +693,7 @@ export async function materializeRecipients(
             totalExcluded: preview.excludedCount,
             totalSkipped: preview.excludedCount,
             totalQueued: preview.eligibleCount * partCount,
+            totalMessagesPlanned: preview.eligibleCount * partCount,
         },
     });
 
@@ -719,6 +740,28 @@ export async function assertCampaignRealSendAllowed(campaignId: string) {
         c.messageBody?.trim() ||
             parts.some((p) => Boolean((p.bodyText || "").trim()))
     );
+    if (purposeUsesBaileysFreeform(c.purpose)) {
+        if (!hasFreeformBody) {
+            throw new CampaignError(
+                "Informe o texto da mensagem na Etapa 1 para o Texto livre.",
+                400
+            );
+        }
+        if (c.totalEligible <= 0 && recipients.length <= 0) {
+            throw new CampaignError("Nenhum destinatário elegível", 400);
+        }
+        try {
+            await resolveBaileysSessionForDatafyNumber();
+        } catch (e) {
+            throw new CampaignError(
+                e instanceof Error
+                    ? e.message
+                    : "WhatsApp conectado indisponível para Texto livre",
+                400
+            );
+        }
+        return;
+    }
     const assessment = assessRealSendReadiness({
         purpose: c.purpose,
         consentEligibleCount: Math.max(c.totalEligible, recipients.length),

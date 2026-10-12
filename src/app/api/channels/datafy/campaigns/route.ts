@@ -70,6 +70,17 @@ const createSchema = z.object({
         .optional(),
     messageParts: z.unknown().optional(),
     bulletinMeta: z.unknown().optional(),
+    bulletinVersionId: z.string().max(64).nullable().optional(),
+    bulletinSendMode: z
+        .enum([
+            "complete_bulletin",
+            "single_card",
+            "legacy_parts",
+            "direct_freeform",
+        ])
+        .nullable()
+        .optional(),
+    bulletinCardPosition: z.number().int().min(1).nullable().optional(),
     headerImageUrl: z.string().max(2000).nullable().optional(),
     headerImageHandle: z.string().max(2000).nullable().optional(),
     variableMapping: z.unknown().optional(),

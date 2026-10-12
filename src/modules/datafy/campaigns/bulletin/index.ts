@@ -19,6 +19,28 @@ export {
     draftToHandoff,
 } from "./draft-service";
 export {
+    slugifyBulletinTitle,
+    formatBulletinPublicKey,
+    formatBulletinDateKey,
+    parseBulletinPublicKey,
+    cardSeedsFromMessageParts,
+    aggregateCardApprovalStatus,
+    expectedMessagesForCampaign,
+    splitCurrentAndHistory,
+    partsFromBulletinCards,
+    summarizeLoadIndexes,
+    canAssociateTemplateToCard,
+} from "./grouping";
+export {
+    createBulletinVersionFromParts,
+    listGroupedBulletins,
+    getBulletinVersionDetail,
+    buildCampaignPartsForVersion,
+    listOrphanManagedTemplates,
+    associateTemplateToCard,
+    syncVersionCardStatuses,
+} from "./grouping-service";
+export {
     hydrateClientLibrary,
     managedToClientLibrary,
     type ClientLibrarySpec,

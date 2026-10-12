@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { BulletinTemplateManager } from "@/components/dashboard/bulletin-template-manager";
+import { BulletinOrphanAssociatePanel } from "@/components/dashboard/bulletin-orphan-associate";
 import { Button } from "@/components/ui/button";
 import { Library, ShieldCheck } from "lucide-react";
 import { canManageBulletinTemplates } from "@/modules/datafy/campaigns/access";
@@ -35,6 +36,7 @@ export default async function BibliotecaTemplatesPage() {
                 canManage={canManage}
                 hasChannelToken
             />
+            {canManage ? <BulletinOrphanAssociatePanel /> : null}
         </div>
     );
 }
