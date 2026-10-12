@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useSession as useAuthSession } from "next-auth/react";
 import { toast } from "sonner";
 import {
+    Ban,
     Building2,
     ChevronLeft,
     ChevronRight,
@@ -25,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
     Table,
     TableBody,
@@ -57,6 +60,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { formatPhoneDisplay, parsePhoneList } from "@/lib/phone-br";
 import { CRM_CATEGORIES } from "@/modules/crm/constants";
+import { canHardDeleteCrm } from "@/modules/crm/access";
 import {
     contactDisplayName,
     contactInitials,
@@ -65,8 +69,13 @@ import {
     formatCrmDateTime,
     percentOf,
 } from "@/modules/crm/crm-display";
+import type { CrmListFilters } from "@/modules/crm/bulk/selection";
 import { DATAFY_OFFICIAL_CHANNEL_ID } from "@/modules/channels/ids";
 import { useSession } from "@/components/dashboard/session-provider";
+import {
+    CrmContactsBulkBar,
+    type CrmBulkSelection,
+} from "@/components/dashboard/crm-contacts-bulk";
 import { visiblePageNumbers } from "@/lib/mass-dispatch/pagination";
 import { cn } from "@/lib/utils";
 
@@ -80,6 +89,7 @@ type CrmRow = {
     category: string | null;
     origin: string;
     active: boolean;
+    blocked?: boolean;
     consentStatus: string;
     consentSource?: string | null;
     consentAt?: string | null;
@@ -174,6 +184,9 @@ function ContactAvatar({ fullName }: { fullName: string | null }) {
 export function CrmContactsPanel() {
     const router = useRouter();
     const { setChannelId } = useSession();
+    const { data: authSession } = useAuthSession();
+    const userRole = (authSession?.user as { role?: string } | undefined)?.role || "";
+    const canDelete = canHardDeleteCrm(userRole);
     const fileRef = useRef<HTMLInputElement>(null);
     const hasLoadedOnce = useRef(false);
 
@@ -191,6 +204,11 @@ export function CrmContactsPanel() {
     const [city, setCity] = useState("");
     const [stateUf, setStateUf] = useState("");
     const [showFilters, setShowFilters] = useState(false);
+
+    /** Page/id selection vs global filter selection. */
+    const [allMatching, setAllMatching] = useState(false);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
 
     const [modalOpen, setModalOpen] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -264,6 +282,120 @@ export function CrmContactsPanel() {
         const t = setTimeout(() => void load(), 300);
         return () => clearTimeout(t);
     }, [load]);
+
+    const listFilters = useMemo((): CrmListFilters => {
+        const filters: CrmListFilters = {
+            active:
+                activeFilter === "all"
+                    ? "all"
+                    : activeFilter === "false"
+                      ? false
+                      : true,
+        };
+        if (search.trim()) filters.search = search.trim();
+        if (category !== "all") filters.category = category;
+        if (consentStatus !== "all") filters.consentStatus = consentStatus;
+        if (city.trim()) filters.city = city.trim();
+        if (stateUf.trim()) filters.state = stateUf.trim();
+        return filters;
+    }, [search, category, consentStatus, activeFilter, city, stateUf]);
+
+    /** Reset selection when filter context changes (not on page alone). */
+    useEffect(() => {
+        setAllMatching(false);
+        setSelectedIds(new Set());
+        setExcludedIds(new Set());
+    }, [search, category, consentStatus, activeFilter, city, stateUf]);
+
+    const clearSelection = useCallback(() => {
+        setAllMatching(false);
+        setSelectedIds(new Set());
+        setExcludedIds(new Set());
+    }, []);
+
+    const pageIds = useMemo(() => rows.map((r) => r.id), [rows]);
+    const pageAllSelected =
+        pageIds.length > 0 &&
+        (allMatching
+            ? pageIds.every((id) => !excludedIds.has(id))
+            : pageIds.every((id) => selectedIds.has(id)));
+    const pageSomeSelected =
+        pageIds.length > 0 &&
+        !pageAllSelected &&
+        (allMatching
+            ? pageIds.some((id) => !excludedIds.has(id))
+            : pageIds.some((id) => selectedIds.has(id)));
+
+    const selectedCount = allMatching
+        ? Math.max(0, meta.total - excludedIds.size)
+        : selectedIds.size;
+
+    const bulkSelection = useMemo((): CrmBulkSelection | null => {
+        if (selectedCount <= 0) return null;
+        if (allMatching) {
+            return {
+                mode: "filters",
+                filters: listFilters,
+                excludeIds: Array.from(excludedIds),
+            };
+        }
+        return { mode: "ids", ids: Array.from(selectedIds) };
+    }, [selectedCount, allMatching, listFilters, excludedIds, selectedIds]);
+
+    const isRowSelected = (id: string) =>
+        allMatching ? !excludedIds.has(id) : selectedIds.has(id);
+
+    const toggleRow = (id: string) => {
+        if (allMatching) {
+            setExcludedIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+            });
+            return;
+        }
+        setSelectedIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
+    const togglePage = (checked: boolean) => {
+        if (allMatching) {
+            setExcludedIds((prev) => {
+                const next = new Set(prev);
+                for (const id of pageIds) {
+                    if (checked) next.delete(id);
+                    else next.add(id);
+                }
+                return next;
+            });
+            return;
+        }
+        setSelectedIds((prev) => {
+            const next = new Set(prev);
+            for (const id of pageIds) {
+                if (checked) next.add(id);
+                else next.delete(id);
+            }
+            return next;
+        });
+    };
+
+    const selectAllMatching = () => {
+        setAllMatching(true);
+        setSelectedIds(new Set());
+        setExcludedIds(new Set());
+    };
+
+    const showSelectAllBanner =
+        !allMatching &&
+        pageAllSelected &&
+        meta.total > pageIds.length &&
+        pageIds.length > 0;
 
     const openCreate = () => {
         setEditingId(null);
@@ -476,7 +608,7 @@ export function CrmContactsPanel() {
                     </div>
                     <div className="min-w-0">
                         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0f2744]">
-                            CRM Bom Frete
+                            Contatos Bom Frete
                         </h1>
                         <p className="text-slate-500 text-sm mt-1 max-w-2xl">
                             Diretório compartilhado integrado ao Chat oficial
@@ -672,6 +804,51 @@ export function CrmContactsPanel() {
                 )}
             </div>
 
+            {bulkSelection && (
+                <CrmContactsBulkBar
+                    selectedCount={selectedCount}
+                    selection={bulkSelection}
+                    canDelete={canDelete}
+                    onClear={clearSelection}
+                    onDone={() => {
+                        clearSelection();
+                        void load();
+                    }}
+                />
+            )}
+
+            {showSelectAllBanner && (
+                <div className="rounded-xl border border-[#bfdbfe] bg-[#eff6ff] px-4 py-2.5 text-sm text-[#1e3a5f] flex flex-wrap items-center gap-2">
+                    <span>
+                        Todos os {pageIds.length} contatos desta página estão
+                        selecionados.
+                    </span>
+                    <button
+                        type="button"
+                        className="font-semibold text-[#2563eb] underline-offset-2 hover:underline"
+                        onClick={selectAllMatching}
+                    >
+                        Selecionar todos os {meta.total} contatos encontrados
+                    </button>
+                </div>
+            )}
+
+            {allMatching && (
+                <div className="rounded-xl border border-[#bfdbfe] bg-[#eff6ff] px-4 py-2.5 text-sm text-[#1e3a5f]">
+                    Todos os{" "}
+                    <strong className="tabular-nums">{selectedCount}</strong>{" "}
+                    contatos encontrados estão selecionados (inclui outras
+                    páginas).{" "}
+                    <button
+                        type="button"
+                        className="font-semibold text-[#2563eb] underline-offset-2 hover:underline"
+                        onClick={clearSelection}
+                    >
+                        Limpar seleção
+                    </button>
+                </div>
+            )}
+
             {/* Table */}
             <div className={cn(premiumCard, "overflow-hidden")}>
                 <div className="flex flex-col gap-1 border-b border-slate-100 px-4 sm:px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
@@ -689,6 +866,22 @@ export function CrmContactsPanel() {
                     <Table>
                         <TableHeader>
                             <TableRow className="bg-[#eff6ff] hover:bg-[#eff6ff] border-slate-100">
+                                <TableHead className="w-12 text-[#1e3a5f]">
+                                    <Checkbox
+                                        checked={
+                                            pageAllSelected
+                                                ? true
+                                                : pageSomeSelected
+                                                  ? "indeterminate"
+                                                  : false
+                                        }
+                                        onCheckedChange={(v) =>
+                                            togglePage(v === true)
+                                        }
+                                        aria-label="Selecionar página"
+                                        className="border-slate-300 data-[state=checked]:bg-[#2563eb] data-[state=checked]:border-[#2563eb]"
+                                    />
+                                </TableHead>
                                 <TableHead className="text-[#1e3a5f] font-semibold min-w-[220px]">
                                     Contato
                                 </TableHead>
@@ -716,7 +909,7 @@ export function CrmContactsPanel() {
                             {loading ? (
                                 <TableRow>
                                     <TableCell
-                                        colSpan={7}
+                                        colSpan={8}
                                         className="h-32 text-center text-slate-500"
                                     >
                                         <Loader2 className="inline h-4 w-4 animate-spin mr-2" />
@@ -726,7 +919,7 @@ export function CrmContactsPanel() {
                             ) : rows.length === 0 ? (
                                 <TableRow>
                                     <TableCell
-                                        colSpan={7}
+                                        colSpan={8}
                                         className="h-32 text-center text-slate-500"
                                     >
                                         Nenhum contato no CRM. Cadastre ou
@@ -740,20 +933,40 @@ export function CrmContactsPanel() {
                                         key={row.id}
                                         className={cn(
                                             "border-slate-100 transition-colors hover:bg-slate-50/80",
+                                            isRowSelected(row.id) &&
+                                                "bg-blue-50/40",
                                             !row.active && "opacity-60"
                                         )}
                                     >
+                                        <TableCell className="py-3.5">
+                                            <Checkbox
+                                                checked={isRowSelected(row.id)}
+                                                onCheckedChange={() =>
+                                                    toggleRow(row.id)
+                                                }
+                                                aria-label={`Selecionar ${contactDisplayName(row.fullName)}`}
+                                                className="border-slate-300 data-[state=checked]:bg-[#2563eb] data-[state=checked]:border-[#2563eb]"
+                                            />
+                                        </TableCell>
                                         <TableCell className="py-3.5">
                                             <div className="flex items-center gap-3 min-w-0">
                                                 <ContactAvatar
                                                     fullName={row.fullName}
                                                 />
                                                 <div className="min-w-0">
-                                                    <p className="font-medium text-[#0f2744] truncate">
-                                                        {contactDisplayName(
-                                                            row.fullName
+                                                    <div className="flex items-center gap-1.5 min-w-0">
+                                                        <p className="font-medium text-[#0f2744] truncate">
+                                                            {contactDisplayName(
+                                                                row.fullName
+                                                            )}
+                                                        </p>
+                                                        {row.blocked && (
+                                                            <Badge className="rounded-full border-0 bg-orange-50 text-orange-700 ring-1 ring-orange-100 hover:bg-orange-50 text-[10px] shrink-0 gap-0.5">
+                                                                <Ban className="h-2.5 w-2.5" />
+                                                                Bloqueado
+                                                            </Badge>
                                                         )}
-                                                    </p>
+                                                    </div>
                                                     <p className="text-xs font-mono text-slate-500">
                                                         {formatPhoneDisplay(
                                                             row.waId

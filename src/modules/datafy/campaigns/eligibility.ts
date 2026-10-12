@@ -12,6 +12,8 @@ export type EligibilityContact = {
     category: string | null;
     origin: string;
     active: boolean;
+    /** Admin block — not a consent revocation. */
+    blocked?: boolean;
     consentStatus: string;
 };
 
@@ -48,6 +50,9 @@ export function evaluateEligibility(
     }
     if (!contact.active) {
         return { ok: false, reason: "inactive" };
+    }
+    if (contact.blocked) {
+        return { ok: false, reason: "blocked" };
     }
 
     const purpose = String(opts.purpose || "marketing").toLowerCase();
@@ -89,6 +94,8 @@ export function skipReasonLabel(reason: string | null | undefined): string {
             return "Telefone inválido";
         case "inactive":
             return "Contato desativado";
+        case "blocked":
+            return "Contato bloqueado administrativamente";
         case "opted_out":
             return "Recusado / revogado (opt-out)";
         case "denied":
@@ -114,6 +121,7 @@ export const EXCLUSION_REASON_ORDER = [
     "not_in_crm",
     "opted_out",
     "denied",
+    "blocked",
     "inactive",
     "invalid_phone",
     "duplicate",

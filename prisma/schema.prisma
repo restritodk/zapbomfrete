@@ -60,6 +60,7 @@ model User {
   datafyBulletinBundlesCreated DatafyBulletinBundle[] @relation("DatafyBulletinBundleCreatedBy")
   datafyBulletinVersionsCreated DatafyBulletinVersion[] @relation("DatafyBulletinVersionCreatedBy")
   crmConsentDecisionsAsActor CrmConsentDecision[] @relation("CrmConsentDecisionActor")
+  crmBulkOperationsAsActor CrmBulkOperation[] @relation("CrmBulkOperationActor")
 }
 
 model Session {
@@ -551,6 +552,8 @@ model CrmContact {
   origin            String    @default("manual")
   notes             String?   @db.Text
   active            Boolean   @default(true)
+  /// Admin block — excludes from new campaign sends; not a consent revocation.
+  blocked           Boolean   @default(false)
   /// unknown | granted | denied | opted_out (opted_out = REVOKED)
   consentStatus     String    @default("unknown")
   consentSource     String?
@@ -582,9 +585,35 @@ model CrmContact {
   @@index([category])
   @@index([origin])
   @@index([active])
+  @@index([blocked])
   @@index([consentStatus])
   @@index([lastInteractionAt])
   @@index([consentPurpose])
+}
+
+/// Audit trail for CRM bulk actions (grant consent / block / delete).
+model CrmBulkOperation {
+  id              String   @id @default(cuid())
+  organizationKey String   @default("default")
+  /// grant_consent | block | delete
+  action          String
+  actorUserId     String?
+  /// ids | filters
+  selectionMode   String
+  selectionMeta   Json?
+  requestedCount  Int      @default(0)
+  successCount    Int      @default(0)
+  failedCount     Int      @default(0)
+  skippedCount    Int      @default(0)
+  payload         Json?
+  result          Json?
+  createdAt       DateTime @default(now())
+
+  actor User? @relation("CrmBulkOperationActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationKey, createdAt])
+  @@index([organizationKey, action])
+  @@index([actorUserId])
 }
 
 /// Immutable audit trail for WhatsApp marketing consent decisions (Phase 9).

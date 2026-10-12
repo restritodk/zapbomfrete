@@ -3,6 +3,10 @@ import { normalizeBrazilianPhone } from "@/lib/phone-br";
 import { CRM_ORG_DEFAULT, CRM_CATEGORIES, CRM_CONSENT_STATUSES } from "./constants";
 import { serializeCrmContact, serializeCrmTag } from "./serialize";
 import { DATAFY_OFFICIAL_CHANNEL_ID } from "@/modules/channels/ids";
+import {
+    buildCrmListWhere,
+    type CrmListFilters,
+} from "./bulk/selection";
 
 export class CrmError extends Error {
     statusCode: number;
@@ -28,62 +32,15 @@ const contactInclude = {
     _count: { select: { conversations: true } },
 } as const;
 
-export async function listCrmContacts(opts: {
-    search?: string;
-    company?: string;
-    city?: string;
-    state?: string;
-    category?: string;
-    origin?: string;
-    active?: boolean | "all";
-    consentStatus?: string;
-    tagIds?: string[];
-    page?: number;
-    limit?: number;
-}) {
+export async function listCrmContacts(
+    opts: CrmListFilters & {
+        page?: number;
+        limit?: number;
+    }
+) {
     const page = Math.max(1, opts.page || 1);
     const limit = Math.min(100, Math.max(1, opts.limit || 20));
-    const search = opts.search?.trim();
-
-    const where: Record<string, unknown> = {
-        organizationKey: CRM_ORG_DEFAULT,
-    };
-
-    if (opts.active !== "all" && opts.active !== undefined) {
-        where.active = Boolean(opts.active);
-    } else if (opts.active === undefined) {
-        where.active = true;
-    }
-
-    if (opts.company?.trim()) {
-        where.company = { contains: opts.company.trim(), mode: "insensitive" };
-    }
-    if (opts.city?.trim()) {
-        where.city = { contains: opts.city.trim(), mode: "insensitive" };
-    }
-    if (opts.state?.trim()) {
-        where.state = opts.state.trim().toUpperCase().slice(0, 2);
-    }
-    if (opts.category?.trim()) where.category = opts.category.trim();
-    if (opts.origin?.trim()) where.origin = opts.origin.trim();
-    if (opts.consentStatus?.trim()) where.consentStatus = opts.consentStatus.trim();
-
-    if (search) {
-        const digits = search.replace(/\D/g, "");
-        where.OR = [
-            { fullName: { contains: search, mode: "insensitive" } },
-            { company: { contains: search, mode: "insensitive" } },
-            { city: { contains: search, mode: "insensitive" } },
-            { notes: { contains: search, mode: "insensitive" } },
-            ...(digits ? [{ waId: { contains: digits } }] : []),
-        ];
-    }
-
-    if (opts.tagIds?.length) {
-        where.tags = {
-            some: { tagId: { in: opts.tagIds } },
-        };
-    }
+    const where = buildCrmListWhere(opts);
 
     const [total, rows] = await Promise.all([
         prisma.crmContact.count({ where: where as never }),

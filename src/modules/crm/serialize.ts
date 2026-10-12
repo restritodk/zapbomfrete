@@ -21,6 +21,7 @@ export function serializeCrmContact(c: ContactWithTags) {
         origin: c.origin,
         notes: c.notes,
         active: c.active,
+        blocked: Boolean((c as { blocked?: boolean | null }).blocked),
         consentStatus: c.consentStatus,
         consentSource: c.consentSource,
         consentAt: c.consentAt?.toISOString() ?? null,

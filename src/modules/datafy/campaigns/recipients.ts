@@ -47,6 +47,7 @@ export async function resolveSegmentContacts(filter: SegmentFilter) {
     const where: Record<string, unknown> = {
         organizationKey: CRM_ORG_DEFAULT,
         active: true,
+        blocked: false,
     };
 
     if (filter.contactIds?.length) {
@@ -152,6 +153,9 @@ export async function resolveContactsFromPhones(
                 category: c.category,
                 origin: c.origin,
                 active: c.active,
+                blocked: Boolean(
+                    (c as { blocked?: boolean | null }).blocked
+                ),
                 consentStatus: c.consentStatus,
             };
         }
@@ -165,6 +169,7 @@ export async function resolveContactsFromPhones(
             category: null,
             origin: "import",
             active: true,
+            blocked: false,
             consentStatus: "unknown",
         };
     });
